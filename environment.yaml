@@ -1,0 +1,11 @@
+name: brainnet
+channels:
+  - conda-forge
+dependencies:
+- python = 3.11
+- monai
+- nibabel
+- numpy
+- scipy
+- torch=2
+- wandb

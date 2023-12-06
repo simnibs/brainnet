@@ -1,0 +1,78 @@
+# Specify losses for each task
+
+# if y_pred and y_true are not specified then the task name is used to grab the relevant output and target
+# module: this is essentially a wrapper around the loss function which, for
+#         example, takes care of passing the correct input to the loss function
+#         from brainnet.modules.task_losses
+# loss: name of the actual loss function used
+
+
+# Entries should match the tasks of the selected model
+segmentation:         # task
+  DICE:               # loss name
+    module: ImageLoss # loss module
+    loss: DiceLoss    # loss function
+  CE:
+    module: ImageLoss
+    loss: CrossEntropyLoss
+t1:
+  L1:
+    module: ImageLoss
+    loss: L1Loss
+  DICE (sup):
+    module: SupervisedImageLoss
+    loss: DiceLoss
+    y_true: segmentation
+    model: /path/to/model_t1.pt # should contain the network structure itself (variable `model`)
+    state: /path/to/state_t1.pt # model state (variable `state_dict`)
+ct:
+  L1:
+    module: ImageLoss
+    loss: L1Loss
+  DICE (sup):
+    module: SupervisedImageLoss
+    loss: DiceLoss
+    y_true: segmentation
+    model: /path/to/model_ct.pt
+    state: /path/to/state_ct.pt
+biasfield:
+  smMSE:
+    module: SoftMaskedImageLoss
+    loss: MSELoss
+    mask: segmentation
+    background_channel: 0
+surface: # applies to both left and right hemisphere
+  white:
+    module: SurfaceLoss
+    loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
+    y_pred: white
+    y_true: white
+  pial:
+    module: SurfaceLoss
+    loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
+    y_pred: pial
+    y_true: pial
+
+loss_weights:
+segmentation:
+  DICE: 1.0
+  CE: 1.0
+t1:
+  L1: 1.0
+  DICE-SUP: 1.0
+ct:
+  L1: 1.0
+  DICE-SUP: 1.0
+biasfield:
+  smMSE: 1.0
+surface:
+  white:
+    MatchedDistanceLoss: 1.0
+    SymmetricChamferLoss: 1.0
+    SymmetricCurvatureLoss: 100.0
+    EdgeLengthVarianceLoss: 1.0
+  pial:
+    MatchedDistanceLoss: 1.0
+    SymmetricChamferLoss: 1.0
+    SymmetricCurvatureLoss: 100.0
+    EdgeLengthVarianceLoss: 1.0

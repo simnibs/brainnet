@@ -1,0 +1,23 @@
+
+device:
+  model: "cuda:0"
+
+# dataset
+# dataloader
+
+# model whose configuration file to use
+model: segment_t1
+
+loss:
+  segmentation:
+    DICE:
+      module: ImageLoss
+      loss: DiceLoss
+    CE:
+      module: ImageLoss
+      loss: CrossEntropyLoss
+
+loss_weights:
+  segmentation:
+    DICE: 1.0
+    CE: 1.0

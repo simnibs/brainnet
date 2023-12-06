@@ -1,0 +1,150 @@
+PROJECT_NAME: &PROJECT BrainNet # same as wandb project name!
+
+# DATASET     MODALITIES
+# ----        ----------
+# ADNI        T1
+# ADNI3       T1, FLAIR
+# ADHD200     T1
+# AIBL        T1, T2, FLAIR
+# HCP         T1, T2
+# OASIS3      CT
+
+# HEADRECO    T1, T2, CT, ...
+
+device:
+  synthesizer: "cuda:0" # the code synthesizing the images passed to the task network
+  model: "cuda:0"       # the model we are training
+
+# DATASET
+# =====================================
+
+dataset:
+  dir: /mnt/scratch/INN/jesperdn/datasets
+
+  train: [HCP, WH2015] #[ADNI, OASIS3]
+  test: [] #[HCP]
+
+  kwargs:
+    # Initial surface resolution
+    surface_resolution: 6
+    surface_hemi: random
+
+dataloader:
+  batch_size: 1
+  num_workers: 4
+  prefetch_factor: 2
+
+synth:
+  probability: 0.9 # probability of synthesizing an image vs. using an actual image
+  module: Synthesizer
+
+# RESULTS
+# =====================================
+
+# results are stored in resultsdir/PROJECT_NAME/...
+results:
+  dir: /mnt/scratch/INN/jesperdn/results     # PROJECT_NAME will be appended
+  checkpoints: checkpoints  # store checkpoints in this subdir of dir/project/
+
+# Specify the model
+model: foundation # configuration file should be located in config/models
+
+# Specify the loss
+loss: foundation  # configuration file should be located in config/loss
+
+normalize_loss_weights: true # normalize loss weights to sum to one (i.e., within tasks)
+normalize_task_weights: true # normalize task weights to sum to one (i.e., across tasks)
+
+
+
+# if input is not explicitly specified, then the name of the task is used
+# &INIT_DK {softmax: true, to_onehot_y: true}
+
+# TRAINING PARAMETERS
+# =====================================
+
+epoch:
+  resume_from_checkpoint: null # e.g., 100
+  max_allowed_epochs: 1000
+  steps_per_epoch: 100
+  validate_every: 20
+  save_state_every: 20
+
+  # resume_optim: true
+  # resume_lr_scheduler: true
+
+optimizer:
+  name: AdamW
+  kwargs:
+    weight_decay: 0
+    weight_decay_end: 0
+
+convergence:
+  minimum_lr: null # 1e-8
+
+auto_schedulers:
+  # ChainedSchedulers are called on validation loss, thus "epochs" refers to the number
+  # of validation evaluations!
+  lr:
+    ReduceLROnPlateau:
+      patience: 20      # accepted number of "epochs" with no improvement
+      factor: 0.5       # LR reduction factor
+      threshold: 1e-3   # threshold for relative loss decrease
+      min_lr: 1e-8      # lower bound on LR
+      verbose: true
+    # ...
+
+# DEEPSURFER uses three phases with different weighting of these losses:
+#           matched chamfer Hinge
+# stage 1 : 1       1       100     end epoch 400
+# stage 2 : 0.1     1       10      end epoch 800
+# stage 3 : 0.0001  1       0.5/0.2 (white/pial)
+
+# At the specified epoch, update the entry
+manual_schedulers:
+  loss_weights:
+    "400":
+      surface:
+        white:
+          MatchedDistanceLoss: 0.1
+          SymmetricChamferLoss: 1.0
+          SymmetricCurvatureLoss: 10.0
+          EdgeLengthVarianceLoss: 1.0
+        pial:
+          MatchedDistanceLoss: 0.1
+          SymmetricChamferLoss: 1.0
+          SymmetricCurvatureLoss: 10.0
+          EdgeLengthVarianceLoss: 1.0
+    "800":
+      surface:
+        white:
+          MatchedDistanceLoss: 0.0001
+          SymmetricChamferLoss: 1.0
+          SymmetricCurvatureLoss: 0.5
+          EdgeLengthVarianceLoss: 1.0
+        pial:
+          MatchedDistanceLoss: 0.0001
+          SymmetricChamferLoss: 1.0
+          SymmetricCurvatureLoss: 0.2
+          EdgeLengthVarianceLoss: 1.0
+  tasks:
+    "1000":
+      surface:
+        module_kwargs:
+          prediction_res: 5
+    "2000":
+      surface:
+        module_kwargs:
+          prediction_res: 6
+
+
+
+
+# Logging using Weights & Biases (https://wandb.ai)
+wandb:
+  enable: true
+  project_name: *PROJECT
+  # entity: null  # username/team name to send data to
+  tags: null
+  name: null      # name used to identify run in UI
+  dir: wandb      # sub dir of results dir
