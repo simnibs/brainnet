@@ -1,21 +1,13 @@
-from pathlib import Path
-
-import yaml
-
-
-def load_config(filename):
-    with open(filename, "r") as f:
-        config = yaml.safe_load(f)
-    update_config_(config)
-    return config
-
-
-def update_config_(config):
-    config["datasets"]["dir"] = Path(config["datasets"]["dir"])
-    config["results"]["dir"] = Path(config["results"]["dir"]) / config["PROJECT_NAME"]
-
-
-# dictionary utilities
+def recursively_apply_function(d, fn, out=None):
+    """Recursively call .item() on values."""
+    if out is None:
+        out = {}
+    for k,v in d.items():
+        if isinstance(v, dict):
+            recursively_apply_function(v, fn, out)
+        else:
+            out[k] = fn(v)
+    return out
 
 def recursive_dict_update_(d0, d1):
     """`d1` is a subset of `d0`."""
@@ -28,7 +20,7 @@ def recursive_dict_update_(d0, d1):
 def recursive_dict_sum(d):
     """Recursive sum values of a dict containing only int/float values."""
     total = 0.0
-    for k,v in d.items():
+    for v in d.values():
         if isinstance(v, dict):
             total += recursive_dict_sum(v)
         else:
@@ -43,11 +35,17 @@ def recursive_dict_multiply(d, factor): # iop() # inplace operator from operator
         else:
             d[k] *= factor # iop(d[k], factor)  ---- operator.imul, operator.iadd, ...
 
-def flatten_dict(d: dict, out: None | dict = None, prefix=None, sep=":"):
+def flatten_dict(d: dict, out: None | dict = None, prefix=None): # sep=":"
     if out is None:
         out = {}
     for k,v in d.items():
-        key = k if prefix is None else sep.join((prefix, k))
+        # key = k if prefix is None else sep.join((prefix, k))
+        if prefix is None:
+            key = k
+        elif isinstance(prefix, tuple):
+            key = (*prefix, k)
+        else:
+            key = (prefix, k)
         if isinstance(v, dict):
             flatten_dict(v, out, key)
         else:

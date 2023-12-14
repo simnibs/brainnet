@@ -57,8 +57,26 @@ class SymmetricMSELoss(torch.nn.MSELoss):
             i_pred: torch.IntTensor,
             i_true: torch.IntTensor
         ):
-        return 0.5 * (super()(y_pred, y_true[i_true]) + super()(y_pred[i_pred], y_true))
+        return 0.5 * (super().forward(y_pred, y_true[i_true]) + super().forward(y_pred[i_pred], y_true))
 
+
+class SymmetricChamferLoss(SymmetricMSELoss):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+    def forward(
+            self,
+            y_pred: BatchedSurfaces,
+            y_true: BatchedSurfaces,
+            i_pred: torch.IntTensor | None = None,
+            i_true: torch.IntTensor | None = None,
+        ):
+        if i_pred is None:
+            i_pred = y_true.nearest_neighbor(y_pred)
+        if i_true is None:
+            i_true = y_pred.nearest_neighbor(y_true)
+
+        return super().forward(y_pred.vertices, y_true.vertices, i_pred, i_true)
 
 # class SymmetricChamferLoss(torch.nn.Module):
 #     def __init__(self):

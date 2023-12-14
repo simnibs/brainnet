@@ -1,0 +1,14 @@
+normalize_weights: true
+
+functions:
+  segmentation:
+    DICE:
+      module: ImageLoss
+      loss: DiceLoss
+    CE:
+      module: ImageLoss
+      loss: CrossEntropyLoss
+weights:
+  segmentation:
+    DICE: 1.0
+    CE: 1.0

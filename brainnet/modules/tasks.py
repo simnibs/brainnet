@@ -16,6 +16,7 @@ and returns a prediction.
 # def apply_postprocessing(module, *args, **kwargs):
 #     return module.postprocess(*args, **kwargs) if hasattr(module, "postprocess") else
 
+
 class TaskModule(torch.nn.Module):
     def __init__(self, in_channels, out_channels, extra_convs=None) -> None:
         super().__init__()
@@ -29,7 +30,10 @@ class TaskModule(torch.nn.Module):
         out_chs = extra_convs + [out_channels]
 
         self.convs = torch.nn.Sequential(
-            *[Convolution(in_channels=in_ch, out_channels=out_ch, **conv_kwargs) for in_ch, out_ch in zip(in_chs, out_chs)]
+            *[
+                Convolution(in_channels=in_ch, out_channels=out_ch, **conv_kwargs)
+                for in_ch, out_ch in zip(in_chs, out_chs)
+            ]
         )
 
     def forward(self, features):
@@ -43,7 +47,7 @@ class SegmentationModule(TaskModule):
         self.softmax = torch.nn.Softmax(dim=dim)
 
     def forward(self, features):
-        return self.softmax(self.convs(features))
+        return self.softmax(super().forward(features))
 
     def postprocess(self, x, labels=None, dim=1):
         """Argmax with optional relabeling."""
@@ -57,25 +61,38 @@ class SuperResolutionModule(TaskModule):
 
 
 class BiasFieldModule(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, target_shape: torch.Size | torch.Tensor, feature_level: int) -> None:
-        """Perform upconvolution on the specified features and scale to the
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        in_shape: torch.Size | torch.Tensor,
+        out_shape: torch.Size | torch.Tensor,
+    ) -> None:
+        """Perform (up)convolution on the specified features and scale to the
         target shape if necessary.
         """
         super().__init__()
 
         # expose in config
-        upconv_kwargs = dict(kernel_size=8, stride=8, padding=0)
+        self.in_shape = torch.tensor(in_shape)
+        self.out_shape = torch.tensor(out_shape)
 
-        self.feature_level = feature_level
-        self.target_size = torch.tensor(target_shape)
-        self.upconvolve = torch.nn.ConvTranspose3d(in_channels, out_channels, **upconv_kwargs)
-        self.resize = monai.transforms.Resize(self.target_size, mode="trilinear") # area is default
+        if self.in_shape.equal(self.out_shape):
+            self.convolve = Convolution(in_channels, out_channels, spatial_dims=3)
+        else:
+            self.convolve = torch.nn.ConvTranspose3d(
+                in_channels, out_channels, kernel_size=8, stride=8, padding=0
+            )
+
+        self.resize = monai.transforms.Resize(
+            self.out_shape, mode="trilinear"
+        )  # area is default
 
     def forward(self, features):
-        x = self.upconvolve(features[self.feature_level])
-        if not self.target_shape.equal(torch.tensor(x.shape)):
-            x = monai.transforms.Resize(x)
-            # x = myzoom_torch(x, factor=self.target_size / pred_size)
+        if self.feature_level is not None:
+            features = features[self.feature_level]
+        x = self.convolve(features)
+        x = x if self.out_shape.equal(torch.tensor(x.shape)) else monai.transforms.Resize(x)
         return x.exp()
 
 
@@ -94,11 +111,10 @@ class ContrastiveModule(torch.nn.Module):
         """
         super().__init__()
 
-        self.dim = 1
+        self.dim = dim
 
     def forward(self, features):
-        features[-1] = torch.nn.functional.normalize(features, dim=self.dim)
-        return features
+        return torch.nn.functional.normalize(features, dim=self.dim)
         # return torch.nn.functional.normalize(features, dim=self.dim)
 
     # def forward(self, outputs, *kwargs):

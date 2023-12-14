@@ -11,6 +11,7 @@ class UnetParameters:
     # automatic
     # channels: Union[int, dict] = 32 # initial number of channels; then 32 * multiplier**level
     # multiplier: int = 2
+
     # maximum number of levels to recurse in Unet
     n_levels: int = 4
 
@@ -56,11 +57,10 @@ class TopoFitModelParameters:
     unet_deform = UnetDeformParameters()
     linear_deform = LinearDeformParameters()
 
+# class TopoFitTrainParameters:
 
-class TopoFitTrainParameters:
+#     steps_per_epoch: int = 100
+#     validate_every_n_epoch: int = 20
+#     checkpoint_every_n_epoch: int = 100
 
-    steps_per_epoch: int = 100
-    validate_every_n_epoch: int = 20
-    checkpoint_every_n_epoch: int = 100
-
-    initial_lr: float = 1.0e-4
+#     initial_lr: float = 1.0e-4

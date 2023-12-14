@@ -2,128 +2,90 @@ from copy import deepcopy
 
 import torch
 
+from brainsynth.constants.filenames import optional_images
+from brainsynth.config.utilities import recursive_namespace_to_dict
+
+
 import brainnet.utilities
 import brainnet.modules.loss_wrappers
 
-# class Criterion(torch.nn.Module):
-#     def __init__(self, config_loss_weight, config_task_weight, device) -> None:
-#         """_summary_
-
-#         Parameters
-#         ----------
-#         task_loss : _type_
-#             _description_
-#         task_weight : _type_
-#             _description_
-#         """
-#         super().__init__()
-#         tasks = [task for task in config_loss_weight]
-#         self.loss_tags = [(task, loss) for task,losses in config_task_weight.items() for loss in losses]
-#         self.n_tasks = len(tasks)
-#         self.n_losses = len(self.loss_tags)
-
-#         self.loss = {
-#             task: {
-#                 loss_class: getattr(MedID_losses, loss_class)() for loss_class in losses
-#             } for task,losses in config_task_weight.items()
-#         }
-
-#         self.loss_weight = torch.zeros(self.n_losses, device=device)
-#         self.task_weight = torch.zeros(self.n_tasks, device=device)
-
-#     def update_loss_and_task_weight(self):
-#         i = 0
-#         j = 0
-#         for task,losses in config_task_weight.items():
-#             self.task_weight[i] = config_task_weight[task]
-#             i += 1
-#             for loss_class, loss_val in losses.items():
-#                 self.loss_weight[j] = loss_val
-#                 j += 1
-
-#         self.total_loss_weight = self.loss_weight.sum()
-#         self.total_task_weight = self.task_weight.sum()
-
-
-
-
-
-#         self.has_chamfer_loss = any(
-#             isinstance(MedID_losses.SymmetricChamferLoss, tuple(v for v in self.loss.values()))
-#         )
-#         self.has_curvature_loss = any(
-#             isinstance(MedID_losses.SymmetricCurvatureLoss, tuple(v for v in self.loss.values()))
-#         )
-
-
-#     def apply_weights(self, loss):
-#         """Apply weights (across and within tasks)."""
-#         return {k: loss[k] * self.weights[k] for k in loss}
-
-#     def sum(self, loss, apply_weights=False):
-#         loss = self.apply_weights(loss) if apply_weights else loss
-#         return torch.sum(v for v in loss.values())
-
-
-#     def forward(self, y_pred, y_true):
-#         """Compute losses
-
-#         Parameters
-#         ----------
-#         y_pred : dict
-#         y_true : dict
-
-
-#         Returns
-#         -------
-
-#         """
-#         loss = torch.zeros(self.n_losses)
-
-#         for task in y_pred:
-#             for name,loss_class in self.loss[task]:
-#                 if isinstance(loss_class, self.regularization):
-#                     loss[i] = loss_class(y_pred[task])
-#                 else:
-#                     loss[i] = loss_class(y_pred[task], y_true[task])
-
 
 class Criterion(torch.nn.Module):
-    def __init__(self, loss_config, weights_config) -> None:
+    def __init__(self, config, datasets, weight_threshold=1e-8) -> None:
         super().__init__()
 
-        self.weight_threshold = 1e-8
+        self.weight_threshold = weight_threshold
 
-        self._original_weights = weights_config
-        self.weights = deepcopy(weights_config)
-        self._normalize_weights()
+        self.weights = recursive_namespace_to_dict(config.weights)
+        if config.normalize_weights:
+            self._normalize_weights()
 
         self.losses = {
-            task: {name: self.get_loss(loss, task) for name,loss in losses.items()}
-            for task, losses in loss_config.items()
+            task: {name: self.get_loss(task, loss) for name, loss in losses.items()}
+            for task, losses in recursive_namespace_to_dict(config.functions).items()
         }
 
+        # compute loss normalizer per dataset
+        weights_sum_tasks = {
+            task: brainnet.utilities.recursive_dict_sum(losses)
+            for task, losses in self.weights.items()
+        }
+
+        # weights = brainnet.utilities.flatten_dict(weights_config)
+        # weight_names = tuple(weights.keys())
+
+        # weight_tensor = torch.tensor(tuple(weights.values()), device=device)
+        # self.n_losses = len(weight_tensor)
+
+        # loss_index[ds] = {
+        #     ds: torch.tensor(
+        #         [self._valid_task_for_dataset(name[0], avail) for name in weight_names],
+        #         dtype=torch.bool,
+        #         device=device
+        #     ).nonzero().ravel() for ds,avail in datasets.items()
+        # }
+
+        # determine which tasks are relevant for which datasets
+        self.tasks_per_ds = {
+            ds: [
+                task
+                for task in self.weights
+                if self._valid_task_for_dataset(task, avail)
+            ]
+            for ds, avail in recursive_namespace_to_dict(datasets).items()
+        }
+
+        self.dataset_normalizer = {}
+        for ds, tasks in self.tasks_per_ds.items():
+            self.dataset_normalizer[ds] = 0.0
+            for task in tasks:
+                self.dataset_normalizer[ds] += weights_sum_tasks[task]
+
     @staticmethod
-    def get_loss(kwargs, task):
+    def _valid_task_for_dataset(task, available_images):
+        return (task not in optional_images) or (task in available_images)
+
+    @staticmethod
+    def get_loss(task, kwargs):
         assert "module" in kwargs, "Loss definition should contain `module` definition"
         assert "loss" in kwargs, "Loss definition should contain `loss` definition"
         module = kwargs["module"]
-        kwargs_ = {k:v for k,v in kwargs.items() if k != "module"}
+        kwargs_ = {k: v for k, v in kwargs.items() if k != "module"}
         if "y_pred" not in kwargs_:
             kwargs_["y_pred"] = task
         if "y_true" not in kwargs:
             kwargs_["y_true"] = task
         return getattr(brainnet.modules.loss_wrappers, module)(**kwargs_)
 
-    def update_weights(self, weights):
-        # we need the copy because self.weights are normalized and weights are not
-        self.weights = deepcopy(self._original_weights)
-        brainnet.utilities.recursive_dict_update_(self.weights, weights)
-        self._normalize_weights()
+    # def update_weights(self, weights):
+    #     # we need the copy because self.weights are normalized and weights are not
+    #     self.weights = deepcopy(self._original_weights)
+    #     brainnet.utilities.recursive_dict_update_(self.weights, weights)
+    #     self._normalize_weights()
 
     def _normalize_weights(self):
         total = brainnet.utilities.recursive_dict_sum(self.weights)
-        brainnet.utilities.recursive_dict_multiply(self.weights, 1/total)
+        brainnet.utilities.recursive_dict_multiply(self.weights, 1 / total)
 
     @staticmethod
     def flatten_loss(loss):
@@ -133,18 +95,67 @@ class Criterion(torch.nn.Module):
         """"""
         return brainnet.utilities.multiply_dicts(loss, self.weights)
 
-    def forward(self, y_pred, y_true):
+    def forward(self, y_pred, y_true, ds_id):
         """Compute all losses."""
-        out = {}
-        for task, losses in self.losses.items():
-            for name,loss in losses.items():
-                if isinstance(loss, dict):
-                    out[task][name] = {
-                        k: v(y_pred, y_true) if (self.weights[task][name][k] > self.weight_threshold) else 0 for k,v in loss.items()
-                    }
-                else:
-                    out[task][name] = loss(y_pred, y_true) if (self.weights[task][name] > self.weight_threshold) else 0
-        return out
+        out_loss = {}
+        out_loss_weighted = {}
+
+        for task in self.tasks_per_ds[ds_id]:
+            x, y = self._compute_task_loss(y_pred, y_true, task, ds_id)
+            out_loss[task] = x
+            out_loss_weighted[task] = y
+
+        return out_loss, out_loss_weighted
+
+    def _compute_task_loss(self, y_pred, y_true, task, ds_id):
+        """Compute all losses for a specific task."""
+        normalizer = 1.0 / self.dataset_normalizer[ds_id]
+        task_loss = {}
+        task_loss_weighted = {}
+        for name, loss in self.losses[task].items():
+            match loss:
+                case brainnet.modules.loss_wrappers.SurfaceLoss:
+                    # this is a little special as SurfaceLoss returns a dict
+
+                    # name: here is white or pial
+                    # e.g., compute loss for white across "all" predicted
+                    # hemispheres
+                    task_loss[name] = 0.0
+                    for hemi in y_pred[task]:
+                        task_loss[name] += loss(y_pred[task][hemi], y_true[task][hemi])
+                    task_loss[name] /= len(y_pred[task])
+
+
+                case _:
+                    if (w := self.weights[task][name]) > self.weight_threshold:
+                        value = loss(y_pred, y_true)
+                        task_loss[name] = value
+                        task_loss_weighted[name] = value * w * normalizer
+                    else:
+                        task_loss[name] = 0.0
+                        task_loss_weighted[name] = 0.0
+
+        #     if isinstance(loss, dict):
+        #         task_loss[name] = {}
+        #         task_loss_weighted[name] = {}
+        #         for k, v in loss.items():
+        #             if (w := self.weights[task][name][k]) > self.weight_threshold:
+        #                 value = v(y_pred, y_true)
+        #                 task_loss[name][k] = value
+        #                 task_loss_weighted[name][k] = value * w * normalizer
+        #             else:
+        #                 task_loss[name][k] = 0.0
+        #                 task_loss_weighted[name][k] = 0.0
+        #     else:
+        #         if (w := self.weights[task][name]) > self.weight_threshold:
+        #             value = loss(y_pred, y_true)
+        #             task_loss[name] = value
+        #             task_loss_weighted[name] = value * w * normalizer
+        #         else:
+        #             task_loss[name] = 0.0
+        #             task_loss_weighted[name] = 0.0
+
+        return task_loss, task_loss_weighted
 
     # @staticmethod
     # def _forward(y_pred, y_true, losses, weights, out):

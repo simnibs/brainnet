@@ -3,7 +3,9 @@ from typing import Union
 import torch
 from monai.networks.blocks import Convolution
 
-from brainnet.modules.topofit import config, layers
+from brainnet.modules.topofit.config import TopoFitModelParameters, UnetParameters
+
+from brainnet.modules.topofit import layers
 from brainnet.modules.topofit.utilities import grid_sample
 from brainnet.mesh import topology
 
@@ -164,7 +166,7 @@ class GraphUnetDeform(torch.nn.Module):
         conv_module: Union[layers.GraphConv, layers.EdgeConv],
         euler_step_size: float,
         euler_iterations: int,
-        config_unet: config.UnetParameters,
+        config_unet: UnetParameters,
     ) -> None:
         """This graph deformation block uses a graph u-net to extract features
         which are transformed to deformation vectors which are then applied to
@@ -217,21 +219,24 @@ class GraphUnetDeform(torch.nn.Module):
 
 
 class TopoFitTemplateInitialization(torch.nn.Module):
-    def __init__(self, in_channels, n_points=12) -> None:
+    def __init__(self, in_channels, n_points) -> None:
         super().__init__()
 
         conv_kwargs = dict(spatial_dims=3)
         self.conv = Convolution(in_channels=in_channels, out_channels=n_points, **conv_kwargs)
 
-    def cache_shape_and_grid(self, shape):
+    def cache_shape_and_grid(self, shape, device):
         """During training the shape will stay the same so no need to recreate
         the grid on every forward pass.
         """
         if not hasattr(self, "shape") or shape != self.shape:
             self.shape = shape
             self.grid = torch.meshgrid(
-                [torch.arange(s).ravel() for s in shape], indexing="ij"
+                [torch.arange(s, device=device) for s in shape], indexing="ij"
             )
+            self.grid = tuple(g.ravel() for g in self.grid)
+
+            # self.register_buffer("grid", persistent=False)
 
     def forward(self, features, eps=1e-6):
         """Predict the coordinates of a number of points.
@@ -245,37 +250,46 @@ class TopoFitTemplateInitialization(torch.nn.Module):
         vertices : (N, 3, M)
             M is the number of predict vertices.
         """
-        (N, C), shape = features.shape[:2], features.shape[2:]
+        N = features.shape[0]
+        shape = features.shape[2:]
 
-        self.cache_shape_and_grid(shape)
+        self.cache_shape_and_grid(shape, features.device)
 
-        x = self.conv(features).reshape(N, C, -1)
+        x = self.conv(features)
+        x = x.reshape(N, self.conv.out_channels, -1)
         x = x / (x.sum(-1)[..., None] + eps) # normalize channel maps
 
-        return torch.stack([torch.sum(x * g, dim=-1) for g in self.grid], dim=-1)
+        # weigh coordinates (grid) by feature maps
+        return torch.stack([torch.sum(x * g.ravel(), dim=-1) for g in self.grid], dim=1)
 
 
 class TopoFitGraph(torch.nn.Module):
     def __init__(
         self,
         in_channels: int,
-        n_template_vertices: int,
-        prediction_res: int,
-
+        prediction_res: int = 6,
+        n_template_vertices: int = 62,
+        device="cpu",
         # image_shape: torch.IntTensor | torch.LongTensor,
-        config: config.TopoFitModelParameters,
+        # config: None | config.TopoFitModelParameters = None,
     ) -> None:
         super().__init__()
+
+        self.device = device
+
+        config = TopoFitModelParameters
 
         n_res = len(config.unet_deform.resolutions)
         assert prediction_res <= config.unet_deform.resolutions[-1]
         assert n_res >= prediction_res + 1
         self.prediction_res = prediction_res
 
-        self.register_buffer(
-            "topologies",
-            topology.get_recursively_subdivided_topology(topology.initial_faces, n_res - 1),
-            persistent=False,
+        # self.register_buffer(
+        #     "initial_faces", topology.initial_faces, persistent=False,
+        # )
+        self.topologies = topology.get_recursively_subdivided_topology(
+            topology.initial_faces.to(self.device),
+            n_recursions=n_res - 1
         )
 
         # Add a initializer for the template positions of each hemisphere
@@ -298,7 +312,7 @@ class TopoFitGraph(torch.nn.Module):
             [
                 GraphUnetDeform(
                     in_channels,
-                    topologies[: res + 1],
+                    self.topologies[: res + 1],
                     conv_module,
                     euler_step_size,
                     euler_iterations,
@@ -341,7 +355,7 @@ class TopoFitGraph(torch.nn.Module):
         -------
 
         """
-        hemispheres = hemispheres or default_hemispheres
+        hemispheres = default_hemispheres if hemispheres is None else hemispheres
         out = {}
         for hemi in hemispheres:
             # Position the initial template vertices
@@ -351,7 +365,7 @@ class TopoFitGraph(torch.nn.Module):
             # vertices = vertices.mT
             vertices = getattr(self, f"template_initialization_{hemi}")(features) # (N, 3, M)
 
-            out |= self._topofit_forward(features, vertices)
+            out[hemi] = self._topofit_forward(features, vertices)
 
         return out
 

@@ -1,17 +1,18 @@
-
 from monai.networks import nets
 import torch
 
+from brainsynth.config.utilities import recursive_namespace_to_dict
+
 from brainnet.modules import tasks
 
-
 VALID_FEATURE_EXTRACTORS = {
-    "UNet", "ResNet",
+    "UNet",
+    "ResNet",
 }
 
 
 class BrainNet(torch.nn.Module):
-    def __init__(self, feature_extractor_config, task_config):
+    def __init__(self, feature_extractor_config, task_config, device):
         """Construct the BrainNet model consisting of feature extractor and
         tasks.
 
@@ -23,52 +24,78 @@ class BrainNet(torch.nn.Module):
             _description_
         """
         super().__init__()
-        assert feature_extractor_config["model"] in VALID_FEATURE_EXTRACTORS, f"Invalid feature network. Please chose from {VALID_FEATURE_EXTRACTORS}"
 
-        self.config = task_config
+        device = torch.device(device)
+
+        assert (
+            feature_extractor_config.model in VALID_FEATURE_EXTRACTORS
+        ), f"Invalid feature network. Please chose from {VALID_FEATURE_EXTRACTORS}"
 
         # Build feature extractor
-        self.feature_extractor = getattr(
-            nets,
-            feature_extractor_config["model"]
-        )(**feature_extractor_config["kwargs"])
+        self.feature_extractor = getattr(nets, feature_extractor_config.model)(
+            **(recursive_namespace_to_dict(feature_extractor_config.kwargs) if feature_extractor_config.kwargs is not None else {})
+        )
 
         # set `in_channels` for tasks to `out_channels` from feature extractor
-        fe_out_ch = feature_extractor_config["kwargs"]["out_channels"]
+        task_config = recursive_namespace_to_dict(task_config)
         for t in task_config.values():
             if (k := "module_kwargs") not in t:
-                t[k] = {}
-            if (k := "in_channels") not in t:
-                t[k] = fe_out_ch
+                t[k] = dict(in_channels=feature_extractor_config.kwargs.out_channels)
+            if (k := "in_channels") not in t["module_kwargs"]:
+                t["module_kwargs"][k] = feature_extractor_config.kwargs.out_channels
+
+            # Module-specific setup
+            if t["module"] == "SurfaceModule":
+                t["module_kwargs"]["device"] = device
+
+            elif t["module"] == "BiasFieldModule":
+                raise NotImplementedError
+                if "in_channels" not in t["module_kwargs"]:
+                    pass
+                if "target_shape" not in t["module_kwargs"]:
+                    pass
 
         # Build tasks, e.g., segmentation, SR, surface
         self.tasks = torch.nn.ModuleDict(
-            {n: getattr(tasks, t["module"])(**t["module_kwargs"]) for n,t in task_config.items()}
+            {
+                n: getattr(tasks, t["module"])(**t["module_kwargs"])
+                for n, t in task_config.items()
+            }
         )
 
+        biasfieldmodule = [t for t in self.tasks.values() if isinstance(t, tasks.BiasFieldModule)]
         # Register a forward hook for the desired activation.
-        if "BiasFieldNet" in self.tasks and self:
+        if (n := len(biasfieldmodule)) > 0:
+            assert n == 1, "only one task of BiasFieldModule supported."
+            biasfieldmodule = biasfieldmodule[0]
+            if biasfieldmodule.feature_level != -1:
+                self._feature_activations = {}
 
-            # check that tasks[...].feature_submodule is not None...
+                def _activation_from_layer(name):
+                    def hook(model, x, y):
+                        self._feature_activations[name] = y
+                    return hook
 
-            self._feature_activations = {}
-            def _activation_from_layer(name):
-                def hook(model, x, y):
-                    self._feature_activations[name] = y
-                return hook
+                # string, e.g., model.1.submodule.1.submodule.1
+                self._feature_hook = self.feature_extractor.get_submodule(
+                    task_config.feature_submodule
+                ).register_forward_hook(_activation_from_layer("bias_field_features"))
 
-            # string, e.g., model.1.submodule.1.submodule.1
-            self._feature_hook = self.feature_extractor.get_submodule(
-                task_config["feature_submodule"]
-            ).register_forward_hook(_activation_from_layer("bias_field_features"))
-
-    def forward(self, image: torch.Tensor, vertices: torch.Tensor | None = None) -> dict:
+    def forward(
+        self,
+        image: torch.Tensor,
+        hemispheres: tuple | None = None,
+        # task_kwargs,
+        #vertices: torch.Tensor | None = None
+    ) -> dict:
         """
 
         Parameters
         ----------
         image : torch.Tensor
             The image to process.
+        hemispheres :
+            Hemispheres to predict with SurfaceModule.
 
         Returns
         -------
@@ -78,20 +105,22 @@ class BrainNet(torch.nn.Module):
         """
         features = self.feature_extractor(image)
         pred = {}
-        for name,task in self.tasks.items():
+        for name, task in self.tasks.items():
             if isinstance(task, tasks.TaskModule):
                 y = task(features)
             elif isinstance(task, tasks.BiasFieldModule):
-                if task.feature_submodule is None:
+                if task.feature_level == -1:
                     y = task(features)
                 else:
-                    intermediate_features = self._feature_activations["bias_field_features"]
+                    intermediate_features = self._feature_activations[
+                        "bias_field_features"
+                    ]
                     y = task(intermediate_features)
                     self._feature_hook.remove()
             elif isinstance(task, tasks.ContrastiveModule):
                 y = task(features)
             elif isinstance(task, tasks.SurfaceModule):
-                y = task(features, vertices)
+                y = task(features, hemispheres)
             else:
                 raise ValueError(f"Unknown task class {task}")
             pred[name] = y

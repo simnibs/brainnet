@@ -13,18 +13,3 @@ datasets:
 
   HCP: [] # [T1]
   WH2015: [PD] # [T1, PD]
-
-# These images should be present for all datasets
-#   constants.filenames.default_images
-default_images: [generation, segmentation, norm]
-
-# apply one-hot encoding to these images
-# image: labeling scheme
-onehot_encoding:
-  segmentation: incl_csf
-
-dataset_split:
-  rng_seed: null # seed for reproducible dataset splits (null = no seed)
-  splits:
-    train: 0.8
-    validation: 0.2

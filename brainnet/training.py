@@ -1,5 +1,7 @@
-from copy import deepcopy
-from pathlib import Path
+import argparse
+from datetime import datetime
+import sys
+from time import perf_counter
 
 import torch
 import wandb
@@ -10,161 +12,349 @@ from brainnet.modules.brainnet import BrainNet
 from brainnet.modules.criterion import Criterion
 import brainnet.utilities
 
-config_name = "train_foundation.yaml"
-config_ds_name = "datasets.yaml"
+from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
+from brainnet.utilities import recursively_apply_function
+from brainsynth.dataset import get_dataloader_concatenated_and_split
 
-_epoch_fmt = lambda epoch: f"{epoch:05d}"
 
-config = brainsynth.config.load_config(brainnet.config_dir / config_name)
-config_ds = brainsynth.config.load_config(brainnet.config_dir / config_ds_name)
+fmt_epoch = lambda epoch: f"{epoch:05d}"
+fmt_model = lambda epoch: f"{fmt_epoch(epoch)}_model.pt"
+fmt_optim = lambda epoch: f"{fmt_epoch(epoch)}_optim.pt"
+
 
 # Load full images and a random surface
 
-def setup_dataloader_for_synthesizer(config, config_ds):
-    ds_dir = Path(config.dataset.dir)
 
-    # Individual datasets
-    datasets = [
-        brainsynth.dataset.CroppedDataset(
-            ds_dir / ds,
-            brainsynth.dataset.load_dataset_subjects(ds_dir, ds),
-            default_images=config_ds.default_images,
-            optional_images=getattr(config_ds.datasets, ds),
-            **vars(config.dataset.kwargs),
-        ) for ds in config.dataset.train
-    ]
-    # Concatenated
-    dataset = torch.utils.data.ConcatDataset(datasets)
-    # Split in train, validation, etc.
-    dataset = brainsynth.dataloader.split_dataset(
-        dataset, vars(config_ds.dataset_split.splits), config_ds.dataset_split.rng_seed
+def _config_to_args_dataloader(config):
+    tc = config.dataset
+
+    return dict(
+        base_dir=tc.dir,
+        datasets=tc.train,
+        optional_images=recursive_namespace_to_dict(tc.optional_images),
+        dataset_kwargs=recursive_namespace_to_dict(tc.kwargs),
+        dataloader_kwargs=recursive_namespace_to_dict(tc.dataloader),
+        dataset_splits=recursive_namespace_to_dict(tc.split.splits),
+        split_rng_seed=tc.split.rng_seed,
     )
 
-    kwargs = vars(config.dataloader)
-    dataloader = {
-        k: brainsynth.dataloader.make_dataloader(v, **kwargs) for k, v in dataset.items()
-    }
 
-    return dataloader
+"""
 
-# original datasets are in
-# dataloader["train"].dataset.dataset.datasets
-#                     subset  concat  list of original ds
-next(iter(dataloader["train"]))
+# filename = "/mrhome/jesperdn/repositories/brainnet/brainnet/config/train_segment_t1.yaml"
+filename = "/mrhome/jesperdn/repositories/brainnet/brainnet/config/train_foundation.yaml"
+config = load_config(filename)
+self = BrainNetTrainer(config)
 
-a = next(iter(dataloader["train"]))
+(ds_id, images, surfaces, info) = next(iter(self.dataloader["train"]))
 
-# images, surfaces, info = next(iter(dataset))
+self.to_device(image)
+self.to_device(surface)
+self.to_device(info)
+
+data = self.synthesizer(image, surface, info)
+
+trainer.train()
 
 
-self = brainsynth.Synthesizer(device=device)
-data = self(images, surfaces, info)
+# available_datasets = brainsynth.config.load_config("/mrhome/jesperdn/repositories/brainnet/brainnet/config/datasets.yaml")
+# available_datasets = available_datasets.datasets
+# available_datasets = {ds: getattr(available_datasets, ds) for ds in config.datasets.train}
+
+dataloader = get_dataloader_concatenated_and_split(
+            **_config_to_args_dataloader(config)
+        )
+
+device = torch.device(config.device.model)
+image = torch.rand((1,1,2**7,2**7,2**7), device=device)
+features = torch.rand((1, 64, 2**6,2**7,2**8), device=device)
+
+model = BrainNet(config.model.feature_extractor, config.model.tasks, device)
+model = model.to(device)
+
+model.tasks.surface(features)
+
+y_pred = model(image)
+
+model.tasks(features)
+
+strides = torch.IntTensor([2,2,2])
+
+shape = torch.IntTensor([220,200,180])
+
+def ensure_divisible_shape(shape, strides):
+    divisor = strides**len(strides)
+    res = shape / divisor
+    dif = np.ceil(res) - res
+    return (shape + divisor * dif).to(shape.dtype)
+
+
+
+
+
+"""
+
+
+def print_memory_usage(device):
+    # https://medium.com/deep-learning-for-protein-design/a-comprehensive-guide-to-memory-usage-in-pytorch-b9b7c78031d3
+    total_memory = torch.cuda.get_device_properties(device).total_memory * 1e-9
+    alloc = torch.cuda.memory_allocated(device) * 1e-9
+    alloc_max = torch.cuda.max_memory_allocated(device) * 1e-9
+    res = torch.cuda.memory_reserved(device) * 1e-9
+    res_max = torch.cuda.max_memory_reserved(device) * 1e-9
+
+    print("Memory [GB]        Current           Max")
+    print("----------------------------------------")
+    print(f"Total                            {total_memory:7.3f}")
+    print(f"Allocated          {alloc:7.3f}       {alloc_max:7.3f}")
+    print(f"Reserved           {res:7.3f}       {res_max:7.3f}")
+    print("----------------------------------------")
+
+
+# next(iter(dataloader["train"]))
+
+# a = next(iter(dataloader["train"]))
+
+# # images, surfaces, info = next(iter(dataset))
+
+# for i in dataloader["train"]:
+#     print("dataset", i[0])
+#     print("index", i[1])
+#     print(i[2])
+#     print(i[3])
+#     print(i[4])
+
+
+# self = brainsynth.Synthesizer(device=device)
+# data = self(images, surfaces, info)
 
 
 class BrainNetTrainer:
     def __init__(self, config):
+        torch.backends.cudnn.benchmark = True # increases initial time
+        torch.backends.cudnn.deterministic = True
+
         self.config = config
 
         self.device = torch.device(config.device.model)
-        self.synth_device = torch.device(config.device.synth)
+        self.synth_device = torch.device(config.device.synthesizer)
 
-        self.batch_size = config.batch_size
+        #assert self.device == self.synth_device
+
         self.epoch = config.epoch
         self.epoch.start = self.epoch.resume_from_checkpoint or 1
 
-        self.manual_schedule = config.manual_schedule
-        self.loss_scheduler = config["loss_scheduler"]
-        self.task_scheduler = config["task_scheduler"]
-
         self.latest_checkpoint = None
-        self.results_dir = Path(config.results.dir)
-        self.checkpoint_dir = self.results_dir / config.results/checkpoint
 
-        self.convergence = config["convergence"]
+        self.results_dir = self.config.results.dir / self.config.PROJECT_NAME
+        if not self.results_dir.exists():
+            self.results_dir.mkdir(parents=True)
+
+        self.checkpoint_dir = self.results_dir / "checkpoints"
+        if not self.checkpoint_dir.exists():
+            self.checkpoint_dir.mkdir(parents=True)
+
+        assert self.config.dataset.dataloader.batch_size == 1
+
+        self.dataloader = get_dataloader_concatenated_and_split(
+            **_config_to_args_dataloader(config)
+        )
+
+        print("Dataloaders")
+        print(f"# samples in train      {len(self.dataloader['train']):d}")
+        print(f"# samples in validation {len(self.dataloader['validation']):d}")
+
+        # We need to ensure that all downsampling steps are valid
+
+        # if self.config.model.feature_extractor.model == "UNet" # or perhaps other..?
+        if (
+            (
+                strides := torch.tensor(
+                    self.config.model.feature_extractor.kwargs.strides,
+                    dtype=torch.int,
+                    device=self.synth_device,
+                )
+            )
+            > 1
+        ).any():
+            divisor = strides ** len(strides)
+        else:
+            divisor = None
+
+        self.synthesizer = brainsynth.Synthesizer(
+            self.config.synthesizer.config,
+            ensure_divisible_by=divisor,
+            device=self.synth_device,
+        )
+        self.synthesizer.to(self.synth_device)
 
         # Logging
-        self.wandb = wandb
+        if hasattr(self.config, "wandb") and self.config.wandb.enable:
+            self.wandb = wandb
+            self.wandb_dir = self.results_dir  # / "wandb"
+            if not self.wandb_dir.exists():
+                self.wandb_dir.mkdir(parents=True)
+        else:
+            self.wandb = None
 
-        # ...
-
-        self.model = BrainNet(config["feature_extractor"], config["tasks"]).to(
-            self.device
-        )
+        # Device is needed as arg for topofit for now...
+        self.model = BrainNet(config.model.feature_extractor, config.model.tasks, self.device)
+        self.model.to(self.device)
         n_parameters = sum(
             p.numel() for p in self.model.parameters() if p.requires_grad
         )
+        print(f"Number of trainable parameters: {n_parameters}")
 
-        # print("Number of (trainable) parameters in model is", n_parameters)
-
-        self.criterion = Criterion(config["loss"], config["loss_weights"])
-
-        self.optimizer = getattr(torch.optim, config["optimizer"]["name"])(
-            self.model.parameters(), config["optimizer"]["kwargs"]
+        self.optimizer = getattr(torch.optim, config.optimizer.name)(
+            self.model.parameters(),
+            **recursive_namespace_to_dict(config.optimizer.kwargs),
         )
-        self.lr_schedulers = torch.optim.lr_scheduler.ChainedScheduler(
-            [
-                getattr(torch.optim.lr_scheduler, k)(self.optimizer, **v)
-                for k, v in config["lr_schedulers"].items()
-            ]
-        )
+
+        self.criterion = Criterion(config.loss, config.dataset.optional_images)
+
+        if self.config.auto_schedulers is not None:
+            raise NotImplementedError
+
+            self.lr_schedulers = torch.optim.lr_scheduler.ChainedScheduler(
+                [
+                    getattr(torch.optim.lr_scheduler, k)(self.optimizer, **v)
+                    for k, v in config["lr_schedulers"].items()
+                ]
+            )
+
+        if self.config.manual_schedulers is not None:
+            raise NotImplementedError
+
+        # load model and optimizer parameters
+        self.load_checkpoint(self.epoch.resume_from_checkpoint)
+
+    def _get_lr(self):
+        for param_group in self.optimizer.param_groups:
+            return param_group['lr']
 
     def has_converged(self):
-        current_lr = self.optimizer.param_groups[0].lr
-        return self.convergence["minimum_lr"] < current_lr
+        return self._get_lr() <= self.config.convergence.minimum_lr
 
     def get_hyper_params(self):
         return dict(
             LR=self.optimizer.param_groups[0].lr,
         )
 
+    def to_device(self, dict_of_tensors):
+        for k, v in dict_of_tensors.items():
+            if isinstance(v, dict):
+                self.to_device(v)
+            else:
+                dict_of_tensors[k] = v.to(self.device)
+
     def train(self):
         """Train a model until 'convergence' or maximum number of epochs is
         reached.
         """
-        self.model.train()
 
-        for n in range(self.epoch["start"], self.epoch["max_allowed_epochs"] + 1):
+        now = datetime.now().strftime("%B %d, %Y at %H:%M:%S")
+        print(f"Started training on {now}")
+
+        self._wandb_init()
+
+        for n in range(self.epoch.start, self.epoch.max_allowed_epochs + 1):
             epoch = Epoch(n)
 
-            hyper_params = self.get_hyper_params()
+            # hyper_params = self.get_hyper_params()
+            print("epoch", n)
 
-            for step in range(self.epoch["steps_per_epoch"]):
-                # choose a random subject from the training pool
-                # dataloader stuff here...
+            self.model.train()
+            for step, (ds_id, images, surfaces, info) in enumerate(
+                self.dataloader["train"]
+            ):
+                if step == self.epoch.steps_per_epoch:
+                    break
 
-                # apply synth: transform etc.
+                t0 = perf_counter()
 
-                if (
-                    torch.rand([1], device=config.device.synthesizer)
-                    < config.synth.probability
-                ):
-                    data = Synthesizer()
+                print("step", step)
+
+                # synth and model device could be different!
+
+                ds_id = ds_id[0] # ds_id is a tuple of len 1
+                # self.to_device(image)
+                # self.to_device(surface)
+                # self.to_device(info)
+
+
+                with torch.no_grad():
+
+                    y_true_img, y_true_surf = self.synthesizer(images, surfaces, info)
+
+                    if "synth" not in y_true_img:
+                        # select a random contrast from the list of alternative images
+                        avail = getattr(self.config.dataset.alternative_synth, ds_id)
+                        sel = torch.randint(
+                            0, len(avail), (1,), device=self.synthesizer.device
+                        )
+                        y_true_img["synth"] = y_true_img[avail[sel]]
+
+                    # do it AFTER synth for now...
+                    self.to_device(y_true_img)
+                    self.to_device(y_true_surf)
+
+                    image = y_true_img.pop("synth")
+                    y_true = y_true_img
+
+                # convert surface ground truths to batched surfaces
+                # ...
+
+                # also load precomputed curvature for true...
+
+                t1 = perf_counter()
+
+                if len(surfaces) > 0:
+                    model_kwargs = dict(
+                        hemispheres=tuple(y_true_surf.keys())
+                    )
                 else:
-                    data = images
-                    data["synth"] = data["t1"]  # or whatever contrast?
+                    model_kwargs = {}
+                criterion_kwargs = dict(ds_id=ds_id)
 
-                image = data["image"]
+                loss, wloss = self.step(image, y_true, model_kwargs, criterion_kwargs)
 
-                loss = self.step(image, y_true)
-
-                # reset gradients in optimizer
-                self.optimizer.zero_grad()
+                t2 = perf_counter()
 
                 # compute weighted loss
-                wloss = self.criterion.apply_weights(loss)
+                # wloss = self.criterion.apply_weights(loss)
                 wloss_sum = brainnet.utilities.recursive_dict_sum(wloss)
-                # compute gradients
-                wloss_sum.backward()
 
-                # update parameters
+                # Reset gradients in optimizer. Otherwise gradients would
+                # accumulate across multiple passes
+                self.optimizer.zero_grad()
+                # Compute and accumulate gradients. backward() frees
+                # intermediate values of the graph (e.g., activations)
+                wloss_sum.backward()
+                # Update parameters (i.e., gradients)
                 self.optimizer.step()
 
-                # log loss
-                epoch.loss_update(brainnet.utilities.flatten_dict(loss))
+                # log the loss
+                epoch.loss_update(loss, wloss)
 
                 self.hook_on_step_end(step)
 
-            epoch.loss_normalize_and_sum()
+                t3 = perf_counter()
+
+
+                synth_time = t1-t0
+                model_time = t2-t1
+                step_time = t3-t0
+
+                print("synth time", synth_time)
+                print("model time", model_time)
+                print("step  time", step_time)
+
+
+            epoch.loss_normalize()
+            epoch.loss_sum()
+
+            epoch.print()
+
 
             val_loss = self.validate(epoch.epoch)
 
@@ -173,6 +363,7 @@ class BrainNetTrainer:
             self.save_checkpoint(n)
             self.hook_on_epoch_end(n)
 
+
             if self.has_converged():
                 self.save_checkpoint(n)
                 print("Converged")
@@ -180,101 +371,138 @@ class BrainNetTrainer:
 
         self._wandb_finish()
 
-    @staticmethod
-    def _initialize_loss_dict():
-        """Initialize a dictionary to hold aggregated losses for an epoch."""
-        return {
-            "raw": {},
-            "weighted": {},
-            "raw (sum)": 0,
-            "weighted (sum)": 0,
-        }
+
+    def _do_save_checkpoint(self, epoch):
+        return epoch % self.epoch.save_state_every == 0
+
+    def _do_validation(self, epoch):
+        return epoch % self.epoch.validate_every == 0
 
     def validate(self, epoch):
-        if (epoch == self.epoch["start"]) or (
-            epoch % self.epoch["validate_every"] != 0
-        ):
-            return
+        if not self._do_validation(epoch):
+            return {}
 
         val_epoch = Epoch(epoch)
 
         self.model.eval()
-        val_loss = self._initialize_loss_dict()
-
         with torch.inference_mode():
-            for i in ...:
-                # choose a random subject from validation pool
+            for step, (ds_id, images, surfaces, info) in enumerate(
+                self.dataloader["validation"]
+            ):
+                if step == self.epoch.steps_per_validation:
+                    break
 
-                loss = self.step(data, y_true)
+                ds_id = ds_id[0]
+                self.to_device(images)
+                self.to_device(surfaces)
+                self.to_device(info)
 
-                epoch.loss_update(brainnet.utilities.flatten_dict(loss))
-            val_epoch.loss_normalize_and_sum()
+                # FIXME what image is used for evaluation???
+                image = images.pop("norm")
+                y_true = images
+                y_true["surface"] = surfaces
 
-        for scheduler in self.lr_schedulers:
-            scheduler.step(val_loss[...])
+                # same as training step for now...
+                loss, wloss = self.criterion(
+                    self.model(image, y_true), y_true, ds_id
+                )
 
-        self.hook_on_validation_end(epoch, epoch.loss)
+                val_epoch.loss_update(loss, wloss)
 
-        return epoch.loss
+            val_epoch.loss_normalize()
+            val_epoch.loss_sum()
+
+        self.hook_on_validation_end(val_epoch, val_epoch.loss)
+
+        val_epoch.print()
+
+        return val_epoch.loss
 
     def load_checkpoint(self, epoch, load_model=True, load_optimizer=True):
         """Load parameters from a state dict."""
+        if epoch is None:
+            return
+
         if load_model:
             self.model.load_state_dict(
-                torch.load(self.checkpoint_dir / f"{_epoch_fmt(epoch):s}_model.pt")
+                torch.load(self.checkpoint_dir / fmt_model(epoch))
             )
         if load_optimizer:
             self.optimizer.load_state_dict(
-                torch.load(self.checkpoint_dir / f"{_epoch_fmt(epoch):s}_optim.pt")
+                torch.load(self.checkpoint_dir / fmt_optim(epoch))
             )
 
     def save_checkpoint(self, epoch):
-        if (epoch % self.epoch["save_state_every"] != 0) or (
-            epoch == self.epoch["start"]
-        ):
+        if not self._do_save_checkpoint(epoch):
             return
+
         torch.save(
             self.model.state_dict(),
-            self.checkpoint_dir / f"{_epoch_fmt(epoch):s}_model.pt",
+            self.checkpoint_dir / fmt_model(epoch),
         )
         torch.save(
             self.optimizer.state_dict(),
-            self.checkpoint_dir / f"{_epoch_fmt(epoch):s}_optim.pt",
+            self.checkpoint_dir / fmt_optim(epoch),
         )
         self.latest_checkpoint = epoch
 
-    def step(self, data, y_true):
-        y_pred = self.model(data)
-        return self.criterion(y_pred, y_true)
+    def step(self, image, y_true, model_kwargs=None, criterion_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        criterion_kwargs = criterion_kwargs or {}
 
-    def hook_on_epoch_end(self, epoch):
-        if epoch in self.task_scheduler:
-            task_config = deepcopy(self.config["tasks"])
-            brainnet.utilities.recursive_dict_update_(
-                task_config, self.task_scheduler[epoch]
-            )
-            m = BrainNet(self.config["feature_extractor"], task_config)
-            m.load_state_dict(self.model.state_dict())
-            self.model = m
+        y_pred = self.model(image, **model_kwargs)
 
-        if epoch in self.loss_scheduler:
-            self.criterion.update_weights(self.loss_scheduler[epoch])
+
+        try:
+            pred_surf = y_pred.pop("surface")
+        except KeyError:
+            pred_surf = {}
+
+        # convert surface predictions to batched surfaces
+        # ...
+
+        loss, wloss = self.criterion(y_pred, y_true, **criterion_kwargs)
+
+        return loss, wloss
 
     def hook_on_step_end(self, step):
         pass
 
-    def hook_on_validation_end(self, epoch, result):
-        if result is not None:
-            self.lr_schedulers.step(epoch)
+    def hook_on_epoch_end(self, epoch):
+        pass
 
-    def _wandb_init(self, config):
+        # epoch_ = str(epoch)
+
+        # # Re-initialize BrainNet using the updated task parameters
+        # if epoch_ in self.config.manual_schedulers.tasks:
+        #     task_config = deepcopy(self.config["tasks"])
+        #     brainnet.utilities.recursive_dict_update_(
+        #         task_config, getattr(self.config.manual_schedulers.tasks, epoch_)
+        #     )
+        #     m = BrainNet(self.config.feature_extractor, task_config)
+        #     m.load_state_dict(self.model.state_dict())
+        #     self.model = m
+
+        # # Update loss weights
+        # if epoch_ in self.config.manual_schedulers.loss_weights:
+        #     self.criterion.update_weights(
+        #         getattr(self.config.manual_schedulers.loss_weights, epoch_)
+        #     )
+
+    def hook_on_validation_end(self, epoch, result):
+        pass
+
+        # if result is not None:
+        #     self.lr_schedulers.step(epoch)
+
+    def _wandb_init(self):
         if self.wandb is not None:
             self.run = self.wandb.init(
-                project=config["PROJECT_NAME"],
+                project=self.config.wandb.project_name,
                 # entity=,
                 config={},
-                dir=config["wandb"]["dir"],
-                name=config["wandb"]["name"],
+                dir=self.wandb_dir,
+                name=self.config.wandb.name,
             )
 
     def _wandb_log(
@@ -295,11 +523,11 @@ class BrainNetTrainer:
         """
         if self.wandb is not None:
             kwargs = {} if kwargs is None else kwargs
-            data = {"Loss (train)": train_loss}
+            data = {"train": train_loss}
             if val_loss:
-                data["Loss (validation)"] = val_loss
+                data["val"] = val_loss
             if hyper_params is not None:
-                data["Hyper parameters"] = hyper_params
+                data["hyper"] = hyper_params
             self.wandb.log(data, **kwargs)
 
     def _wandb_finish(self):
@@ -310,25 +538,46 @@ class BrainNetTrainer:
 class Epoch:
     def __init__(self, epoch) -> None:
         self.epoch = epoch
-        self.loss = {"raw": {}, "weighted": {}, "raw (sum)": 0.0, "weighted (sum)": 0.0}
+        self.loss = {"raw": {}, "weighted": {}}
+        self.loss_total = {"raw_total": 0.0, "weighted_total": 0.0}
         # count number of additions to each loss. This is equal to the number
         # of steps per epoch unless some losses are not calculated in all
         # epochs
         self.loss_counter = {}
 
-    def loss_update(self, loss):
-        self._update_dict(self.loss["raw"], loss)
-        self._update_dict(self.loss["weighted"], loss)
-        self._update_key_count(self.loss_counter, loss)
+        headers = ("Epoch", "Raw (total)", "Weighted (total)")
+        col_width = (6, 15, 15)
+        self._header = "   ".join(f"{j:>{i}s}" for i,j in zip(col_width, headers))
+
+        # keys = ("{epoch}", "{raw_total}", "{weighted_total}")
+        # fmt = ("d", ".4f", ".4f")
+        self._print_format = (
+            f"{{{'epoch'}:{col_width[0]}d}}   "
+            f"{{{'raw_total'}:{col_width[1]}.4f}}   "
+            f"{{{'weighted_total'}:{col_width[2]}.4f}}   "
+        )
+
+        self.get_tensor_item = lambda t: t.item()
+
+    def loss_update(self, loss, wloss):
+
+
+        self._update_dict(self.loss["raw"], recursively_apply_function(loss, self.get_tensor_item))
+        self._update_dict(self.loss["weighted"], recursively_apply_function(wloss, self.get_tensor_item))
+        self._update_key_count(self.loss_counter, self.loss["raw"])
 
     def loss_sum(self):
-        self.loss["raw (sum)"] = sum(self.loss["raw"].values())
-        self.loss["weighted (sum)"] = sum(self.loss["weighted"].values())
+        self.loss_total["raw_total"] = sum(self.loss["raw"].values())
+        self.loss_total["weighted_total"] = sum(self.loss["weighted"].values())
 
-    def loss_normalize_and_sum(self):
+    def loss_normalize(self):
         self._normalize_dict_by_count(self.loss["raw"], self.loss_counter)
         self._normalize_dict_by_count(self.loss["weighted"], self.loss_counter)
-        self.loss_sum()
+
+    def print(self):
+        if self.epoch == 1:
+            print(self._header)
+        print(self._print_format.format(epoch=self.epoch, **self.loss_total))
 
     @staticmethod
     def _update_dict(d0, d1):
@@ -336,17 +585,66 @@ class Epoch:
             if k in d0:
                 d0[k] += v
             else:
-                d0[k] = v  # .item()
+                d0[k] = v
 
     @staticmethod
     def _update_key_count(counter, d0):
-        for k, v in d0.items():
+        for k in d0:
             if k in counter:
-                counter[k] += v
+                counter[k] += 1
             else:
-                counter[k] = v
+                counter[k] = 1
 
     @staticmethod
     def _normalize_dict_by_count(d, count):
         for k in d:
             d[k] /= count[k]
+
+
+
+
+
+
+
+def _flat_item_dict(d: dict, out: None | dict = None, prefix=None, sep=":"):
+    """Flattens a dict and calls .item() on its values."""
+    if out is None:
+        out = {}
+    for k,v in d.items():
+        key = k if prefix is None else sep.join((prefix, k))
+
+        # match prefix:
+        #     case None:
+        #         key = k
+        #     case tuple():
+        #         key = (*prefix, k)
+        #     case _:
+        #         key = (prefix, k)
+
+        if isinstance(v, dict):
+            _flat_item_dict(v, out, key)
+        else:
+            out[key] = v.item()
+    return out
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "config", help="Configuration file defining the training setup."
+    )
+    # parser.add_argument("--dataset-config", default="dataset.yaml", help="Dataset configuration file.")
+
+    return parser.parse_args(argv[1:])
+
+
+if __name__ == "__main__":
+    args = parse_args(sys.argv)
+
+    print("Using configuration files")
+    print(f"Training    {args.config}")
+
+    config_train = load_config(args.config)
+
+    trainer = BrainNetTrainer(config_train)
+    trainer.train()

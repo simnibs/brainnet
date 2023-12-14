@@ -6,73 +6,215 @@
 #         from brainnet.modules.task_losses
 # loss: name of the actual loss function used
 
+# Normalize loss weights to sum to one
+normalize_weights: true
+
+# # normalize loss weights to sum to one (i.e., within tasks)
+# normalize_loss_weights: true
+# # normalize task weights to sum to one (i.e., across tasks)
+# normalize_task_weights: true
+
 
 # Entries should match the tasks of the selected model
-segmentation:         # task
-  DICE:               # loss name
-    module: ImageLoss # loss module
-    loss: DiceLoss    # loss function
-  CE:
-    module: ImageLoss
-    loss: CrossEntropyLoss
-t1:
-  L1:
-    module: ImageLoss
-    loss: L1Loss
-  DICE (sup):
-    module: SupervisedImageLoss
-    loss: DiceLoss
-    y_true: segmentation
-    model: /path/to/model_t1.pt # should contain the network structure itself (variable `model`)
-    state: /path/to/state_t1.pt # model state (variable `state_dict`)
-ct:
-  L1:
-    module: ImageLoss
-    loss: L1Loss
-  DICE (sup):
-    module: SupervisedImageLoss
-    loss: DiceLoss
-    y_true: segmentation
-    model: /path/to/model_ct.pt
-    state: /path/to/state_ct.pt
-biasfield:
-  smMSE:
-    module: SoftMaskedImageLoss
-    loss: MSELoss
-    mask: segmentation
-    background_channel: 0
-surface: # applies to both left and right hemisphere
-  white:
-    module: SurfaceLoss
-    loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
-    y_pred: white
-    y_true: white
-  pial:
-    module: SurfaceLoss
-    loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
-    y_pred: pial
-    y_true: pial
+functions:
 
-loss_weights:
-segmentation:
-  DICE: 1.0
-  CE: 1.0
-t1:
-  L1: 1.0
-  DICE-SUP: 1.0
-ct:
-  L1: 1.0
-  DICE-SUP: 1.0
-biasfield:
-  smMSE: 1.0
-surface:
-  white:
-    MatchedDistanceLoss: 1.0
-    SymmetricChamferLoss: 1.0
-    SymmetricCurvatureLoss: 100.0
-    EdgeLengthVarianceLoss: 1.0
-  pial:
-    MatchedDistanceLoss: 1.0
-    SymmetricChamferLoss: 1.0
-    SymmetricCurvatureLoss: 100.0
-    EdgeLengthVarianceLoss: 1.0
+  segmentation:         # task
+    Dice:               # loss name
+      module: ImageLoss # loss module
+      loss: DiceLoss    # loss function
+    CrossEntropy:
+      module: ImageLoss
+      loss: CrossEntropyLoss
+  # biasfield:
+  #   smMSE:
+  #     module: SoftMaskedSupervisedLoss
+  #     loss: MSELoss
+  #     mask: segmentation      # image to use for masking
+  #     background_channel: 0   # channel number to use for masking
+
+  # Segmentation
+
+  seg-dice:
+    module:
+      __name__: SupervisedLoss
+      # initialization kwargs for module
+      y_pred: segmentation
+      y_true: segmentation
+      # model: modelconfig
+      # model_state: PathToStateDict.pt
+    loss:
+      __name__: monai.losses.DiceLoss
+      # initialization kwargs for loss function
+      include_background: true
+
+  seg-ce:
+    module:
+      __name__: ImageLoss
+      y_pred: segmentation
+      y_true: segmentation
+    loss:
+      __name__: monai.losses.CrossEntropy
+      include_background: true
+
+
+  # surface: # applies to both left and right hemisphere
+
+  # white:
+  #   module: SurfaceLoss
+  #   loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
+  #   y_pred: white
+  #   y_true: white
+  # pial:
+  #   module: SurfaceLoss
+  #   loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
+  #   y_pred: pial
+  #   y_true: pial
+
+  # Surface
+
+  # Applies to both left and right hemisphere
+
+  white-matched:
+    module:
+      __name__: SurfaceSupervisedLoss
+      y_pred: white
+      y_true: white
+    loss:
+      __name__: brainnet.modules.losses.MatchedDistanceLoss
+  white-chamfer:
+    module:
+      __name__: SurfaceSymmetricLoss
+      y_pred: white
+      y_true: white
+    loss:
+      __name__: brainnet.modules.losses.SymmetricChamferDistance
+  white-curv:
+    module:
+      __name__: SurfaceLoss
+      y_pred: white
+      y_true: white
+    loss:
+      __name__: brainnet.modules.losses.SymmetricChamferCurvature
+  white-edgelength:
+    module:
+      __name__: SurfaceRegularizationLoss
+      y_pred: white
+      y_true: white
+    loss:
+      __name__: brainnet.modules.losses.EdgeLengthVarianceLoss
+
+  pial-matched:
+    module:
+      __name__: SupervisedLoss
+      y_pred: pial
+      y_true: pial
+    loss:
+      __name__: brainnet.modules.losses.MatchedDistanceLoss
+  pial-chamfer:
+    module:
+      __name__: SurfaceLoss
+      y_pred: pial
+      y_true: pial
+    loss:
+      __name__: brainnet.modules.losses.SymmetricChamferDistance
+  pial-curv:
+    module:
+      __name__: SurfaceLoss
+      y_pred: pial
+      y_true: pial
+    loss:
+      __name__: brainnet.modules.losses.SymmetricChamferCurvature
+  pial-edgelength:
+    module:
+      __name__: RegularizationLoss
+      y_pred: pial
+      y_true: pial
+    loss:
+      __name__: brainnet.modules.losses.EdgeLengthVarianceLoss
+
+  # PD synthesis
+  PD-l1:
+    module:
+      __name__: SupervisedLoss
+      y_pred: PD
+      y_true: PD
+    loss:
+      __name__: torch.nn.L1Loss
+  PD-dice:
+    module:
+      __name__: ModelSupervisedLoss
+      y_pred: PD
+      y_true: segmentation
+    loss:
+      __name__: monai.losses.DiceLoss
+      include_background: true
+
+
+  # Optional tasks
+  # T1:
+  #   L1: # !ImageLoss
+  #     module: ImageLoss
+  #     loss: L1Loss
+  #   Dice (sup):
+  #     module: ModelSupervisedLoss
+  #     loss: DiceLoss
+  #     y_true: segmentation
+  #     model: /path/to/model_t1.pt # should contain the network structure itself (variable `model`)
+  #     state: /path/to/state_t1.pt # model state (variable `state_dict`)
+  # CT:
+  #   L1:
+  #     module: ImageLoss
+  #     loss: L1Loss
+  #   Dice (sup):
+  #     module: ModelSupervisedLoss
+  #     loss: DiceLoss
+  #     y_true: segmentation
+  #     model: /path/to/model_ct.pt
+  #     state: /path/to/state_ct.pt
+
+weights:
+  # segmentation
+  seg-dice: 1.0
+  seg-ce: 1.0
+
+  # PD synthesis (optional)
+  PD-L1: 1.0
+  PD-dice: 1.0
+
+  # surface
+  white-matched: 1.0
+  white-chamfer: 1.0
+  white-curv: 1.0
+  white-edgelength: 1.0
+
+  pial-matched: 1.0
+  pial-chamfer: 1.0
+  pial-curv: 1.0
+  pial-edgelength: 1.0
+
+
+weights:
+  segmentation:
+    Dice: 1.0
+    CrossEntropy: 1.0
+  # biasfield:
+  #   smMSE: 1.0
+  surface:
+    white:
+      MatchedDistanceLoss: 1.0
+      SymmetricChamferLoss: 1.0
+      SymmetricCurvatureLoss: 10.0
+      EdgeLengthVarianceLoss: 1.0
+    pial:
+      MatchedDistanceLoss: 1.0
+      SymmetricChamferLoss: 1.0
+      SymmetricCurvatureLoss: 10.0
+      EdgeLengthVarianceLoss: 1.0
+
+  # Optional tasks
+  # T1:
+  #   L1: 1.0
+  #   Dice-SUP: 1.0
+  # CT:
+  #   L1: 1.0
+  #   Dice-SUP: 1.0

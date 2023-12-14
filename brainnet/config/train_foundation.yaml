@@ -11,51 +11,87 @@ PROJECT_NAME: &PROJECT BrainNet # same as wandb project name!
 
 # HEADRECO    T1, T2, CT, ...
 
+
+# Logging using Weights & Biases (https://wandb.ai)
+wandb:
+  enable: false
+  project_name: *PROJECT
+  # entity: null  # username/team name to send data to
+  tags: null
+  name: null      # name used to identify run in UI
+  # dir: null      # sub dir of results dir
+
+
 device:
-  synthesizer: "cuda:0" # the code synthesizing the images passed to the task network
   model: "cuda:0"       # the model we are training
+  synthesizer: "cpu" # the code synthesizing the images passed to the task network
 
 # DATASET
 # =====================================
 
 dataset:
-  dir: /mnt/scratch/INN/jesperdn/datasets
+  dir: !Path /mnt/scratch/personal/jesperdn/datasets
 
   train: [HCP, WH2015] #[ADNI, OASIS3]
   test: [] #[HCP]
+
+  # which optional images to use for each dataset. Images should be valid
+  optional_images:
+    HCP: []
+    WH2015: [PD]
+
+  # if a synthetic image is not generated then use one of these real images instead
+  # (only relevant when probability of generating a synthetic contrast is < 1.0)
+  alternative_synth:
+    HCP: [norm]
+    WH2015: [norm, PD]
+
+  split:
+    rng_seed: null # seed for reproducible dataset splits (null = no seed)
+    splits:
+      train: 0.8
+      validation: 0.2
 
   kwargs:
     # Initial surface resolution
     surface_resolution: 6
     surface_hemi: random
+    # These images should be present for all datasets
+    #   constants.filenames.default_images
+    default_images: [generation, segmentation, norm]
 
-dataloader:
-  batch_size: 1
-  num_workers: 4
-  prefetch_factor: 2
+  dataloader:
+    batch_size: 1
+    num_workers: 2
+    prefetch_factor: 2 # this seems to be PER dataset
 
-synth:
-  probability: 0.9 # probability of synthesizing an image vs. using an actual image
-  module: Synthesizer
+
+synthesizer:
+  config: null        # config file to use. If null, use default from BrainSynth
+  module: Synthesizer # Currently, there is only one synthesizer so...
 
 # RESULTS
 # =====================================
 
 # results are stored in resultsdir/PROJECT_NAME/...
 results:
-  dir: /mnt/scratch/INN/jesperdn/results     # PROJECT_NAME will be appended
-  checkpoints: checkpoints  # store checkpoints in this subdir of dir/project/
+  dir: !Path /mnt/scratch/personal/jesperdn/results     # PROJECT_NAME will be appended
+  # checkpoints: checkpoints # store checkpoints in this subdir of dir/project/
 
-# Specify the model
-model: foundation # configuration file should be located in config/models
+# NOTE paths should be relative to the directory of the current yaml file
+
+# MODEL
+# =====================================
+
+# > contents of this node is passed to BrainNet
+model: !include models/foundation.yaml
+
+# LOSS
+# =====================================
 
 # Specify the loss
-loss: foundation  # configuration file should be located in config/loss
-
-normalize_loss_weights: true # normalize loss weights to sum to one (i.e., within tasks)
-normalize_task_weights: true # normalize task weights to sum to one (i.e., across tasks)
-
-
+# > contents of this node is passed to Criterion
+loss: !include loss/foundation.yaml
 
 # if input is not explicitly specified, then the name of the task is used
 # &INIT_DK {softmax: true, to_onehot_y: true}
@@ -76,23 +112,21 @@ epoch:
 optimizer:
   name: AdamW
   kwargs:
-    weight_decay: 0
-    weight_decay_end: 0
+    lr: 1.0e-3
 
 convergence:
-  minimum_lr: null # 1e-8
+  minimum_lr: &MIN_LR 1.0e-8
 
 auto_schedulers:
   # ChainedSchedulers are called on validation loss, thus "epochs" refers to the number
   # of validation evaluations!
-  lr:
-    ReduceLROnPlateau:
-      patience: 20      # accepted number of "epochs" with no improvement
-      factor: 0.5       # LR reduction factor
-      threshold: 1e-3   # threshold for relative loss decrease
-      min_lr: 1e-8      # lower bound on LR
-      verbose: true
-    # ...
+  # lr:
+  #   ReduceLROnPlateau:
+  #     patience: 20      # accepted number of "epochs" with no improvement
+  #     factor: 0.5       # LR reduction factor
+  #     threshold: 1.0e-3   # threshold for relative loss decrease
+  #     min_lr: *MIN_LR      # lower bound on LR
+  #     verbose: true
 
 # DEEPSURFER uses three phases with different weighting of these losses:
 #           matched chamfer Hinge
@@ -102,49 +136,37 @@ auto_schedulers:
 
 # At the specified epoch, update the entry
 manual_schedulers:
-  loss_weights:
-    "400":
-      surface:
-        white:
-          MatchedDistanceLoss: 0.1
-          SymmetricChamferLoss: 1.0
-          SymmetricCurvatureLoss: 10.0
-          EdgeLengthVarianceLoss: 1.0
-        pial:
-          MatchedDistanceLoss: 0.1
-          SymmetricChamferLoss: 1.0
-          SymmetricCurvatureLoss: 10.0
-          EdgeLengthVarianceLoss: 1.0
-    "800":
-      surface:
-        white:
-          MatchedDistanceLoss: 0.0001
-          SymmetricChamferLoss: 1.0
-          SymmetricCurvatureLoss: 0.5
-          EdgeLengthVarianceLoss: 1.0
-        pial:
-          MatchedDistanceLoss: 0.0001
-          SymmetricChamferLoss: 1.0
-          SymmetricCurvatureLoss: 0.2
-          EdgeLengthVarianceLoss: 1.0
-  tasks:
-    "1000":
-      surface:
-        module_kwargs:
-          prediction_res: 5
-    "2000":
-      surface:
-        module_kwargs:
-          prediction_res: 6
-
-
-
-
-# Logging using Weights & Biases (https://wandb.ai)
-wandb:
-  enable: true
-  project_name: *PROJECT
-  # entity: null  # username/team name to send data to
-  tags: null
-  name: null      # name used to identify run in UI
-  dir: wandb      # sub dir of results dir
+  # loss_weights:
+  #   "400":
+  #     surface:
+  #       white:
+  #         MatchedDistanceLoss: 0.1
+  #         SymmetricChamferLoss: 1.0
+  #         SymmetricCurvatureLoss: 10.0
+  #         EdgeLengthVarianceLoss: 1.0
+  #       pial:
+  #         MatchedDistanceLoss: 0.1
+  #         SymmetricChamferLoss: 1.0
+  #         SymmetricCurvatureLoss: 10.0
+  #         EdgeLengthVarianceLoss: 1.0
+  #   "800":
+  #     surface:
+  #       white:
+  #         MatchedDistanceLoss: 0.0001
+  #         SymmetricChamferLoss: 1.0
+  #         SymmetricCurvatureLoss: 0.5
+  #         EdgeLengthVarianceLoss: 1.0
+  #       pial:
+  #         MatchedDistanceLoss: 0.0001
+  #         SymmetricChamferLoss: 1.0
+  #         SymmetricCurvatureLoss: 0.2
+  #         EdgeLengthVarianceLoss: 1.0
+  # tasks:
+  #   "1000":
+  #     surface:
+  #       module_kwargs:
+  #         prediction_res: 5
+  #   "2000":
+  #     surface:
+  #       module_kwargs:
+  #         prediction_res: 6

@@ -1,15 +1,13 @@
 feature_extractor:
   model: UNet
   kwargs:
-  spatial_dims: 3
-  in_channels: 1
-  out_channels: &OUT_CH 32
-  channels: [32, 64, 128, 256, 512]
-  strides: [1, 1, 1, 1]
+    spatial_dims: 3
+    in_channels: 1
+    out_channels: 64
+    channels: [64, 128, 256, 512]
+    strides: [2, 2, 2] # len(channels) - 1 entries
 tasks:
-  segment:
+  segmentation:
     module: SegmentationModule
     module_kwargs:
-      in_channels: *OUT_CH
-      out_channels: 32
-
+      out_channels: 33

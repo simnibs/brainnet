@@ -4,8 +4,8 @@ feature_extractor:
     spatial_dims: 3
     in_channels: 1
     out_channels: 64
-    channels: [64, 128, 256, 512, 1024]
-    strides: [1, 1, 1, 1]
+    channels: [64, 128, 256, 512] # [64, 128, 256, 512, 1024]
+    strides: [2, 2, 2] #[1, 1, 1, 1]
     # defaults:
     # act: PRELU
     # norm: INSTANCE
@@ -29,37 +29,55 @@ feature_extractor:
 # NOTES:
 # - Number of `in_channels` are given by `out_channels` of the feature extractor
 
+
+# NOTE:
+
+# If a task name matches that of an optional image then this loss is only
+# computed for samples where this image is available. This is typically
+# relevant for image synthesis.
+
 tasks:
-  segment:
+
+  segmentation:
     module: SegmentationModule
     module_kwargs:
-      out_channels: 32
-    postprocess: true
-    postprocess_kwargs:
-      labels: [...]
-  t1:
-    module: SuperResolutionModule
-    module_kwargs:
-      out_channels: 1
-  ct:
-    module: SuperResolutionModule
-    module_kwargs:
-      out_channels: 1
-      # extra_convs=[32,16] (64 features from extractor) -> 32 -> 16 -> 1
-  biasfield:
-    module: BiasFieldModule
-    module_kwargs:
-      out_channels: 1
-      # The features to use for bias field estimation. Specify the string
-      # (passed to the `get_submodule` method of the network) that extracts the
-      # desired output. To find this, run
-      #
-      #   monai.networks.nets.[ network name ]( network kwargs )
-      #
-      # check the architecture, and what string is needed to pass to `get_submodule`.
-      # feature_submodule: null # null = output features
-      feature_submodule: "model.1.submodule.1.submodule.1.submodule.1"
+      out_channels: 33
+    # postprocess: true
+    # postprocess_kwargs:
+    #   labels: #[...]
+
+  # biasfield:
+  #   module: BiasFieldModule
+  #   # The features to use for bias field estimation. Specify the string
+  #   # (passed to the `get_submodule` method of the network) that extracts the
+  #   # desired output. To find this, run
+  #   #
+  #   #   monai.networks.nets.[ network name ]( network kwargs )
+  #   #
+  #   # check the architecture, and what string is needed to pass to `get_submodule`.
+  #   # feature_submodule: null # = output features
+  #   feature_submodule: "model.1.submodule.1.submodule.1.submodule.1"
+  #   module_kwargs:
+  #     out_channels: 1
+
   surface:
     module: SurfaceModule
     module_kwargs:
-      prediction_res: 5 # 0-6
+      prediction_res: 5
+
+  # T1:
+  #   module: SuperResolutionModule
+  #   module_kwargs:
+  #     out_channels: 1
+
+
+  # PD:
+  #   module: SuperResolutionModule
+  #   module_kwargs:
+  #     out_channels: 1
+
+  # CT:
+  #   module: SuperResolutionModule
+  #   module_kwargs:
+  #     out_channels: 1
+      # extra_convs=[32,16] (# features from extractor) -> 32 -> 16 -> 1

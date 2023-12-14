@@ -96,7 +96,7 @@ class BatchedSurfaces:
         self, face_normals: torch.Tensor, n_vertices,
     ):
         """Save a computation - perhaps delete."""
-        vertex_normals = torch.zeros((face_normals.shape[0], n_vertices, 3))
+        vertex_normals = torch.zeros((face_normals.shape[0], n_vertices, 3), device=self.vertices.device)
         self._collect_face_values_(vertex_normals, face_normals)
 
         return torch.nn.functional.normalize(vertex_normals, p=2.0, dim=-1)
@@ -195,7 +195,7 @@ class BatchedSurfaces:
         # Compute area per vertex
         face_area /= 3.0
         face_area = face_area[..., None].expand((self.n_batch, *self.faces.shape))
-        vertex_area = torch.zeros((self.n_batch, self.topology.n_vertices))
+        vertex_area = torch.zeros((self.n_batch, self.topology.n_vertices), device=self.vertices.device)
         vertex_area.scatter_add_(
             1,
             self.view_faces_as_vertices().reshape(self.n_batch, -1),
@@ -223,7 +223,7 @@ class BatchedSurfaces:
         #   = f(vi) * sum_{j in N(i)} cot(a_ij) + cot(b_ij)
         #
         # where N(i) is the 1-ring neighbors of vertex i.
-        cot_ab_sum = torch.zeros((self.n_batch, self.topology.n_vertices))
+        cot_ab_sum = torch.zeros((self.n_batch, self.topology.n_vertices), device=self.vertices.device)
         # cot_ab_sum.scatter_add_(1, edge0[None].expand(edge_shape), cotangent.reshape(edge_shape))
         # cot_ab_sum.scatter_add_(1, edge1[None].expand(edge_shape), cotangent.reshape(edge_shape))
         cot_ab_sum.scatter_add_(
@@ -309,7 +309,7 @@ class BatchedSurfaces:
         if inplace:
             out = buffer
         else:
-            out = torch.zeros_like(buffer)
+            out = torch.zeros_like(buffer, device=self.vertices.device)
             out.copy_(buffer)
         for _ in range(iterations):
             out.index_reduce_(
@@ -342,11 +342,11 @@ class BatchedSurfaces:
         return self.vertices[:, self.topology.vertex_adjacency].diff(dim=-2).squeeze(-2).norm(dim=-1)
 
 
-    def matched_distance(self, other: "BatchedSurfaces", index=None):
-        other_vertices = other.vertices
-        if index is not None:
-            other_vertices = other_vertices[index]
-        return torch.norm(self.vertices - other_vertices, dim=-1)
+    # def matched_distance(self, other: "BatchedSurfaces", index=None):
+    #     other_vertices = other.vertices
+    #     if index is not None:
+    #         other_vertices = other_vertices[index]
+    #     return torch.norm(self.vertices - other_vertices, dim=-1)
 
 
     def nearest_neighbor(self, other: "BatchedSurfaces"):
@@ -356,30 +356,30 @@ class BatchedSurfaces:
         return cuda_extensions.compute_nearest_neighbor(self.vertices, other.vertices)
 
 
-    def chamfer_distance(self, other: "BatchedSurfaces"):
-        """
+    # def chamfer_distance(self, other: "BatchedSurfaces"):
+    #     """
 
-        Parameters
-        ----------
+    #     Parameters
+    #     ----------
 
 
-        Returns
-        -------
-        dist :
-            (Squared) distance between closest points in point sets `a` and `b`.
-        index_other :
-            This array gives, for each element in `self.vertices`, the index of
-            the closest element in `other.vertices`.
-        index_self :
-            This array gives, for each element in `other.vertices`, the index
-            of the closest element in `self.vertices`.
-        """
-        # for each element in `self`, this is the index of the closest element
-        # in `other`
-        index_other = cuda_extensions.compute_nearest_neighbor(self.vertices, other.vertices)
-        dist = torch.norm(self.vertices - other.vertices[index_other], dim=-1)
+    #     Returns
+    #     -------
+    #     dist :
+    #         (Squared) distance between closest points in point sets `a` and `b`.
+    #     index_other :
+    #         This array gives, for each element in `self.vertices`, the index of
+    #         the closest element in `other.vertices`.
+    #     index_self :
+    #         This array gives, for each element in `other.vertices`, the index
+    #         of the closest element in `self.vertices`.
+    #     """
+    #     # for each element in `self`, this is the index of the closest element
+    #     # in `other`
+    #     index_other = cuda_extensions.compute_nearest_neighbor(self.vertices, other.vertices)
+    #     dist = torch.norm(self.vertices - other.vertices[index_other], dim=-1)
 
-        return dist, index_other
+    #     return dist, index_other
 
 
 
