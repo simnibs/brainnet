@@ -1,16 +1,77 @@
-from copy import deepcopy
-
 import torch
 
-from brainsynth.constants.filenames import optional_images
-from brainsynth.config.utilities import recursive_namespace_to_dict
-
-
 import brainnet.utilities
-import brainnet.modules.loss_wrappers
+from brainnet.modules import loss_wrappers
 
 
 class Criterion(torch.nn.Module):
+    def __init__(self, config) -> None:
+        super().__init__()
+
+        # self.weight_threshold = weight_threshold
+
+        self.weights = vars(config.weights)
+
+        self.losses = {
+            name: self.setup_loss(loss_config)
+            for name, loss_config in vars(config.functions).items()
+        }
+
+    @staticmethod
+    def setup_loss(config):
+        # assert "module" in kwargs, "Loss definition should contain `module` definition"
+        # assert "loss" in kwargs, "Loss definition should contain `loss` definition"
+
+        module = config.module.name
+        module_kw = vars(config.module.kwargs)
+
+        loss_fn = config.loss.name
+        loss_kw = vars(config.loss.kwargs) if hasattr(config.loss, "kwargs") else None
+
+        return getattr(loss_wrappers, module)(
+            loss_fn, **module_kw, loss_fn_kwargs=loss_kw
+        )
+
+
+    # def blabla(self):
+
+    #     if
+
+    def forward(self, y_pred, y_true, **kwargs):
+        """Compute all losses that is possible given the entries in `y_pred`"""
+        weight_total = 0.0
+
+        # Compute raw loss
+        loss_dict = {}
+        for name, loss in self.losses.items():
+            try:
+                match loss:
+                    case loss_wrappers.SupervisedLoss:
+                        # if isinstance(loss, brainnet.modules.losses.SymmetricMSELoss):
+                        #     i_pred = loss.loss_fn.i_pred
+                        #     i_true = loss.loss_fn.i_true
+                        #     curv_true = kwargs["curv_true"]
+                        value = loss(y_pred, y_true)
+                    case loss_wrappers.RegularizationLoss:
+                        value = loss(y_pred)
+                    case _:
+                        raise ValueError
+                loss_dict[name] = value
+                weight_total += self.weights[name]
+            except KeyError:
+                # Required data does not exist in y_pred and/or y_true
+                pass
+
+        # Compute weighted loss
+        weight_normalizer = 1 / weight_total
+        weighted_loss_dict = {
+            k: v * self.weights[k] * weight_normalizer for k, v in loss_dict.items()
+        }
+
+        return loss_dict, weighted_loss_dict
+
+
+class oldCriterion(torch.nn.Module):
     def __init__(self, config, datasets, weight_threshold=1e-8) -> None:
         super().__init__()
 
@@ -124,7 +185,6 @@ class Criterion(torch.nn.Module):
                     for hemi in y_pred[task]:
                         task_loss[name] += loss(y_pred[task][hemi], y_true[task][hemi])
                     task_loss[name] /= len(y_pred[task])
-
 
                 case _:
                     if (w := self.weights[task][name]) > self.weight_threshold:

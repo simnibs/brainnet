@@ -71,12 +71,39 @@ class SymmetricChamferLoss(SymmetricMSELoss):
             i_pred: torch.IntTensor | None = None,
             i_true: torch.IntTensor | None = None,
         ):
-        if i_pred is None:
-            i_pred = y_true.nearest_neighbor(y_pred)
-        if i_true is None:
-            i_true = y_pred.nearest_neighbor(y_true)
+        # nearest neighbor
+        i_pred = y_true.nearest_neighbor(y_pred) if i_pred is None else i_pred
+        i_true = y_pred.nearest_neighbor(y_true) if i_true is None else i_true
 
         return super().forward(y_pred.vertices, y_true.vertices, i_pred, i_true)
+
+class SymmetricCurvatureLoss(SymmetricMSELoss):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.n_smooth = 3
+
+    def forward(
+            self,
+            y_pred: BatchedSurfaces,
+            y_true: BatchedSurfaces,
+            i_pred: torch.IntTensor | None = None,
+            i_true: torch.IntTensor | None = None,
+            curv_true: torch.Tensor | None = None,
+        ):
+        # nearest neighbor
+        i_pred = y_true.nearest_neighbor(y_pred) if i_pred is None else i_pred
+        i_true = y_pred.nearest_neighbor(y_true) if i_true is None else i_true
+
+        # curvature
+        curv_pred = y_pred.compute_mean_curvature_vector()
+        if curv_true is None:
+            curv_true = y_true.compute_mean_curvature_vector()
+            curv_true = y_true.compute_iterative_spatial_smoothing(curv_true, self.n_smooth)
+
+        return super().forward(curv_pred, curv_true, i_pred, i_true)
+
+
 
 # class SymmetricChamferLoss(torch.nn.Module):
 #     def __init__(self):

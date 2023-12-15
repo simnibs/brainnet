@@ -1,28 +1,23 @@
 import importlib
-from types import ModuleType
 
-import monai
 import torch
 
-import brainnet.modules.losses
 from brainnet.modules.brainnet import BrainNet
 
 
-def get_loss_function(name, modules: None | list[ModuleType] = None):
-    # module search order is: torch, monai, local
-    modules = (
-        [torch.nn.modules.loss, monai.losses, brainnet.modules.losses]
-        if modules is None
-        else modules
-    )
-    if len(modules) == 0:
-        raise ValueError("Module could not be found")
-    try:
-        return getattr(modules[0], name)
-    except AttributeError:
-        return get_loss_function(name, modules[1:])
-
-
+# def get_loss_function(name, modules: None | list[ModuleType] = None):
+#     # module search order is: torch, monai, local
+#     modules = (
+#         [torch.nn.modules.loss, monai.losses, brainnet.modules.losses]
+#         if modules is None
+#         else modules
+#     )
+#     if len(modules) == 0:
+#         raise ValueError("Module could not be found")
+#     try:
+#         return getattr(modules[0], name)
+#     except AttributeError:
+#         return get_loss_function(name, modules[1:])
 
 
 def loss_function_from_string(fn_str):
@@ -37,15 +32,8 @@ def loss_function_from_string(fn_str):
     return getattr(mod, fn)
 
 
-# import yaml
-# class IImageLoss(yaml.YAMLObject):
-#     yaml_tag = "!ImageLoss"
-#     def __init__(self, loss, y_pred, y_true):
-#         self = ImageLoss(loss, y_pred, y_true)
-
-
 class RegularizationLoss(torch.nn.Module):
-    def __init__(self, loss_fn: str, y_pred: str) -> None:
+    def __init__(self, loss_fn: str, y_pred: str, loss_fn_kwargs: dict | None = None) -> None:
         """_summary_
 
         Parameters
@@ -61,14 +49,14 @@ class RegularizationLoss(torch.nn.Module):
 
         self.y_pred = y_pred
 
-        self.loss = loss_function_from_string(loss_fn)()
+        self.loss_fn = loss_function_from_string(loss_fn)(**(loss_fn_kwargs or {}))
 
     def forward(self, y_pred):
-        return self.loss(y_pred[self.y_pred])
+        return self.loss_fn(y_pred[self.y_pred])
 
 
 class SupervisedLoss(torch.nn.Module):
-    def __init__(self, loss_fn: str, y_pred: str, y_true: str) -> None:
+    def __init__(self, loss_fn: str, y_pred: str, y_true: str, loss_fn_kwargs: dict | None = None) -> None:
         """_summary_
 
         Parameters
@@ -85,101 +73,124 @@ class SupervisedLoss(torch.nn.Module):
         self.y_pred = y_pred
         self.y_true = y_true
 
-        self.loss = loss_function_from_string(loss_fn)()
+        self.loss_fn = loss_function_from_string(loss_fn)(**(loss_fn_kwargs or {}))
 
-    def forward(self, y_pred, y_true):
-        return self.loss(y_pred[self.y_pred], y_true[self.y_true])
-
-
+    def forward(self, y_pred, y_true, **kwargs):
+        return self.loss_fn(y_pred[self.y_pred], y_true[self.y_true], **kwargs)
 
 class ModelSupervisedLoss(SupervisedLoss):
     def __init__(
-        self, loss: str, y_pred: str, y_true: str, model: dict, state_dict: str
+        self, loss_fn: str, y_pred: str, y_true: str, model: dict, state_dict: str, loss_fn_kwargs: dict | None = None
     ) -> None:
-        super().__init__(loss, y_pred, y_true)
+        super().__init__(loss_fn, y_pred, y_true, loss_fn_kwargs)
 
         self.model = BrainNet(model["feature_extractor"], model["tasks"])
         # self.model.load_state_dict(torch.load(state_dict))
 
     def forward(self, y_pred, y_true):
         """Apply supervised model to `y_pred` before comparing with desired target."""
-        return self.loss(self.model(y_pred[self.y_pred]), y_true[self.y_true])
+        return self.loss_fn(self.model(y_pred[self.y_pred]), y_true[self.y_true])
 
 
 class SoftMaskedSupervisedLoss(SupervisedLoss):
-    def __init__(self, loss, y_pred, y_true, mask, background_channel) -> None:
-        super().__init__(loss, y_pred, y_true)
+    def __init__(self, loss_fn, y_pred, y_true, mask, background_channel, loss_fn_kwargs: dict | None = None) -> None:
+        super().__init__(loss_fn, y_pred, y_true, loss_fn_kwargs)
         self.mask = mask
         self.background_channel = background_channel
 
     def forward(self, y_pred, y_true):
         mask = 1.0 - y_true[self.mask][:, self.background_channel]
-        return self.loss(y_pred[self.y_pred], y_true[self.y_true], mask)
-
-
+        return self.loss_fn(y_pred[self.y_pred], y_true[self.y_true], mask)
 
 
 class SurfaceLossHandler:
     def extract_surface_data(self, data):
         return data["surface"]
 
-    def average_over_hemispheres(self, loss_fn, y_pred, y_true=None):
+    def average_over_hemispheres(self, loss_fn, y_pred, y_true=None, **kwargs):
         """Average loss over hemispheres."""
         loss = 0.0
         for hemi in y_pred:
             if y_true is None:
-                loss += loss_fn(y_pred[hemi])
+                loss += loss_fn(y_pred[hemi], **kwargs)
             else:
-                loss += loss_fn(y_pred[hemi], y_true[hemi])
+                loss += loss_fn(y_pred[hemi], y_true[hemi], **kwargs)
         return loss / len(y_pred)
 
 
-class SurfaceRegularizationLoss(RegularizationLoss, SurfaceLossHandler):
-    def __init__(self, loss_fn: str, y_pred: str) -> None:
-        super().__init__(loss_fn, y_pred)
+    # def average_over_hemispheres1(self, loss_fn, y_pred, y_true=None, **kwargs):
+    #     """Average loss over hemispheres."""
+    #     loss = 0.0
+    #     for hemi in y_pred:
+    #         if y_true is None:
+    #             loss += loss_fn(y_pred[hemi].vertices, **kwargs)
+    #         else:
+    #             loss += loss_fn(y_pred[hemi].vertices, y_true[hemi].vertices, **kwargs)
+    #     return loss / len(y_pred)
 
-    def forward(self, y_pred):
+    # def average_over_hemispheres2(self, loss_fn, y_pred, y_true, i_pred=None, i_true=None):
+    #     """Average loss over hemispheres."""
+    #     self.i_pred = i_pred or {hemi: None for hemi in y_pred}
+    #     self.i_true = i_true or {hemi: None for hemi in y_pred}
+    #     loss = 0.0
+    #     for hemi in y_pred:
+    #         loss += loss_fn(
+    #             y_pred[hemi].vertices,
+    #             y_true[hemi].vertices,
+    #             self.i_pred[hemi],
+    #             self.i_true[hemi],
+    #         )
+    #     return loss / len(y_pred)
+
+    # def average_over_hemispheres3(
+    #         self,
+    #         loss_fn,
+    #         y_pred,
+    #         curv_true: dict,
+    #         i_pred=None,
+    #         i_true=None,
+    #     ):
+    #     """Average loss over hemispheres."""
+    #     self.i_pred = i_pred or {hemi: None for hemi in y_pred}
+    #     self.i_true = i_true or {hemi: None for hemi in y_pred}
+    #     loss = 0.0
+    #     for hemi in y_pred:
+    #         curv_pred = y_pred[hemi].compute_mean_curvature_vector()
+
+    #         loss += loss_fn(
+    #             curv_pred,
+    #             curv_true[hemi],
+    #             self.i_pred[hemi],
+    #             self.i_true[hemi],
+
+    #         )
+    #     return loss / len(y_pred)
+
+class SurfaceRegularizationLoss(RegularizationLoss, SurfaceLossHandler):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+    def forward(self, y_pred, **kwargs):
         return self.average_over_hemispheres(
             super().forward,
             self.extract_surface_data(y_pred),
+            **kwargs,
         )
 
 
 class SurfaceSupervisedLoss(SupervisedLoss, SurfaceLossHandler):
-    def __init__(self, loss_fn: str, y_pred: str, y_true: str) -> None:
-        super().__init__(loss_fn, y_pred, y_true)
+    def __init__(self, *args, **kwargs) -> None:
+        """Extract surface data and calculate average loss over hemispheres."""
+        super().__init__(*args, **kwargs) # init of SupervisedLoss!
 
-    def forward(self, y_pred, y_true):
+    def forward(self, y_pred, y_true, **kwargs):
         return self.average_over_hemispheres(
             super().forward,
             self.extract_surface_data(y_pred),
             self.extract_surface_data(y_true),
+            **kwargs,
         )
 
-
-
-class IndexedSupervisedLoss(torch.nn.Module):
-    def __init__(self, loss_fn: str, y_pred: str, y_true: str) -> None:
-        """_summary_
-
-        Parameters
-        ----------
-        loss : str
-            E.g., DiceLoss, CrossEntropyLoss, L1Loss
-        y_pred : str
-            _description_
-        y_true : str
-            _description_
-        """
-        super().__init__()
-
-        self.y_pred = y_pred
-        self.y_true = y_true
-
-        self.loss = loss_function_from_string(loss_fn)()
-
-    def forward(self, y_pred, y_true, i_pred, i_true):
-        return self.loss(y_pred[self.y_pred][i_pred], y_true[self.y_true][i_true])
 
 
 class OriginalSurfaceLoss(torch.nn.Module):

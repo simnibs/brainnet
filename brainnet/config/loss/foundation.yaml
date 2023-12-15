@@ -7,7 +7,7 @@
 # loss: name of the actual loss function used
 
 # Normalize loss weights to sum to one
-normalize_weights: true
+# normalize_weights: true
 
 # # normalize loss weights to sum to one (i.e., within tasks)
 # normalize_loss_weights: true
@@ -18,44 +18,33 @@ normalize_weights: true
 # Entries should match the tasks of the selected model
 functions:
 
-  segmentation:         # task
-    Dice:               # loss name
-      module: ImageLoss # loss module
-      loss: DiceLoss    # loss function
-    CrossEntropy:
-      module: ImageLoss
-      loss: CrossEntropyLoss
-  # biasfield:
-  #   smMSE:
-  #     module: SoftMaskedSupervisedLoss
-  #     loss: MSELoss
-  #     mask: segmentation      # image to use for masking
-  #     background_channel: 0   # channel number to use for masking
+  # Biasfield
+
+  # bias:MSE:
+  #   module:
+  #     name: SoftMaskedSupervisedLoss
+  #     kwargs:
+  #       y_pred: biasfield
+  #       y_true: biasfield
+  #       mask: segmentation      # image to use for masking
+  #       background_channel: 0   # channel number to use for masking (= lut.background)
+  #   loss:
+  #     name: torch.nn.MSELoss
 
   # Segmentation
 
-  seg-dice:
+  seg:DiceCE:
     module:
-      __name__: SupervisedLoss
-      # initialization kwargs for module
-      y_pred: segmentation
-      y_true: segmentation
-      # model: modelconfig
-      # model_state: PathToStateDict.pt
+      name: SupervisedLoss
+      kwargs: # initialization kwargs for module
+        y_pred: segmentation
+        y_true: segmentation
     loss:
-      __name__: monai.losses.DiceLoss
-      # initialization kwargs for loss function
-      include_background: true
-
-  seg-ce:
-    module:
-      __name__: ImageLoss
-      y_pred: segmentation
-      y_true: segmentation
-    loss:
-      __name__: monai.losses.CrossEntropy
-      include_background: true
-
+      name: monai.losses.DiceCELoss
+      kwargs: # initialization kwargs for loss function
+        include_background: true  # default = true
+        lambda_dice: 1.0          # default = 1.0
+        lambda_ce: 1.0            # default = 1.0
 
   # surface: # applies to both left and right hemisphere
 
@@ -72,82 +61,96 @@ functions:
 
   # Surface
 
-  # Applies to both left and right hemisphere
+  # Loss is averaged across lh and rh (as available)
+  white:matched:
+    module:
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: white
+        y_true: white
+    loss:
+      name: brainnet.modules.losses.MatchedDistanceLoss
+  white:chamfer:
+    module:
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: white
+        y_true: white
+    loss:
+      name: brainnet.modules.losses.SymmetricChamferLoss
+      kwargs:
+        # store_indices: true
+  white:curv:
+    module:
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: white
+        y_true: white
+    loss:
+      name: brainnet.modules.losses.SymmetricCurvatureLoss
+        # store_indices: true
+  white:edgelength:
+    module:
+      name: SurfaceRegularizationLoss
+      kwargs:
+        y_pred: white
+    loss:
+      name: brainnet.modules.losses.EdgeLengthVarianceLoss
 
-  white-matched:
+  pial:matched:
     module:
-      __name__: SurfaceSupervisedLoss
-      y_pred: white
-      y_true: white
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: pial
+        y_true: pial
     loss:
-      __name__: brainnet.modules.losses.MatchedDistanceLoss
-  white-chamfer:
+      name: brainnet.modules.losses.MatchedDistanceLoss
+  pial:chamfer:
     module:
-      __name__: SurfaceSymmetricLoss
-      y_pred: white
-      y_true: white
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: pial
+        y_true: pial
     loss:
-      __name__: brainnet.modules.losses.SymmetricChamferDistance
-  white-curv:
+      name: brainnet.modules.losses.SymmetricChamferLoss
+        # store_indices: true
+  pial:curv:
     module:
-      __name__: SurfaceLoss
-      y_pred: white
-      y_true: white
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: pial
+        y_true: pial
     loss:
-      __name__: brainnet.modules.losses.SymmetricChamferCurvature
-  white-edgelength:
+      name: brainnet.modules.losses.SymmetricCurvatureLoss
+        # store_indices: true
+  pial:edgelength:
     module:
-      __name__: SurfaceRegularizationLoss
-      y_pred: white
-      y_true: white
+      name: SurfaceRegularizationLoss
+      kwargs:
+        y_pred: pial
     loss:
-      __name__: brainnet.modules.losses.EdgeLengthVarianceLoss
-
-  pial-matched:
-    module:
-      __name__: SupervisedLoss
-      y_pred: pial
-      y_true: pial
-    loss:
-      __name__: brainnet.modules.losses.MatchedDistanceLoss
-  pial-chamfer:
-    module:
-      __name__: SurfaceLoss
-      y_pred: pial
-      y_true: pial
-    loss:
-      __name__: brainnet.modules.losses.SymmetricChamferDistance
-  pial-curv:
-    module:
-      __name__: SurfaceLoss
-      y_pred: pial
-      y_true: pial
-    loss:
-      __name__: brainnet.modules.losses.SymmetricChamferCurvature
-  pial-edgelength:
-    module:
-      __name__: RegularizationLoss
-      y_pred: pial
-      y_true: pial
-    loss:
-      __name__: brainnet.modules.losses.EdgeLengthVarianceLoss
+      name: brainnet.modules.losses.EdgeLengthVarianceLoss
 
   # PD synthesis
-  PD-l1:
-    module:
-      __name__: SupervisedLoss
-      y_pred: PD
-      y_true: PD
-    loss:
-      __name__: torch.nn.L1Loss
-  PD-dice:
-    module:
-      __name__: ModelSupervisedLoss
-      y_pred: PD
-      y_true: segmentation
-    loss:
-      __name__: monai.losses.DiceLoss
-      include_background: true
+  # PD:l1:
+  #   module:
+  #     name: SupervisedLoss
+  #     kwargs:
+  #       y_pred: PD
+  #       y_true: PD
+  #   loss:
+  #     name: torch.nn.L1Loss
+  # PD:dice:
+  #   module:
+  #     name: ModelSupervisedLoss
+  #     kwargs:
+  #       y_pred: PD
+  #       y_true: segmentation
+  #       model: !include config/model/segment_t1.yaml
+  #       model_state: PathToStateDict.pt
+  #   loss:
+  #     name: monai.losses.DiceCELoss
+  #     include_background: true
 
 
   # Optional tasks
@@ -172,44 +175,45 @@ functions:
   #     model: /path/to/model_ct.pt
   #     state: /path/to/state_ct.pt
 
+
+link_surface_loss: [[white:chamfer, white:curv], [pial:chamfer, pial:curv]]
+
 weights:
   # segmentation
-  seg-dice: 1.0
-  seg-ce: 1.0
-
-  # PD synthesis (optional)
-  PD-L1: 1.0
-  PD-dice: 1.0
+  seg:DiceCE: 1.0
 
   # surface
-  white-matched: 1.0
-  white-chamfer: 1.0
-  white-curv: 1.0
-  white-edgelength: 1.0
+  white:matched: 1.0
+  white:chamfer: 1.0
+  white:curv: 1.0
+  white:edgelength: 1.0
 
-  pial-matched: 1.0
-  pial-chamfer: 1.0
-  pial-curv: 1.0
-  pial-edgelength: 1.0
+  pial:matched: 1.0
+  pial:chamfer: 1.0
+  pial:curv: 1.0
+  pial:edgelength: 1.0
 
+  # PD synthesis (optional)
+  # PD:l1: 1.0
+  # PD:dice: 1.0
 
-weights:
-  segmentation:
-    Dice: 1.0
-    CrossEntropy: 1.0
-  # biasfield:
-  #   smMSE: 1.0
-  surface:
-    white:
-      MatchedDistanceLoss: 1.0
-      SymmetricChamferLoss: 1.0
-      SymmetricCurvatureLoss: 10.0
-      EdgeLengthVarianceLoss: 1.0
-    pial:
-      MatchedDistanceLoss: 1.0
-      SymmetricChamferLoss: 1.0
-      SymmetricCurvatureLoss: 10.0
-      EdgeLengthVarianceLoss: 1.0
+# weights:
+#   segmentation:
+#     Dice: 1.0
+#     CrossEntropy: 1.0
+#   # biasfield:
+#   #   smMSE: 1.0
+#   surface:
+#     white:
+#       MatchedDistanceLoss: 1.0
+#       SymmetricChamferLoss: 1.0
+#       SymmetricCurvatureLoss: 10.0
+#       EdgeLengthVarianceLoss: 1.0
+#     pial:
+#       MatchedDistanceLoss: 1.0
+#       SymmetricChamferLoss: 1.0
+#       SymmetricCurvatureLoss: 10.0
+#       EdgeLengthVarianceLoss: 1.0
 
   # Optional tasks
   # T1:
