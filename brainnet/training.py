@@ -1,4 +1,5 @@
 import argparse
+from copy import deepcopy
 from datetime import datetime
 import sys
 from time import perf_counter
@@ -9,6 +10,7 @@ import wandb
 import brainsynth
 
 from brainnet.modules.brainnet import BrainNet
+from brainnet.modules.tasks import SurfaceModule
 from brainnet.modules.criterion import Criterion
 import brainnet.utilities
 
@@ -16,6 +18,9 @@ from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
 from brainnet.utilities import recursively_apply_function
 from brainsynth.dataset import get_dataloader_concatenated_and_split
 
+
+from brainnet.mesh.surface import BatchedSurfaces
+from brainnet.mesh.topology import get_recursively_subdivided_topology
 
 fmt_epoch = lambda epoch: f"{epoch:05d}"
 fmt_model = lambda epoch: f"{fmt_epoch(epoch)}_model.pt"
@@ -210,7 +215,7 @@ class BrainNetTrainer:
             **recursive_namespace_to_dict(config.optimizer.kwargs),
         )
 
-        self.criterion = Criterion(config.loss, config.dataset.optional_images)
+        self.criterion = Criterion(config.loss)
 
         if self.config.auto_schedulers is not None:
             raise NotImplementedError
@@ -256,6 +261,12 @@ class BrainNetTrainer:
         print(f"Started training on {now}")
 
         self._wandb_init()
+
+        # Get empty BatchedSurfaces. We update the vertices at each iteration
+        self.surface_skeletons = dict(
+            y_pred=self.get_surface_skeletons(),
+            y_true=self.get_surface_skeletons(),
+        )
 
         for n in range(self.epoch.start, self.epoch.max_allowed_epochs + 1):
             epoch = Epoch(n)
@@ -314,9 +325,12 @@ class BrainNetTrainer:
                     )
                 else:
                     model_kwargs = {}
-                criterion_kwargs = dict(ds_id=ds_id)
 
-                loss, wloss = self.step(image, y_true, model_kwargs, criterion_kwargs)
+
+                # add y_true_curv here
+                # criterion_kwargs = dict(y_true_curv=surfaces[...])
+
+                loss, wloss = self.step(image, y_true, model_kwargs) # criterion_kwargs
 
                 t2 = perf_counter()
 
@@ -370,6 +384,27 @@ class BrainNetTrainer:
                 break
 
         self._wandb_finish()
+
+
+    def step(self, image, y_true, model_kwargs=None, criterion_kwargs=None):
+        model_kwargs = model_kwargs or {}
+        criterion_kwargs = criterion_kwargs or {}
+
+        y_pred = self.model(image, **model_kwargs)
+
+        if "surface" in y_pred:
+            # convert surface predictions to batched surfaces
+            self.set_batchedsurface(y_pred["surface"], self.surface_skeletons["y_pred"])
+            self.set_batchedsurface(y_true["surface"], self.surface_skeletons["y_true"])
+
+            self.criterion.precompute_for_surface_loss(
+                y_pred["surface"], y_true["surface"]
+            )
+
+        loss = self.criterion(y_pred, y_true, **criterion_kwargs)
+        wloss = self.criterion.apply_normalized_weights(loss)
+
+        return loss, wloss
 
 
     def _do_save_checkpoint(self, epoch):
@@ -446,24 +481,36 @@ class BrainNetTrainer:
         )
         self.latest_checkpoint = epoch
 
-    def step(self, image, y_true, model_kwargs=None, criterion_kwargs=None):
-        model_kwargs = model_kwargs or {}
-        criterion_kwargs = criterion_kwargs or {}
 
-        y_pred = self.model(image, **model_kwargs)
+    def get_surface_skeletons(self):
+        surface_names = ("white", "pial")
+
+        module = [i for i in self.model.tasks.values() if isinstance(i, SurfaceModule)]
+        if len(module) == 0:
+            return None
+
+        assert len(module) == 1
+
+        module = module[0]
+
+        topology = module.get_prediction_topology()
+        topology = dict(lh=topology, rh=deepcopy(topology))
+        topology["rh"].reverse_face_orientation()
+
+        return {
+            h: {
+                s: BatchedSurfaces(torch.zeros(t.n_vertices, 3, device=self.device), t) for s in surface_names
+            } for h,t in topology.items()
+        }
 
 
-        try:
-            pred_surf = y_pred.pop("surface")
-        except KeyError:
-            pred_surf = {}
+    def set_batchedsurface(self, data, surface_skeleton):
+        """Replace vertex tensors with BatchedSurfaces objects."""
+        for h,surfaces in data.items():
+            for s in surfaces:
+                surface_skeleton[h][s].vertices = surfaces[s]
+                data[h][s] = surface_skeleton[h][s]
 
-        # convert surface predictions to batched surfaces
-        # ...
-
-        loss, wloss = self.criterion(y_pred, y_true, **criterion_kwargs)
-
-        return loss, wloss
 
     def hook_on_step_end(self, step):
         pass

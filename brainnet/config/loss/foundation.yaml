@@ -78,7 +78,7 @@ functions:
         y_true: white
     loss:
       name: brainnet.modules.losses.SymmetricChamferLoss
-      kwargs:
+      # kwargs:
         # store_indices: true
   white:curv:
     module:

@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Union
 
 import torch
@@ -8,8 +9,10 @@ from brainnet.modules.topofit.config import TopoFitModelParameters, UnetParamete
 from brainnet.modules.topofit import layers
 from brainnet.modules.topofit.utilities import grid_sample
 from brainnet.mesh import topology
+from brainnet.mesh.surface import BatchedSurfaces
 
 default_hemispheres = ("lh", "rh")
+
 
 def make_unet_channels(in_channels: int, n_levels: int, multiplier: int) -> dict:
     """Construct Unet hierarchy"""
@@ -223,7 +226,9 @@ class TopoFitTemplateInitialization(torch.nn.Module):
         super().__init__()
 
         conv_kwargs = dict(spatial_dims=3)
-        self.conv = Convolution(in_channels=in_channels, out_channels=n_points, **conv_kwargs)
+        self.conv = Convolution(
+            in_channels=in_channels, out_channels=n_points, **conv_kwargs
+        )
 
     def cache_shape_and_grid(self, shape, device):
         """During training the shape will stay the same so no need to recreate
@@ -257,7 +262,7 @@ class TopoFitTemplateInitialization(torch.nn.Module):
 
         x = self.conv(features)
         x = x.reshape(N, self.conv.out_channels, -1)
-        x = x / (x.sum(-1)[..., None] + eps) # normalize channel maps
+        x = x / (x.sum(-1)[..., None] + eps)  # normalize channel maps
 
         # weigh coordinates (grid) by feature maps
         return torch.stack([torch.sum(x * g.ravel(), dim=-1) for g in self.grid], dim=1)
@@ -287,16 +292,26 @@ class TopoFitGraph(torch.nn.Module):
         # self.register_buffer(
         #     "initial_faces", topology.initial_faces, persistent=False,
         # )
+
+        # We use the left topology in the submodules which only use knowledge
+        # of the neighborhoods to define the convolutions (and this is
+        # independent of the face orientation).
         self.topologies = topology.get_recursively_subdivided_topology(
+            n_res - 1,
             topology.initial_faces.to(self.device),
-            n_recursions=n_res - 1
         )
 
-        # Add a initializer for the template positions of each hemisphere
+        # The topology is defined on the left hemisphere and although the
+        # topology is the same for both hemispheres, we need to reverse the
+        # order of the vertices in face array in order for the ordering to
+        # remain consistent (e.g., counter-clockwise) once the vertices are
+        # (almost) left-right mirrored
+
+        # Add an initializer for the template positions
         for hemi in default_hemispheres:
             self.add_module(
                 f"template_initialization_{hemi}",
-                TopoFitTemplateInitialization(in_channels, n_template_vertices)
+                TopoFitTemplateInitialization(in_channels, n_template_vertices),
             )
 
         # Surface placement modules are shared for both hemispheres
@@ -331,6 +346,9 @@ class TopoFitGraph(torch.nn.Module):
         )
         # self.linear_deform1 = GraphLinearDeform(in_channels,  **kwargs_quad)
 
+    def get_prediction_topology(self):
+        return self.topologies[self.prediction_res]
+
     def forward(self, features: torch.Tensor, hemispheres: None | tuple | list = None):
         """
         Faces can be retrieved from
@@ -363,18 +381,19 @@ class TopoFitGraph(torch.nn.Module):
             # transpose to (N, 3, M) (.mT = batch transpose) such that coordinates
             # are in the channel dimension
             # vertices = vertices.mT
-            vertices = getattr(self, f"template_initialization_{hemi}")(features) # (N, 3, M)
+            vertices = getattr(self, f"template_initialization_{hemi}")(
+                features
+            )  # (N, 3, M)
 
             out[hemi] = self._topofit_forward(features, vertices)
 
         return out
 
-
     def _topofit_forward(self, features, vertices):
         """TopoFit prediction."""
-            # At each iteration
-            #   1. Sample image features at the corresponding points on the surface
-            #   2. use these features to predict a deformation of each point
+        # At each iteration
+        #   1. Sample image features at the corresponding points on the surface
+        #   2. use these features to predict a deformation of each point
 
         # Place white matter
         for res in range(self.prediction_res + 1):
@@ -394,9 +413,4 @@ class TopoFitGraph(torch.nn.Module):
         vertices_pial = self.linear_deform(features, vertices_layer4)
 
         # Transpose back to (N, M, 3)
-        return dict(
-            # faces = self.topologies[self.prediction_res].faces,
-            white=vertices.mT,
-            # layer4=vertices_layer4.mT,
-            pial=vertices_pial.mT,
-        )
+        return dict(white=vertices.mT, pial=vertices_pial.mT)

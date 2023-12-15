@@ -5,25 +5,10 @@ import torch
 from brainnet.modules.brainnet import BrainNet
 
 
-# def get_loss_function(name, modules: None | list[ModuleType] = None):
-#     # module search order is: torch, monai, local
-#     modules = (
-#         [torch.nn.modules.loss, monai.losses, brainnet.modules.losses]
-#         if modules is None
-#         else modules
-#     )
-#     if len(modules) == 0:
-#         raise ValueError("Module could not be found")
-#     try:
-#         return getattr(modules[0], name)
-#     except AttributeError:
-#         return get_loss_function(name, modules[1:])
+def function_from_string(fn_str):
+    """Get a function from its full string specification, e.g.,
 
-
-def loss_function_from_string(fn_str):
-    """
-
-    'my.module.function' -> return function from my.module
+        'my.module.function' -> return function from my.module
 
     """
     split = fn_str.split(".")
@@ -49,7 +34,7 @@ class RegularizationLoss(torch.nn.Module):
 
         self.y_pred = y_pred
 
-        self.loss_fn = loss_function_from_string(loss_fn)(**(loss_fn_kwargs or {}))
+        self.loss_fn = function_from_string(loss_fn)(**(loss_fn_kwargs or {}))
 
     def forward(self, y_pred):
         return self.loss_fn(y_pred[self.y_pred])
@@ -73,7 +58,7 @@ class SupervisedLoss(torch.nn.Module):
         self.y_pred = y_pred
         self.y_true = y_true
 
-        self.loss_fn = loss_function_from_string(loss_fn)(**(loss_fn_kwargs or {}))
+        self.loss_fn = function_from_string(loss_fn)(**(loss_fn_kwargs or {}))
 
     def forward(self, y_pred, y_true, **kwargs):
         return self.loss_fn(y_pred[self.y_pred], y_true[self.y_true], **kwargs)

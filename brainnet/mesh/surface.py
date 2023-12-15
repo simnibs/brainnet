@@ -33,6 +33,7 @@ class BatchedSurfaces:
         self._topology = topology
         self._vertices = vertices
         self.vertex_data = {}
+        self.face_data = {}
 
 
     @property
@@ -55,19 +56,19 @@ class BatchedSurfaces:
         self._vertices = value
         self.n_batch, _, self.n_dim = self._vertices.shape
 
-        if hasattr(self, "mean_curvature_vector"):
-            self.mean_curvature_vector = self.compute_mean_curvature_vector()
+        # if hasattr(self, "mean_curvature_vector"):
+        #     self.mean_curvature_vector = self.compute_mean_curvature_vector()
 
-    @property
-    def mean_curvature_vector(self):
-        return self._mean_curvature_vector
+    # @property
+    # def mean_curvature_vector(self):
+    #     return self._mean_curvature_vector
 
 
-    @mean_curvature_vector.setter
-    def mean_curvature_vector(self, value):
-        value = torch.atleast_3d(value)
-        assert value.shape[1] == self.topology.n_vertices
-        self._mean_curvature_vector = value
+    # @mean_curvature_vector.setter
+    # def mean_curvature_vector(self, value):
+    #     value = torch.atleast_3d(value)
+    #     assert value.shape[1] == self.topology.n_vertices
+    #     self._mean_curvature_vector = value
 
     def compute_face_normals(self, return_face_areas: bool = False):
         mesh = self.vertices[:, self.faces]
