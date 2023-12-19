@@ -17,7 +17,7 @@ if not have_cuda:
 
 # CUDA_HOME = env base directory
 
-cpp_std = "14"
+cpp_std = "17" # 20
 
 #base_dir = Path("/mrhome/jesperdn/repositories/SuperSynth")
 #src_dir = base_dir / "ext" / "graph" / "cuda"
