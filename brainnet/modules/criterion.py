@@ -40,10 +40,6 @@ class Criterion(torch.nn.Module):
         )
 
 
-    # def blabla(self):
-
-    #     if
-
     def apply_normalized_weights(self, loss_dict):
         """Apply normalized weights. `forward` needs to be run in order to
         update the weight normalizer.
@@ -87,13 +83,13 @@ class Criterion(torch.nn.Module):
         for name, loss in self.losses.items():
             try:
                 match loss:
-                    case loss_wrappers.SupervisedLoss:
+                    case loss_wrappers.SupervisedLoss():
                         # if isinstance(loss, brainnet.modules.losses.SymmetricMSELoss):
                         #     i_pred = loss.loss_fn.i_pred
                         #     i_true = loss.loss_fn.i_true
                         #     curv_true = kwargs["curv_true"]
                         value = loss(y_pred, y_true)
-                    case loss_wrappers.RegularizationLoss:
+                    case loss_wrappers.RegularizationLoss():
                         value = loss(y_pred)
                     case _:
                         raise ValueError

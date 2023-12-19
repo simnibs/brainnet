@@ -54,7 +54,7 @@ dataset:
 
   kwargs:
     # Initial surface resolution
-    surface_resolution: 6
+    surface_resolution: 0
     surface_hemi: random
     # These images should be present for all datasets
     #   constants.filenames.default_images
@@ -112,7 +112,7 @@ epoch:
 optimizer:
   name: AdamW
   kwargs:
-    lr: 1.0e-3
+    lr: 1.0e-4
 
 convergence:
   minimum_lr: &MIN_LR 1.0e-8

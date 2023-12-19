@@ -60,10 +60,19 @@ class SymmetricMSELoss(torch.nn.MSELoss):
         i_pred: torch.IntTensor,
         i_true: torch.IntTensor,
     ):
-        return 0.5 * (
-            super().forward(y_pred, y_true[i_true])
-            + super().forward(y_pred[i_pred], y_true)
-        )
+        if (batch_size := y_pred.shape[0]) > 1:
+            batch_index = torch.arange(batch_size)[:, None]
+            return 0.5 * (
+                super().forward(y_pred, y_true[batch_index, i_true])
+                + super().forward(y_pred[batch_index, i_pred], y_true)
+            )
+        else:
+            p = y_pred.squeeze(0)
+            t = y_true.squeeze(0)
+            return 0.5 * (
+                super().forward(p, t[i_true.squeeze(0)])
+                + super().forward(p[i_pred.squeeze(0)], t)
+            )
 
 
 class SymmetricChamferLoss(SymmetricMSELoss):
@@ -202,12 +211,14 @@ class EdgeLengthVarianceLoss(torch.nn.Module):
         Returns
         -------
         loss : float
-
+            Average variance over batch.
         """
         edge_length = surfaces.compute_edge_lengths()
         n = edge_length.shape[1]
-        edge_length *= n / edge_length.sum()  # new mean is 1
-        return torch.sum((edge_length - 1) ** 2) / n  # variance
+        # new mean is 1
+        edge_length_mu1 = edge_length * n / edge_length.sum(1)[:, None]
+        # average variance
+        return torch.mean(torch.sum((edge_length_mu1 - 1) ** 2, 1) / n)
 
 
 # IMAGE LOSS FUNCTIONS

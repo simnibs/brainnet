@@ -78,8 +78,6 @@ functions:
         y_true: white
     loss:
       name: brainnet.modules.losses.SymmetricChamferLoss
-      # kwargs:
-        # store_indices: true
   white:curv:
     module:
       name: SurfaceSupervisedLoss
@@ -88,7 +86,6 @@ functions:
         y_true: white
     loss:
       name: brainnet.modules.losses.SymmetricCurvatureLoss
-        # store_indices: true
   white:edgelength:
     module:
       name: SurfaceRegularizationLoss
@@ -113,7 +110,6 @@ functions:
         y_true: pial
     loss:
       name: brainnet.modules.losses.SymmetricChamferLoss
-        # store_indices: true
   pial:curv:
     module:
       name: SurfaceSupervisedLoss
@@ -122,7 +118,6 @@ functions:
         y_true: pial
     loss:
       name: brainnet.modules.losses.SymmetricCurvatureLoss
-        # store_indices: true
   pial:edgelength:
     module:
       name: SurfaceRegularizationLoss

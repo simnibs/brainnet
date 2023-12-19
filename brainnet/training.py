@@ -136,7 +136,7 @@ def print_memory_usage(device):
 
 class BrainNetTrainer:
     def __init__(self, config):
-        torch.backends.cudnn.benchmark = True # increases initial time
+        torch.backends.cudnn.benchmark = True  # increases initial time
         torch.backends.cudnn.deterministic = True
 
         self.config = config
@@ -144,7 +144,7 @@ class BrainNetTrainer:
         self.device = torch.device(config.device.model)
         self.synth_device = torch.device(config.device.synthesizer)
 
-        #assert self.device == self.synth_device
+        # assert self.device == self.synth_device
 
         self.epoch = config.epoch
         self.epoch.start = self.epoch.resume_from_checkpoint or 1
@@ -203,7 +203,9 @@ class BrainNetTrainer:
             self.wandb = None
 
         # Device is needed as arg for topofit for now...
-        self.model = BrainNet(config.model.feature_extractor, config.model.tasks, self.device)
+        self.model = BrainNet(
+            config.model.feature_extractor, config.model.tasks, self.device
+        )
         self.model.to(self.device)
         n_parameters = sum(
             p.numel() for p in self.model.parameters() if p.requires_grad
@@ -235,7 +237,7 @@ class BrainNetTrainer:
 
     def _get_lr(self):
         for param_group in self.optimizer.param_groups:
-            return param_group['lr']
+            return param_group["lr"]
 
     def has_converged(self):
         return self._get_lr() <= self.config.convergence.minimum_lr
@@ -287,14 +289,12 @@ class BrainNetTrainer:
 
                 # synth and model device could be different!
 
-                ds_id = ds_id[0] # ds_id is a tuple of len 1
+                ds_id = ds_id[0]  # ds_id is a tuple of len 1
                 # self.to_device(image)
                 # self.to_device(surface)
                 # self.to_device(info)
 
-
                 with torch.no_grad():
-
                     y_true_img, y_true_surf = self.synthesizer(images, surfaces, info)
 
                     if "synth" not in y_true_img:
@@ -311,6 +311,7 @@ class BrainNetTrainer:
 
                     image = y_true_img.pop("synth")
                     y_true = y_true_img
+                    y_true["surface"] = y_true_surf
 
                 # convert surface ground truths to batched surfaces
                 # ...
@@ -320,32 +321,39 @@ class BrainNetTrainer:
                 t1 = perf_counter()
 
                 if len(surfaces) > 0:
-                    model_kwargs = dict(
-                        hemispheres=tuple(y_true_surf.keys())
-                    )
+                    model_kwargs = dict(hemispheres=tuple(y_true_surf.keys()))
                 else:
                     model_kwargs = {}
-
 
                 # add y_true_curv here
                 # criterion_kwargs = dict(y_true_curv=surfaces[...])
 
-                loss, wloss = self.step(image, y_true, model_kwargs) # criterion_kwargs
+                # with torch.autograd.set_detect_anomaly(True):
+                loss, wloss = self.step(image, y_true, model_kwargs)  # criterion_kwargs
 
                 t2 = perf_counter()
 
                 # compute weighted loss
                 # wloss = self.criterion.apply_weights(loss)
-                wloss_sum = brainnet.utilities.recursive_dict_sum(wloss)
+                wloss_sum = sum(wloss.values())
 
                 # Reset gradients in optimizer. Otherwise gradients would
-                # accumulate across multiple passes
+                # accumulate across multiple passes (whenever .backward is
+                # called)
                 self.optimizer.zero_grad()
                 # Compute and accumulate gradients. backward() frees
                 # intermediate values of the graph (e.g., activations)
+
+                # torch.cuda.empty_cache()
+                # print_memory_usage(self.device)
+
                 wloss_sum.backward()
                 # Update parameters (i.e., gradients)
                 self.optimizer.step()
+
+                torch.cuda.empty_cache()
+                # print_memory_usage(self.device)
+
 
                 # log the loss
                 epoch.loss_update(loss, wloss)
@@ -354,21 +362,18 @@ class BrainNetTrainer:
 
                 t3 = perf_counter()
 
-
-                synth_time = t1-t0
-                model_time = t2-t1
-                step_time = t3-t0
+                synth_time = t1 - t0
+                model_time = t2 - t1
+                step_time = t3 - t0
 
                 print("synth time", synth_time)
                 print("model time", model_time)
                 print("step  time", step_time)
 
-
             epoch.loss_normalize()
             epoch.loss_sum()
 
             epoch.print()
-
 
             val_loss = self.validate(epoch.epoch)
 
@@ -377,7 +382,6 @@ class BrainNetTrainer:
             self.save_checkpoint(n)
             self.hook_on_epoch_end(n)
 
-
             if self.has_converged():
                 self.save_checkpoint(n)
                 print("Converged")
@@ -385,27 +389,23 @@ class BrainNetTrainer:
 
         self._wandb_finish()
 
-
     def step(self, image, y_true, model_kwargs=None, criterion_kwargs=None):
         model_kwargs = model_kwargs or {}
         criterion_kwargs = criterion_kwargs or {}
 
         y_pred = self.model(image, **model_kwargs)
 
-        if "surface" in y_pred:
-            # convert surface predictions to batched surfaces
-            self.set_batchedsurface(y_pred["surface"], self.surface_skeletons["y_pred"])
-            self.set_batchedsurface(y_true["surface"], self.surface_skeletons["y_true"])
+        # convert surface predictions to batched surfaces
+        if (k := "surface") in y_pred:
+            self.set_batchedsurface(y_pred[k], self.surface_skeletons["y_pred"])
+            self.set_batchedsurface(y_true[k], self.surface_skeletons["y_true"])
 
-            self.criterion.precompute_for_surface_loss(
-                y_pred["surface"], y_true["surface"]
-            )
+            self.criterion.precompute_for_surface_loss(y_pred[k], y_true[k])
 
         loss = self.criterion(y_pred, y_true, **criterion_kwargs)
         wloss = self.criterion.apply_normalized_weights(loss)
 
         return loss, wloss
-
 
     def _do_save_checkpoint(self, epoch):
         return epoch % self.epoch.save_state_every == 0
@@ -438,9 +438,7 @@ class BrainNetTrainer:
                 y_true["surface"] = surfaces
 
                 # same as training step for now...
-                loss, wloss = self.criterion(
-                    self.model(image, y_true), y_true, ds_id
-                )
+                loss, wloss = self.criterion(self.model(image, y_true), y_true, ds_id)
 
                 val_epoch.loss_update(loss, wloss)
 
@@ -481,7 +479,6 @@ class BrainNetTrainer:
         )
         self.latest_checkpoint = epoch
 
-
     def get_surface_skeletons(self):
         surface_names = ("white", "pial")
 
@@ -499,18 +496,20 @@ class BrainNetTrainer:
 
         return {
             h: {
-                s: BatchedSurfaces(torch.zeros(t.n_vertices, 3, device=self.device), t) for s in surface_names
-            } for h,t in topology.items()
+                s: BatchedSurfaces(torch.zeros(t.n_vertices, 3, device=self.device), t)
+                for s in surface_names
+            }
+            for h, t in topology.items()
         }
-
 
     def set_batchedsurface(self, data, surface_skeleton):
         """Replace vertex tensors with BatchedSurfaces objects."""
-        for h,surfaces in data.items():
+        for h, surfaces in data.items():
             for s in surfaces:
+                # convert metatensor to tensor otherwise the custom CUDA
+                # functions fail (nearest neighbor computation)
                 surface_skeleton[h][s].vertices = surfaces[s]
                 data[h][s] = surface_skeleton[h][s]
-
 
     def hook_on_step_end(self, step):
         pass
@@ -594,7 +593,7 @@ class Epoch:
 
         headers = ("Epoch", "Raw (total)", "Weighted (total)")
         col_width = (6, 15, 15)
-        self._header = "   ".join(f"{j:>{i}s}" for i,j in zip(col_width, headers))
+        self._header = "   ".join(f"{j:>{i}s}" for i, j in zip(col_width, headers))
 
         # keys = ("{epoch}", "{raw_total}", "{weighted_total}")
         # fmt = ("d", ".4f", ".4f")
@@ -604,13 +603,12 @@ class Epoch:
             f"{{{'weighted_total'}:{col_width[2]}.4f}}   "
         )
 
-        self.get_tensor_item = lambda t: t.item()
-
     def loss_update(self, loss, wloss):
-
-
-        self._update_dict(self.loss["raw"], recursively_apply_function(loss, self.get_tensor_item))
-        self._update_dict(self.loss["weighted"], recursively_apply_function(wloss, self.get_tensor_item))
+        self._update_dict(self.loss["raw"], {k: v.item() for k, v in loss.items()})
+        self._update_dict(
+            self.loss["weighted"],
+            {k: v.item() for k, v in wloss.items()},
+        )
         self._update_key_count(self.loss_counter, self.loss["raw"])
 
     def loss_sum(self):
@@ -648,16 +646,11 @@ class Epoch:
             d[k] /= count[k]
 
 
-
-
-
-
-
 def _flat_item_dict(d: dict, out: None | dict = None, prefix=None, sep=":"):
     """Flattens a dict and calls .item() on its values."""
     if out is None:
         out = {}
-    for k,v in d.items():
+    for k, v in d.items():
         key = k if prefix is None else sep.join((prefix, k))
 
         # match prefix:

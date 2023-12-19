@@ -39,9 +39,10 @@ feature_extractor:
 tasks:
 
   segmentation:
-    module: SegmentationModule
-    module_kwargs:
-      out_channels: 33
+    module:
+      name: SegmentationModule
+      kwargs:
+        out_channels: 33
     # postprocess: true
     # postprocess_kwargs:
     #   labels: #[...]
@@ -61,9 +62,10 @@ tasks:
   #     out_channels: 1
 
   surface:
-    module: SurfaceModule
-    module_kwargs:
-      prediction_res: 5
+    module:
+      name: SurfaceModule
+      kwargs:
+        prediction_res: 0
 
   # T1:
   #   module: SuperResolutionModule

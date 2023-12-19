@@ -14,6 +14,18 @@ reduce_index, gather_index = topology.vertex_adjacency.T
 smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, curv[gather_index])
 """
 
+def atleast_nd_prepend(t, n):
+    if t.ndim == n:
+        return t
+    else:
+        return atleast_nd_prepend(t[None], n)
+
+def atleast_nd_append(t, n):
+    if t.ndim == n:
+        return t
+    else:
+        return atleast_nd_prepend(t[..., None], n)
+
 class BatchedSurfaces:
     def __init__(
             self,
@@ -30,8 +42,8 @@ class BatchedSurfaces:
             If a tensor, then it is assumed to be a 2d array representing the
             connectivity of the surface.
         """
-        self._topology = topology
-        self._vertices = vertices
+        self.topology = topology
+        self.vertices = vertices
         self.vertex_data = {}
         self.face_data = {}
 
@@ -51,13 +63,14 @@ class BatchedSurfaces:
 
     @vertices.setter
     def vertices(self, value):
-        value = torch.atleast_3d(value)
-        assert value.shape[1] == self.topology.n_vertices
+        value = atleast_nd_prepend(value, 3)
+        assert value.shape[1] == self.topology.n_vertices, f"Vertices dimension mismatch: {value.shape[1]} and {self.topology.n_vertices}"
         self._vertices = value
         self.n_batch, _, self.n_dim = self._vertices.shape
 
         # if hasattr(self, "mean_curvature_vector"):
         #     self.mean_curvature_vector = self.compute_mean_curvature_vector()
+
 
     # @property
     # def mean_curvature_vector(self):
@@ -78,7 +91,7 @@ class BatchedSurfaces:
         if return_face_areas:
             norms = normals.norm(dim=-1)
             face_areas = 0.5 * norms
-            normals /= norms.clamp_min(min=1e-12)[..., None]
+            normals = normals / norms.clamp_min(min=1e-12)[..., None]
             return normals, face_areas
         else:
             return torch.nn.functional.normalize(normals, p=2.0, dim=-1)
@@ -154,8 +167,7 @@ class BatchedSurfaces:
         E2 = E**2
         cot = torch.stack(
             [E2[..., i] + E2[..., j] - E2[..., k] for i, j, k in cot_index], -1
-        )
-        cot /= 4 * area[..., None]
+        ) / 4 * area[..., None]
 
         return cot, area
 
@@ -194,18 +206,13 @@ class BatchedSurfaces:
         cotangent, face_area = self.compute_cotangents()
 
         # Compute area per vertex
-        face_area /= 3.0
+        face_area = face_area / 3.0
         face_area = face_area[..., None].expand((self.n_batch, *self.faces.shape))
         vertex_area = torch.zeros((self.n_batch, self.topology.n_vertices), device=self.vertices.device)
-        vertex_area.scatter_add_(
-            1,
-            self.view_faces_as_vertices().reshape(self.n_batch, -1),
-            face_area.reshape(self.n_batch, -1)
+        vertex_area.index_add_(
+            1, self.faces.ravel(), face_area.reshape(self.n_batch, -1)
         )
         inv_vertex_area = 1 / vertex_area
-        # face_area = face_area[..., None].expand((batch_size, n_faces, n_per_face))
-        # vertex_area = torch.zeros((batch_size, n_vertices))
-        # vertex_area.scatter_add_(1, faces[None].expand(batch_size, n_faces, n_per_face).reshape(batch_size, -1), face_area.reshape(batch_size, -1))
 
         # The edges corresponding to the values of `cotangent`
         # edge0 = faces[:, (1, 0, 0)].ravel()
@@ -215,7 +222,6 @@ class BatchedSurfaces:
 
         n_edges = 3*self.topology.n_faces
         edges = self.topology.edges_from_faces()
-        edges_exp = edges[None].expand(self.n_batch, n_edges, 2)
 
         # for each vertex, sum the cotangents of all of its edges weighted by
         # the vertex itself, i.e.,
@@ -224,15 +230,21 @@ class BatchedSurfaces:
         #   = f(vi) * sum_{j in N(i)} cot(a_ij) + cot(b_ij)
         #
         # where N(i) is the 1-ring neighbors of vertex i.
-        cot_ab_sum = torch.zeros((self.n_batch, self.topology.n_vertices), device=self.vertices.device)
-        # cot_ab_sum.scatter_add_(1, edge0[None].expand(edge_shape), cotangent.reshape(edge_shape))
-        # cot_ab_sum.scatter_add_(1, edge1[None].expand(edge_shape), cotangent.reshape(edge_shape))
-        cot_ab_sum.scatter_add_(
-            1, edges_exp[..., 0], cotangent.reshape(self.n_batch, n_edges)
+        cot_ab_sum = torch.zeros(
+            (self.n_batch, self.topology.n_vertices),
+            device=self.vertices.device
         )
-        cot_ab_sum.scatter_add_(
-            1, edges_exp[..., 1], cotangent.reshape(self.n_batch, n_edges)
+        cot_ab_sum.index_add_(
+            1,
+            edges[:, 0],
+            cotangent.reshape(self.n_batch, n_edges),
         )
+        cot_ab_sum.index_add_(
+            1,
+            edges[:, 1],
+            cotangent.reshape(self.n_batch, n_edges),
+        )
+
         cot_ab_vi = cot_ab_sum[..., None] * self.vertices
 
         # for each vertex, again compute the sum of cotangents of each edge,
@@ -241,19 +253,10 @@ class BatchedSurfaces:
         #
         #   sum_{j in N(i)} (cot(a_ij) + cot(b_ij) * f(vj)
 
-        # edge0 = edge0[..., None].expand((batch_size, n_vertices, ndim))
-        # edge1 = edge1[..., None].expand((batch_size, n_vertices, ndim))
         cotangent = cotangent.reshape(self.n_batch, -1, 1)
-        # cotangent = cotangent.reshape(-1, 1)
 
-        # mind the opposite edge indexing!
-        # cot_ab_vj = torch.zeros((batch_size, n_vertices, ndim))
+        # NOTE mind the opposite edge indexing!
         cot_ab_vj = torch.zeros_like(self.vertices)
-        # cot_ab_vj.scatter_add_(0, edge1[..., None].expand(-1, ndim), cotangent * y_pred[edge0])
-        # cot_ab_vj.scatter_add_(0, edge0[..., None].expand(-1, ndim), cotangent * y_pred[edge1])
-
-        # cot_ab_vj.index_add_(1, edge1, cotangent * vertices[edge0])
-        # cot_ab_vj.index_add_(1, edge0, cotangent * vertices[edge1])
         cot_ab_vj.index_add_(
             1, edges[..., 0], cotangent * self.vertices[:, edges[..., 1]]
         )
@@ -354,7 +357,15 @@ class BatchedSurfaces:
         # for each element in `self`, this is the index of the closest element
         # in `other`, hence minimum set distance per vertex is
         # dist(self.vertices, other.vertices[index])
-        return cuda_extensions.compute_nearest_neighbor(self.vertices, other.vertices)
+
+        B, N, _ = self.vertices.shape
+        size_self = torch.full((B, ), N, device=self.vertices.device, dtype=torch.int64)
+        B, N, _ = other.vertices.shape
+        size_other = torch.full((B, ), N, device=other.vertices.device, dtype=torch.int64)
+
+        return cuda_extensions.compute_nearest_neighbor(
+            self.vertices, other.vertices, size_self, size_other
+        )
 
 
     # def chamfer_distance(self, other: "BatchedSurfaces"):

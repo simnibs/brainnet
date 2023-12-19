@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from monai.networks import nets
 import torch
 
@@ -33,37 +35,38 @@ class BrainNet(torch.nn.Module):
 
         # Build feature extractor
         self.feature_extractor = getattr(nets, feature_extractor_config.model)(
-            **(recursive_namespace_to_dict(feature_extractor_config.kwargs) if feature_extractor_config.kwargs is not None else {})
+            **(vars(feature_extractor_config.kwargs) if feature_extractor_config.kwargs is not None else {})
         )
 
         # set `in_channels` for tasks to `out_channels` from feature extractor
-        task_config = recursive_namespace_to_dict(task_config)
-        for t in task_config.values():
-            if (k := "module_kwargs") not in t:
-                t[k] = dict(in_channels=feature_extractor_config.kwargs.out_channels)
-            if (k := "in_channels") not in t["module_kwargs"]:
-                t["module_kwargs"][k] = feature_extractor_config.kwargs.out_channels
+        for task in vars(task_config).values():
+            if not hasattr(task.module, "kwargs"):
+                task.module.kwargs = SimpleNamespace()
+
+            if not hasattr(task.module.kwargs, "in_channels"):
+                task.module.kwargs.in_channels = feature_extractor_config.kwargs.out_channels
 
             # Module-specific setup
-            if t["module"] == "SurfaceModule":
-                t["module_kwargs"]["device"] = device
+            if task.module.name == "SurfaceModule":
+                task.module.kwargs.device = device
 
-            elif t["module"] == "BiasFieldModule":
+            elif task.module.name == "BiasFieldModule":
                 raise NotImplementedError
-                if "in_channels" not in t["module_kwargs"]:
+
+                if "in_channels" not in task["module_kwargs"]:
                     pass
-                if "target_shape" not in t["module_kwargs"]:
+                if "target_shape" not in task["module_kwargs"]:
                     pass
 
         # Build tasks, e.g., segmentation, SR, surface
         self.tasks = torch.nn.ModuleDict(
             {
-                n: getattr(tasks, t["module"])(**t["module_kwargs"])
-                for n, t in task_config.items()
+                name: getattr(tasks, task.module.name)(**vars(task.module.kwargs))
+                for name, task in vars(task_config).items()
             }
         )
 
-        biasfieldmodule = [t for t in self.tasks.values() if isinstance(t, tasks.BiasFieldModule)]
+        biasfieldmodule = [task for task in self.tasks.values() if isinstance(task, tasks.BiasFieldModule)]
         # Register a forward hook for the desired activation.
         if (n := len(biasfieldmodule)) > 0:
             assert n == 1, "only one task of BiasFieldModule supported."
