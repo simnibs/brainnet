@@ -8,24 +8,20 @@ import torch
 import wandb
 
 import brainsynth
+from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
+from brainsynth.dataset import get_dataloader_concatenated_and_split
 
 from brainnet.modules.brainnet import BrainNet
 from brainnet.modules.tasks import SurfaceModule
 from brainnet.modules.criterion import Criterion
-import brainnet.utilities
-
-from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
-from brainnet.utilities import recursively_apply_function
-from brainsynth.dataset import get_dataloader_concatenated_and_split
-
-
 from brainnet.mesh.surface import BatchedSurfaces
-from brainnet.mesh.topology import get_recursively_subdivided_topology
 
 fmt_epoch = lambda epoch: f"{epoch:05d}"
 fmt_model = lambda epoch: f"{fmt_epoch(epoch)}_model.pt"
 fmt_optim = lambda epoch: f"{fmt_epoch(epoch)}_optim.pt"
 
+# import warnings
+# warnings.simplefilter("error")
 
 # Load full images and a random surface
 
@@ -254,6 +250,7 @@ class BrainNetTrainer:
             else:
                 dict_of_tensors[k] = v.to(self.device)
 
+
     def train(self):
         """Train a model until 'convergence' or maximum number of epochs is
         reached.
@@ -274,10 +271,10 @@ class BrainNetTrainer:
             epoch = Epoch(n)
 
             # hyper_params = self.get_hyper_params()
-            print("epoch", n)
+            # print("epoch", n)
 
             self.model.train()
-            for step, (ds_id, images, surfaces, info) in enumerate(
+            for step, (ds_id, images, surfaces, init_surfs, info) in enumerate(
                 self.dataloader["train"]
             ):
                 if step == self.epoch.steps_per_epoch:
@@ -285,7 +282,7 @@ class BrainNetTrainer:
 
                 t0 = perf_counter()
 
-                print("step", step)
+                # print("step", step)
 
                 # synth and model device could be different!
 
@@ -293,43 +290,15 @@ class BrainNetTrainer:
                 # self.to_device(image)
                 # self.to_device(surface)
                 # self.to_device(info)
-
-                with torch.no_grad():
-                    y_true_img, y_true_surf = self.synthesizer(images, surfaces, info)
-
-                    if "synth" not in y_true_img:
-                        # select a random contrast from the list of alternative images
-                        avail = getattr(self.config.dataset.alternative_synth, ds_id)
-                        sel = torch.randint(
-                            0, len(avail), (1,), device=self.synthesizer.device
-                        )
-                        y_true_img["synth"] = y_true_img[avail[sel]]
-
-                    # do it AFTER synth for now...
-                    self.to_device(y_true_img)
-                    self.to_device(y_true_surf)
-
-                    image = y_true_img.pop("synth")
-                    y_true = y_true_img
-                    y_true["surface"] = y_true_surf
-
-                # convert surface ground truths to batched surfaces
-                # ...
-
-                # also load precomputed curvature for true...
+                image, y_true, surf_init = self.apply_synthesizer(images, surfaces, init_surfs, info, ds_id)
 
                 t1 = perf_counter()
-
-                if len(surfaces) > 0:
-                    model_kwargs = dict(hemispheres=tuple(y_true_surf.keys()))
-                else:
-                    model_kwargs = {}
 
                 # add y_true_curv here
                 # criterion_kwargs = dict(y_true_curv=surfaces[...])
 
                 # with torch.autograd.set_detect_anomaly(True):
-                loss, wloss = self.step(image, y_true, model_kwargs)  # criterion_kwargs
+                loss, wloss = self.step(image, y_true, surf_init)  # criterion_kwargs
 
                 t2 = perf_counter()
 
@@ -346,14 +315,20 @@ class BrainNetTrainer:
 
                 # torch.cuda.empty_cache()
                 # print_memory_usage(self.device)
+                # print("", flush=True)
 
                 wloss_sum.backward()
+
+                # print_memory_usage(self.device)
+                # print("", flush=True)
+
                 # Update parameters (i.e., gradients)
                 self.optimizer.step()
 
-                torch.cuda.empty_cache()
                 # print_memory_usage(self.device)
+                # print("", flush=True)
 
+                torch.cuda.empty_cache()
 
                 # log the loss
                 epoch.loss_update(loss, wloss)
@@ -366,9 +341,9 @@ class BrainNetTrainer:
                 model_time = t2 - t1
                 step_time = t3 - t0
 
-                print("synth time", synth_time)
-                print("model time", model_time)
-                print("step  time", step_time)
+                # print("synth time", synth_time)
+                # print("model time", model_time)
+                # print("step  time", step_time)
 
             epoch.loss_normalize()
             epoch.loss_sum()
@@ -389,8 +364,41 @@ class BrainNetTrainer:
 
         self._wandb_finish()
 
-    def step(self, image, y_true, model_kwargs=None, criterion_kwargs=None):
-        model_kwargs = model_kwargs or {}
+
+    def apply_synthesizer(self, images, surfaces, init_vertices, info, ds_id):
+
+        with torch.no_grad():
+            y_true_img, y_true_surf, init_vertices = self.synthesizer(images, surfaces, init_vertices, info)
+
+            if "synth" not in y_true_img:
+                # select a random contrast from the list of alternative images
+                avail = getattr(self.config.dataset.alternative_synth, ds_id)
+                sel = torch.randint(
+                    0, len(avail), (1,), device=self.synthesizer.device
+                )
+                y_true_img["synth"] = y_true_img[avail[sel]]
+
+            # do it AFTER synth for now...
+            self.to_device(y_true_img)
+            self.to_device(y_true_surf)
+            self.to_device(init_vertices)
+
+            image = y_true_img.pop("synth")
+            y_true = y_true_img
+            y_true["surface"] = y_true_surf
+
+        return image, y_true, init_vertices
+
+    def step(self, image, y_true, init_vertices=None, model_kwargs=None, criterion_kwargs=None):
+        if model_kwargs is None:
+            if len(y_true["surface"]) > 0:
+                model_kwargs = dict(hemispheres=tuple(y_true["surface"].keys()))
+            else:
+                model_kwargs = {}
+
+        if init_vertices is not None:
+            model_kwargs["initial_vertices"] = init_vertices
+
         criterion_kwargs = criterion_kwargs or {}
 
         y_pred = self.model(image, **model_kwargs)
@@ -406,6 +414,7 @@ class BrainNetTrainer:
         wloss = self.criterion.apply_normalized_weights(loss)
 
         return loss, wloss
+
 
     def _do_save_checkpoint(self, epoch):
         return epoch % self.epoch.save_state_every == 0
@@ -428,26 +437,27 @@ class BrainNetTrainer:
                     break
 
                 ds_id = ds_id[0]
-                self.to_device(images)
-                self.to_device(surfaces)
-                self.to_device(info)
+
 
                 # FIXME what image is used for evaluation???
+
+                self.to_device(images)
+                self.to_device(surfaces)
                 image = images.pop("norm")
                 y_true = images
                 y_true["surface"] = surfaces
 
                 # same as training step for now...
-                loss, wloss = self.criterion(self.model(image, y_true), y_true, ds_id)
+                loss, wloss = self.step(image, y_true)
 
                 val_epoch.loss_update(loss, wloss)
 
             val_epoch.loss_normalize()
             val_epoch.loss_sum()
 
-        self.hook_on_validation_end(val_epoch, val_epoch.loss)
+            self.hook_on_validation_end(val_epoch, val_epoch.loss)
 
-        val_epoch.print()
+            val_epoch.print()
 
         return val_epoch.loss
 
@@ -590,17 +600,20 @@ class Epoch:
         # of steps per epoch unless some losses are not calculated in all
         # epochs
         self.loss_counter = {}
+        self.steps = 0
+        self.epoch_start_time = perf_counter()
 
-        headers = ("Epoch", "Raw (total)", "Weighted (total)")
-        col_width = (6, 15, 15)
+        headers = ("Epoch", "Time (s)", "Raw (total)", "Weighted (total)")
+        col_width = (6, 8, 15, 15)
         self._header = "   ".join(f"{j:>{i}s}" for i, j in zip(col_width, headers))
 
         # keys = ("{epoch}", "{raw_total}", "{weighted_total}")
         # fmt = ("d", ".4f", ".4f")
         self._print_format = (
             f"{{{'epoch'}:{col_width[0]}d}}   "
-            f"{{{'raw_total'}:{col_width[1]}.4f}}   "
-            f"{{{'weighted_total'}:{col_width[2]}.4f}}   "
+            f"{{{'time'}:{col_width[1]}.2f}}   "
+            f"{{{'raw_total'}:{col_width[2]}.4f}}   "
+            f"{{{'weighted_total'}:{col_width[3]}.4f}}   "
         )
 
     def loss_update(self, loss, wloss):
@@ -610,6 +623,7 @@ class Epoch:
             {k: v.item() for k, v in wloss.items()},
         )
         self._update_key_count(self.loss_counter, self.loss["raw"])
+        self.steps += 1
 
     def loss_sum(self):
         self.loss_total["raw_total"] = sum(self.loss["raw"].values())
@@ -622,7 +636,14 @@ class Epoch:
     def print(self):
         if self.epoch == 1:
             print(self._header)
-        print(self._print_format.format(epoch=self.epoch, **self.loss_total))
+        t_epoch = (perf_counter()-self.epoch_start_time)
+        t_step = t_epoch / self.steps
+        print(self._print_format.format(
+                epoch=self.epoch,
+                time=t_epoch,
+                **self.loss_total,
+            )
+        )
 
     @staticmethod
     def _update_dict(d0, d1):

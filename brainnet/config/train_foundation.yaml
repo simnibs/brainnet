@@ -103,8 +103,9 @@ epoch:
   resume_from_checkpoint: null # e.g., 100
   max_allowed_epochs: 1000
   steps_per_epoch: 100
-  validate_every: 20
-  save_state_every: 20
+  steps_per_validation: 20
+  validate_every: 2
+  save_state_every: 2
 
   # resume_optim: true
   # resume_lr_scheduler: true

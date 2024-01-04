@@ -3,8 +3,6 @@ from types import SimpleNamespace
 from monai.networks import nets
 import torch
 
-from brainsynth.config.utilities import recursive_namespace_to_dict
-
 from brainnet.modules import tasks
 
 VALID_FEATURE_EXTRACTORS = {
@@ -87,9 +85,9 @@ class BrainNet(torch.nn.Module):
     def forward(
         self,
         image: torch.Tensor,
+        initial_vertices: torch.Tensor | None = None,
         hemispheres: tuple | None = None,
         # task_kwargs,
-        #vertices: torch.Tensor | None = None
     ) -> dict:
         """
 
@@ -123,7 +121,7 @@ class BrainNet(torch.nn.Module):
             elif isinstance(task, tasks.ContrastiveModule):
                 y = task(features)
             elif isinstance(task, tasks.SurfaceModule):
-                y = task(features, hemispheres)
+                y = task(features, initial_vertices, hemispheres)
             else:
                 raise ValueError(f"Unknown task class {task}")
             pred[name] = y

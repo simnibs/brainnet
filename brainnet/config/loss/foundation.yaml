@@ -70,29 +70,29 @@ functions:
         y_true: white
     loss:
       name: brainnet.modules.losses.MatchedDistanceLoss
-  white:chamfer:
-    module:
-      name: SurfaceSupervisedLoss
-      kwargs:
-        y_pred: white
-        y_true: white
-    loss:
-      name: brainnet.modules.losses.SymmetricChamferLoss
-  white:curv:
-    module:
-      name: SurfaceSupervisedLoss
-      kwargs:
-        y_pred: white
-        y_true: white
-    loss:
-      name: brainnet.modules.losses.SymmetricCurvatureLoss
-  white:edgelength:
-    module:
-      name: SurfaceRegularizationLoss
-      kwargs:
-        y_pred: white
-    loss:
-      name: brainnet.modules.losses.EdgeLengthVarianceLoss
+  # white:chamfer:
+  #   module:
+  #     name: SurfaceSupervisedLoss
+  #     kwargs:
+  #       y_pred: white
+  #       y_true: white
+  #   loss:
+  #     name: brainnet.modules.losses.SymmetricChamferLoss
+  # white:curv:
+  #   module:
+  #     name: SurfaceSupervisedLoss
+  #     kwargs:
+  #       y_pred: white
+  #       y_true: white
+  #   loss:
+  #     name: brainnet.modules.losses.SymmetricCurvatureLoss
+  # white:edgelength:
+  #   module:
+  #     name: SurfaceRegularizationLoss
+  #     kwargs:
+  #       y_pred: white
+  #   loss:
+  #     name: brainnet.modules.losses.EdgeLengthVarianceLoss
 
   pial:matched:
     module:
@@ -102,29 +102,29 @@ functions:
         y_true: pial
     loss:
       name: brainnet.modules.losses.MatchedDistanceLoss
-  pial:chamfer:
-    module:
-      name: SurfaceSupervisedLoss
-      kwargs:
-        y_pred: pial
-        y_true: pial
-    loss:
-      name: brainnet.modules.losses.SymmetricChamferLoss
-  pial:curv:
-    module:
-      name: SurfaceSupervisedLoss
-      kwargs:
-        y_pred: pial
-        y_true: pial
-    loss:
-      name: brainnet.modules.losses.SymmetricCurvatureLoss
-  pial:edgelength:
-    module:
-      name: SurfaceRegularizationLoss
-      kwargs:
-        y_pred: pial
-    loss:
-      name: brainnet.modules.losses.EdgeLengthVarianceLoss
+  # pial:chamfer:
+  #   module:
+  #     name: SurfaceSupervisedLoss
+  #     kwargs:
+  #       y_pred: pial
+  #       y_true: pial
+  #   loss:
+  #     name: brainnet.modules.losses.SymmetricChamferLoss
+  # pial:curv:
+  #   module:
+  #     name: SurfaceSupervisedLoss
+  #     kwargs:
+  #       y_pred: pial
+  #       y_true: pial
+  #   loss:
+  #     name: brainnet.modules.losses.SymmetricCurvatureLoss
+  # pial:edgelength:
+  #   module:
+  #     name: SurfaceRegularizationLoss
+  #     kwargs:
+  #       y_pred: pial
+  #   loss:
+  #     name: brainnet.modules.losses.EdgeLengthVarianceLoss
 
   # PD synthesis
   # PD:l1:
@@ -171,7 +171,7 @@ functions:
   #     state: /path/to/state_ct.pt
 
 
-link_surface_loss: [[white:chamfer, white:curv], [pial:chamfer, pial:curv]]
+# link_surface_loss: [[white:chamfer, white:curv], [pial:chamfer, pial:curv]]
 
 weights:
   # segmentation

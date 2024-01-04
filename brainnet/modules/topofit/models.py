@@ -6,10 +6,10 @@ from monai.networks.blocks import Convolution
 
 from brainnet.modules.topofit.config import TopoFitModelParameters, UnetParameters
 
+from brainnet.resources import Resources
 from brainnet.modules.topofit import layers
 from brainnet.modules.topofit.utilities import grid_sample
 from brainnet.mesh import topology
-from brainnet.mesh.surface import BatchedSurfaces
 
 default_hemispheres = ("lh", "rh")
 
@@ -273,7 +273,7 @@ class TopoFitGraph(torch.nn.Module):
         self,
         in_channels: int,
         prediction_res: int = 6,
-        n_template_vertices: int = 62,
+        # n_template_vertices: int = 62,
         device="cpu",
         # image_shape: torch.IntTensor | torch.LongTensor,
         # config: None | config.TopoFitModelParameters = None,
@@ -308,11 +308,12 @@ class TopoFitGraph(torch.nn.Module):
         # (almost) left-right mirrored
 
         # Add an initializer for the template positions
-        for hemi in default_hemispheres:
-            self.add_module(
-                f"template_initialization_{hemi}",
-                TopoFitTemplateInitialization(in_channels, n_template_vertices),
-            )
+
+        # for hemi in default_hemispheres:
+        #     self.add_module(
+        #         f"template_initialization_{hemi}",
+        #         TopoFitTemplateInitialization(in_channels, n_template_vertices),
+        #     )
 
         # Surface placement modules are shared for both hemispheres
 
@@ -349,7 +350,12 @@ class TopoFitGraph(torch.nn.Module):
     def get_prediction_topology(self):
         return self.topologies[self.prediction_res]
 
-    def forward(self, features: torch.Tensor, hemispheres: None | tuple | list = None):
+    def forward(
+            self,
+            features: torch.Tensor,
+            initial_vertices: dict[str, torch.Tensor],
+            hemispheres: None | tuple | list = None,
+        ):
         """
         Faces can be retrieved from
 
@@ -380,10 +386,11 @@ class TopoFitGraph(torch.nn.Module):
 
             # transpose to (N, 3, M) (.mT = batch transpose) such that coordinates
             # are in the channel dimension
-            # vertices = vertices.mT
-            vertices = getattr(self, f"template_initialization_{hemi}")(
-                features
-            )  # (N, 3, M)
+            vertices = initial_vertices[hemi].mT
+
+            # vertices = getattr(self, f"template_initialization_{hemi}")(
+            #     features
+            # )  # (N, 3, M)
 
             out[hemi] = self._topofit_forward(features, vertices)
 
