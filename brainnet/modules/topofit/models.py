@@ -216,6 +216,12 @@ class GraphUnetDeform(torch.nn.Module):
             # ...
             features = self.unet(features)  # graph features
             deformation = self.spatial_deform(features)
+
+            # x = deformation.norm(dim=-2)
+            # print(f"min {x.min().item():10.3f}")
+            # print(f"avg {x.min().item():10.3f}")
+            # print(f"max {x.min().item():10.3f}")
+
             vertices = vertices + self.euler_step_size * deformation
 
         return vertices
@@ -354,7 +360,7 @@ class TopoFitGraph(torch.nn.Module):
             self,
             features: torch.Tensor,
             initial_vertices: dict[str, torch.Tensor],
-            hemispheres: None | tuple | list = None,
+            # hemispheres: None | tuple | list = None,
         ):
         """
         Faces can be retrieved from
@@ -379,20 +385,18 @@ class TopoFitGraph(torch.nn.Module):
         -------
 
         """
-        hemispheres = default_hemispheres if hemispheres is None else hemispheres
-        out = {}
-        for hemi in hemispheres:
-            # Position the initial template vertices
+        # hemispheres = default_hemispheres if hemispheres is None else hemispheres
+        # out = {}
+        # Position the initial template vertices
 
-            # transpose to (N, 3, M) (.mT = batch transpose) such that coordinates
-            # are in the channel dimension
-            vertices = initial_vertices[hemi].mT
 
-            # vertices = getattr(self, f"template_initialization_{hemi}")(
-            #     features
-            # )  # (N, 3, M)
+        # vertices = getattr(self, f"template_initialization_{hemi}")(
+        #     features
+        # )  # (N, 3, M)
 
-            out[hemi] = self._topofit_forward(features, vertices)
+        # transpose to (N, 3, M) (.mT = batch transpose) such that coordinates
+        # are in the channel dimension
+        out = {h: self._topofit_forward(features, v.mT) for h,v in initial_vertices.items()}
 
         return out
 

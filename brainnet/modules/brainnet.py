@@ -121,7 +121,7 @@ class BrainNet(torch.nn.Module):
             elif isinstance(task, tasks.ContrastiveModule):
                 y = task(features)
             elif isinstance(task, tasks.SurfaceModule):
-                y = task(features, initial_vertices, hemispheres)
+                y = task(features, initial_vertices)
             else:
                 raise ValueError(f"Unknown task class {task}")
             pred[name] = y

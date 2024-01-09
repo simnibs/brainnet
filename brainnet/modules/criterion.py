@@ -3,7 +3,7 @@ import torch
 # import brainnet.utilities
 from brainnet.mesh.surface import BatchedSurfaces
 from brainnet.modules import loss_wrappers
-from brainnet.modules.losses import SymmetricMSELoss, SymmetricCurvatureLoss
+from brainnet.modules.losses import SymmetricDistanceLoss, SymmetricCurvatureLoss
 
 
 class Criterion(torch.nn.Module):
@@ -19,7 +19,7 @@ class Criterion(torch.nn.Module):
             for name, loss_config in vars(config.functions).items()
         }
 
-        self.has_SymmetricMSELoss = any(isinstance(v.loss_fn, SymmetricMSELoss) for v in self.losses.values())
+        self.has_SymmetricMSELoss = any(isinstance(v.loss_fn, SymmetricDistanceLoss) for v in self.losses.values())
         self.has_SymmetricCurvatureLoss = any(isinstance(v.loss_fn, SymmetricCurvatureLoss) for v in self.losses.values())
 
         self._weight_normalizer = 1.0
@@ -51,18 +51,19 @@ class Criterion(torch.nn.Module):
     def precompute_for_surface_loss(self, y_pred: dict, y_true: dict):
         """Precompute useful things for calculating the losses."""
 
-        index_name = "nn_index"
+        index_name = "index"
         curvature_name = "curv"
 
         if self.has_SymmetricMSELoss: # chamfer *or* curvature
             # compute nearest neighbors
             for h,surfaces in y_pred.items():
                 for s in surfaces:
-                    nn_index = y_pred[h][s].nearest_neighbor(y_true[h][s])
-                    y_pred[h][s].vertex_data[index_name] = nn_index
-
-                    nn_index = y_true[h][s].nearest_neighbor(y_pred[h][s])
-                    y_true[h][s].vertex_data[index_name] = nn_index
+                    # these are indices into y_true!
+                    index = y_pred[h][s].nearest_neighbor(y_true[h][s])
+                    y_pred[h][s].vertex_data[index_name] = index
+                    # these are indices into y_pred!
+                    index = y_true[h][s].nearest_neighbor(y_pred[h][s])
+                    y_true[h][s].vertex_data[index_name] = index
 
             # compute curvature
             if self.has_SymmetricCurvatureLoss:
@@ -70,8 +71,6 @@ class Criterion(torch.nn.Module):
                     for s in surfaces:
                         y_pred[h][s].vertex_data[curvature_name] = y_pred[h][s].compute_mean_curvature_vector()
                         y_true[h][s].vertex_data[curvature_name] = y_true[h][s].compute_mean_curvature_vector()
-
-
 
 
     def forward(self, y_pred, y_true, **kwargs):

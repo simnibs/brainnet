@@ -23,7 +23,7 @@ wandb:
 
 
 device:
-  model: "cuda:0"       # the model we are training
+  model: "cuda:0"    # the model we are training
   synthesizer: "cpu" # the code synthesizing the images passed to the task network
 
 # DATASET
@@ -38,27 +38,32 @@ dataset:
   # which optional images to use for each dataset. Images should be valid
   optional_images:
     HCP: []
-    WH2015: [PD]
+    WH2015: [] # [PD]
 
   # if a synthetic image is not generated then use one of these real images instead
   # (only relevant when probability of generating a synthetic contrast is < 1.0)
   alternative_synth:
     HCP: [norm]
-    WH2015: [norm, PD]
+    WH2015: [norm] # [norm, PD]
 
   split:
     rng_seed: null # seed for reproducible dataset splits (null = no seed)
+    # splits:
+    #   train: 0.8
+    #   validation: 0.2
     splits:
-      train: 0.8
-      validation: 0.2
+      train: 1.0
 
   kwargs:
     # Initial surface resolution
-    surface_resolution: 0
-    surface_hemi: random
+    surface_resolution: 5 # 0 - 6
+    surface_hemi: lh # random
     # These images should be present for all datasets
     #   constants.filenames.default_images
     default_images: [generation, segmentation, norm]
+
+    # onehot_encoding:
+    #   segmentation: incl_csf
 
   dataloader:
     batch_size: 1
@@ -101,11 +106,11 @@ loss: !include loss/foundation.yaml
 
 epoch:
   resume_from_checkpoint: null # e.g., 100
-  max_allowed_epochs: 1000
+  max_allowed_epochs: 100 # 1000
   steps_per_epoch: 100
   steps_per_validation: 20
-  validate_every: 2
-  save_state_every: 2
+  validate_every: 10
+  save_state_every: 10
 
   # resume_optim: true
   # resume_lr_scheduler: true
@@ -113,7 +118,7 @@ epoch:
 optimizer:
   name: AdamW
   kwargs:
-    lr: 1.0e-4
+    lr: 1.0e-3
 
 convergence:
   minimum_lr: &MIN_LR 1.0e-8

@@ -7,9 +7,16 @@ from time import perf_counter
 import torch
 import wandb
 
+import colorama
+
 import brainsynth
 from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
 from brainsynth.dataset import get_dataloader_concatenated_and_split
+
+# for one hot enc
+from brainsynth.constants import constants
+from brainsynth.transforms import AsDiscreteWithReindex
+
 
 from brainnet.modules.brainnet import BrainNet
 from brainnet.modules.tasks import SurfaceModule
@@ -22,9 +29,6 @@ fmt_optim = lambda epoch: f"{fmt_epoch(epoch)}_optim.pt"
 
 # import warnings
 # warnings.simplefilter("error")
-
-# Load full images and a random surface
-
 
 def _config_to_args_dataloader(config):
     tc = config.dataset
@@ -161,9 +165,17 @@ class BrainNetTrainer:
             **_config_to_args_dataloader(config)
         )
 
+        # FIXME this should ideally be handled by the Dataset but it doesn't
+        # work when I split a single dataset into train and validation...
+        synth_config = load_config()
+        seg_labels = torch.tensor(
+            getattr(constants.labeling_scheme, synth_config.labeling_scheme), device=self.device
+        )
+        self.as_onehot = AsDiscreteWithReindex(seg_labels)
+
         print("Dataloaders")
         print(f"# samples in train      {len(self.dataloader['train']):d}")
-        print(f"# samples in validation {len(self.dataloader['validation']):d}")
+        # print(f"# samples in validation {len(self.dataloader['validation']):d}")
 
         # We need to ensure that all downsampling steps are valid
 
@@ -231,6 +243,12 @@ class BrainNetTrainer:
         # load model and optimizer parameters
         self.load_checkpoint(self.epoch.resume_from_checkpoint)
 
+        # Get empty BatchedSurfaces. We update the vertices at each iteration
+        self.surface_skeletons = dict(
+            y_pred=self.get_surface_skeletons(),
+            y_true=self.get_surface_skeletons(),
+        )
+
     def _get_lr(self):
         for param_group in self.optimizer.param_groups:
             return param_group["lr"]
@@ -261,11 +279,7 @@ class BrainNetTrainer:
 
         self._wandb_init()
 
-        # Get empty BatchedSurfaces. We update the vertices at each iteration
-        self.surface_skeletons = dict(
-            y_pred=self.get_surface_skeletons(),
-            y_true=self.get_surface_skeletons(),
-        )
+
 
         for n in range(self.epoch.start, self.epoch.max_allowed_epochs + 1):
             epoch = Epoch(n)
@@ -274,7 +288,7 @@ class BrainNetTrainer:
             # print("epoch", n)
 
             self.model.train()
-            for step, (ds_id, images, surfaces, init_surfs, info) in enumerate(
+            for step, (ds_id, images, surfaces, temp_verts, info) in enumerate(
                 self.dataloader["train"]
             ):
                 if step == self.epoch.steps_per_epoch:
@@ -290,7 +304,9 @@ class BrainNetTrainer:
                 # self.to_device(image)
                 # self.to_device(surface)
                 # self.to_device(info)
-                image, y_true, surf_init = self.apply_synthesizer(images, surfaces, init_surfs, info, ds_id)
+                image, y_true, init_verts = self.apply_synthesizer(
+                    images, surfaces, temp_verts, info, ds_id
+                )
 
                 t1 = perf_counter()
 
@@ -298,10 +314,9 @@ class BrainNetTrainer:
                 # criterion_kwargs = dict(y_true_curv=surfaces[...])
 
                 # with torch.autograd.set_detect_anomaly(True):
-                loss, wloss = self.step(image, y_true, surf_init)  # criterion_kwargs
+                loss, wloss = self.step(image, y_true, init_verts)  # criterion_kwargs
 
                 t2 = perf_counter()
-
                 # compute weighted loss
                 # wloss = self.criterion.apply_weights(loss)
                 wloss_sum = sum(wloss.values())
@@ -310,10 +325,10 @@ class BrainNetTrainer:
                 # accumulate across multiple passes (whenever .backward is
                 # called)
                 self.optimizer.zero_grad()
+
                 # Compute and accumulate gradients. backward() frees
                 # intermediate values of the graph (e.g., activations)
 
-                # torch.cuda.empty_cache()
                 # print_memory_usage(self.device)
                 # print("", flush=True)
 
@@ -349,8 +364,12 @@ class BrainNetTrainer:
             epoch.loss_sum()
 
             epoch.print()
+            # keys = epoch.loss["raw"].keys()
+            # print(" | ".join([f"{ epoch.loss['raw'][k]:10s} { epoch.loss['raw'][k]:10.5f}" for k in keys]))
+            print(" | ".join([f"\033[32m {i:10s}\033[00m {j:10.5f}" for i,j in epoch.loss["raw"].items()]))
 
-            val_loss = self.validate(epoch.epoch)
+            # val_loss = self.validate(epoch.epoch)
+            val_loss = {}
 
             self._wandb_log(epoch.loss, val_loss)  # , hyper_params)
 
@@ -368,7 +387,9 @@ class BrainNetTrainer:
     def apply_synthesizer(self, images, surfaces, init_vertices, info, ds_id):
 
         with torch.no_grad():
-            y_true_img, y_true_surf, init_vertices = self.synthesizer(images, surfaces, init_vertices, info)
+            y_true_img, y_true_surf, init_vertices = self.synthesizer(
+                images, surfaces, init_vertices, info
+            )
 
             if "synth" not in y_true_img:
                 # select a random contrast from the list of alternative images
@@ -389,15 +410,16 @@ class BrainNetTrainer:
 
         return image, y_true, init_vertices
 
-    def step(self, image, y_true, init_vertices=None, model_kwargs=None, criterion_kwargs=None):
+    def step(self, image, y_true, init_verts=None, model_kwargs=None, criterion_kwargs=None):
         if model_kwargs is None:
-            if len(y_true["surface"]) > 0:
-                model_kwargs = dict(hemispheres=tuple(y_true["surface"].keys()))
-            else:
-                model_kwargs = {}
+            # if len(y_true["surface"]) > 0:
+            #     model_kwargs = dict(hemispheres=tuple(y_true["surface"].keys()))
+            # else:
+            #     model_kwargs = {}
+            model_kwargs = {}
 
-        if init_vertices is not None:
-            model_kwargs["initial_vertices"] = init_vertices
+        if init_verts is not None:
+            model_kwargs["initial_vertices"] = init_verts
 
         criterion_kwargs = criterion_kwargs or {}
 
@@ -430,25 +452,32 @@ class BrainNetTrainer:
 
         self.model.eval()
         with torch.inference_mode():
-            for step, (ds_id, images, surfaces, info) in enumerate(
+            for step, (ds_id, images, surfaces, init_verts, info) in enumerate(
                 self.dataloader["validation"]
             ):
                 if step == self.epoch.steps_per_validation:
                     break
 
-                ds_id = ds_id[0]
-
+                # ds_id = ds_id[0]
 
                 # FIXME what image is used for evaluation???
+                # FIXME synth only contrasts relevant for each ds? OR is this
+                # taken care of..?
 
                 self.to_device(images)
                 self.to_device(surfaces)
+                self.to_device(init_verts)
+
+                # FIXME handle this is Dataset...
+                # remove and add batch as AsDiscrete doesn't handled batched tensors
+                images["segmentation"] = self.as_onehot(images["segmentation"][0])[None]
+
                 image = images.pop("norm")
                 y_true = images
                 y_true["surface"] = surfaces
 
                 # same as training step for now...
-                loss, wloss = self.step(image, y_true)
+                loss, wloss = self.step(image, y_true, init_verts)
 
                 val_epoch.loss_update(loss, wloss)
 
@@ -610,11 +639,13 @@ class Epoch:
         # keys = ("{epoch}", "{raw_total}", "{weighted_total}")
         # fmt = ("d", ".4f", ".4f")
         self._print_format = (
-            f"{{{'epoch'}:{col_width[0]}d}}   "
+            f"\033[1m {{{'epoch'}:{col_width[0]}d}}\033[00m   "
             f"{{{'time'}:{col_width[1]}.2f}}   "
-            f"{{{'raw_total'}:{col_width[2]}.4f}}   "
-            f"{{{'weighted_total'}:{col_width[3]}.4f}}   "
+            f"\033[95m {{{'raw_total'}:{col_width[2]}.4f}}\033[00m   "
+            f"\033[96m {{{'weighted_total'}:{col_width[3]}.4f}}\033[00m   "
         )
+
+        self._header_losses = "   ".join(f"{j:>{i}s}" for i, j in zip(col_width, headers))
 
     def loss_update(self, loss, wloss):
         self._update_dict(self.loss["raw"], {k: v.item() for k, v in loss.items()})
@@ -644,6 +675,7 @@ class Epoch:
                 **self.loss_total,
             )
         )
+
 
     @staticmethod
     def _update_dict(d0, d1):

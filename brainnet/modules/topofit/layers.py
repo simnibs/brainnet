@@ -24,7 +24,7 @@ class GraphConv(torch.nn.Module):
         out_channels: int,
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
-        bias=True,
+        # bias=True,
         activation="leaky",
         # dropout_p=0.0,
         # init="normal",
@@ -32,16 +32,16 @@ class GraphConv(torch.nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.reduce_index = reduce_index  # repeats of vertex
-        self.gather_index = gather_index  # neighbors of vertex
+        self.reduce_index = reduce_index.long()  # repeats of vertex
+        self.gather_index = gather_index.long()  # neighbors of vertex
 
         # self.linear0 = torch.nn.Linear(in_channels, out_channels, bias=False)
         # self.linear1 = torch.nn.Linear(in_channels, out_channels, bias)
 
         self.conv0 = torch.nn.Conv1d(in_channels, out_channels, 1, bias=False)
-        self.conv1 = torch.nn.Conv1d(in_channels, out_channels, 1, bias=bias)
+        self.conv1 = torch.nn.Conv1d(in_channels, out_channels, 1, bias=False)
 
-        self.batchnorm = torch.nn.BatchNorm1d(out_channels)
+        # self.batchnorm = torch.nn.BatchNorm1d(out_channels)
 
         if activation is None:
             self.activation = lambda x: x
@@ -82,12 +82,22 @@ class GraphConv(torch.nn.Module):
         # and then mean...
         # F_v.scatter_reduce(1, self.reduce_index, F_N[:, self.gather_index], reduce="mean")
 
-        F_v.index_reduce_(
-            -1, self.reduce_index, F_n[..., self.gather_index], reduce="mean", include_self=True
-        )
-        F_v = self.batchnorm(F_v)
 
-        return self.activation(F_v)
+        # aggregate (neighbors): mean
+        out = torch.zeros_like(F_v)
+        out.index_reduce_(
+            -1,
+            self.reduce_index,
+            F_n[..., self.gather_index],
+            reduce="mean",
+            include_self=False,
+        )
+        # merge (v and neighbors): sum
+        out = out + F_v
+
+        # F_v = self.batchnorm(F_v)
+
+        return self.activation(out)
 
 
 class EdgeConv(torch.nn.Module):
@@ -103,8 +113,8 @@ class EdgeConv(torch.nn.Module):
         super().__init__()
         self.in_channels = 2 * in_channels  # vertex and neighbor concatenation
         self.out_channels = out_channels
-        self.reduce_index = reduce_index  # repeats of vertex
-        self.gather_index = gather_index  # neighbors of vertex
+        self.reduce_index = reduce_index.long()  # repeats of vertex
+        self.gather_index = gather_index.long()  # neighbors of vertex
 
         # self.linear = torch.nn.Linear(in_channels, out_channels, bias)
         self.conv = torch.nn.Conv1d(self.in_channels, out_channels, 1, bias=bias)
@@ -123,12 +133,12 @@ class EdgeConv(torch.nn.Module):
     def forward(self, in_features):
         # F_in : (batch, channels, vertices)
         batch_size, _, n_vertices = in_features.shape
-        out_shape = batch_size, self.out_channels, n_vertices,
+        out_shape = batch_size, self.out_channels, n_vertices
 
         vertices = in_features[..., self.reduce_index]
         neighbors = in_features[..., self.gather_index]
 
-        concat_features = torch.cat([vertices, neighbors - vertices], -2)
+        concat_features = torch.cat([vertices, neighbors - vertices], dim=-2)
         # F_e = self.linear(concat_features)
         F_e = self.conv(concat_features)
 
@@ -154,8 +164,13 @@ class EdgeConv(torch.nn.Module):
         out_features = torch.zeros(
             out_shape, dtype=in_features.dtype, device=in_features.device
         )
-        out_features.index_reduce_(-1, self.reduce_index, F_e, reduce="mean", include_self=False)
-
+        out_features.index_reduce_(
+            -1,
+            self.reduce_index,
+            F_e,
+            reduce="mean",
+            include_self=False,
+        )
         return self.activation(out_features)
 
 

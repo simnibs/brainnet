@@ -42,22 +42,10 @@ functions:
     loss:
       name: monai.losses.DiceCELoss
       kwargs: # initialization kwargs for loss function
-        include_background: true  # default = true
-        lambda_dice: 1.0          # default = 1.0
-        lambda_ce: 1.0            # default = 1.0
-
-  # surface: # applies to both left and right hemisphere
-
-  # white:
-  #   module: SurfaceLoss
-  #   loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
-  #   y_pred: white
-  #   y_true: white
-  # pial:
-  #   module: SurfaceLoss
-  #   loss: [MatchedDistanceLoss, SymmetricChamferLoss, SymmetricCurvatureLoss, EdgeLengthVarianceLoss]
-  #   y_pred: pial
-  #   y_true: pial
+        # include_background: false  # default = true
+        softmax: true     # apply softmax before dice loss
+        lambda_dice: 1.0  # default = 1.0
+        lambda_ce: 1.0    # default = 1.0
 
   # Surface
 
@@ -70,14 +58,24 @@ functions:
         y_true: white
     loss:
       name: brainnet.modules.losses.MatchedDistanceLoss
-  # white:chamfer:
-  #   module:
-  #     name: SurfaceSupervisedLoss
-  #     kwargs:
-  #       y_pred: white
-  #       y_true: white
-  #   loss:
-  #     name: brainnet.modules.losses.SymmetricChamferLoss
+
+  white:hinge:
+    module:
+      name: SurfaceRegularizationLoss
+      kwargs:
+        y_pred: white
+    loss:
+      name: brainnet.modules.losses.HingeLoss
+
+  white:chamfer:
+    module:
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: white
+        y_true: white
+    loss:
+      name: brainnet.modules.losses.SymmetricChamferLoss
+
   # white:curv:
   #   module:
   #     name: SurfaceSupervisedLoss
@@ -86,6 +84,7 @@ functions:
   #       y_true: white
   #   loss:
   #     name: brainnet.modules.losses.SymmetricCurvatureLoss
+
   # white:edgelength:
   #   module:
   #     name: SurfaceRegularizationLoss
@@ -102,14 +101,24 @@ functions:
         y_true: pial
     loss:
       name: brainnet.modules.losses.MatchedDistanceLoss
-  # pial:chamfer:
-  #   module:
-  #     name: SurfaceSupervisedLoss
-  #     kwargs:
-  #       y_pred: pial
-  #       y_true: pial
-  #   loss:
-  #     name: brainnet.modules.losses.SymmetricChamferLoss
+
+  pial:hinge:
+    module:
+      name: SurfaceRegularizationLoss
+      kwargs:
+        y_pred: pial
+    loss:
+      name: brainnet.modules.losses.HingeLoss
+
+  pial:chamfer:
+    module:
+      name: SurfaceSupervisedLoss
+      kwargs:
+        y_pred: pial
+        y_true: pial
+    loss:
+      name: brainnet.modules.losses.SymmetricChamferLoss
+
   # pial:curv:
   #   module:
   #     name: SurfaceSupervisedLoss
@@ -118,6 +127,7 @@ functions:
   #       y_true: pial
   #   loss:
   #     name: brainnet.modules.losses.SymmetricCurvatureLoss
+
   # pial:edgelength:
   #   module:
   #     name: SurfaceRegularizationLoss
@@ -178,15 +188,19 @@ weights:
   seg:DiceCE: 1.0
 
   # surface
-  white:matched: 1.0
+  white:matched: 0.01 #1.0
   white:chamfer: 1.0
-  white:curv: 1.0
-  white:edgelength: 1.0
+  # white:curv: 1.0
 
-  pial:matched: 1.0
+  white:hinge: 1.0
+  # white:edgelength: 1.0
+
+  pial:matched: 0.01 # 1.0
   pial:chamfer: 1.0
-  pial:curv: 1.0
-  pial:edgelength: 1.0
+  # pial:curv: 1.0
+
+  pial:hinge: 1.0
+  # pial:edgelength: 1.0
 
   # PD synthesis (optional)
   # PD:l1: 1.0

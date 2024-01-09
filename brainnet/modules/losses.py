@@ -20,11 +20,23 @@ from brainnet.mesh.surface import BatchedSurfaces
 
 # SURFACE LOSS FUNCTIONS
 
-
-class MatchedDistanceLoss(torch.nn.Module):
-    def __init__(self):
+class SquaredDistanceLoss(torch.nn.Module):
+    def __init__(self, dim=-1) -> None:
         super().__init__()
-        self.mse_loss = torch.nn.MSELoss()
+        self.dim = dim
+        # reduction="mean"
+        # self.reduction = reduction
+
+    def forward(self, a, b):
+        # getattr(T, reduction)()
+        return torch.sum((a-b)**2, self.dim).mean()
+
+
+# class MatchedDistanceLoss(torch.nn.MSELoss):
+class MatchedDistanceLoss(SquaredDistanceLoss):
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
 
     def forward(self, surface_a: BatchedSurfaces, surface_b: BatchedSurfaces):
         """Average (squared) distance between matched vertices of surfaces a and b.
@@ -41,7 +53,7 @@ class MatchedDistanceLoss(torch.nn.Module):
         loss
             _description_
         """
-        return self.mse_loss(surface_a.vertices, surface_b.vertices)
+        return super().forward(surface_a.vertices, surface_b.vertices)
 
 
 # SymmetricChamferLoss and SymmetricCurvatureVectorLoss are the same except for
@@ -49,7 +61,7 @@ class MatchedDistanceLoss(torch.nn.Module):
 # face consistent across losses...
 
 
-class SymmetricMSELoss(torch.nn.MSELoss):
+class SymmetricDistanceLoss(SquaredDistanceLoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -60,26 +72,31 @@ class SymmetricMSELoss(torch.nn.MSELoss):
         i_pred: torch.IntTensor,
         i_true: torch.IntTensor,
     ):
+        """
+
+        i_pred contains indices into i_true and vice versa!
+
+        """
         if (batch_size := y_pred.shape[0]) > 1:
             batch_index = torch.arange(batch_size)[:, None]
             return 0.5 * (
-                super().forward(y_pred, y_true[batch_index, i_true])
-                + super().forward(y_pred[batch_index, i_pred], y_true)
+                super().forward(y_pred, y_true[batch_index, i_pred])
+                + super().forward(y_pred[batch_index, i_true], y_true)
             )
         else:
             p = y_pred.squeeze(0)
             t = y_true.squeeze(0)
             return 0.5 * (
-                super().forward(p, t[i_true.squeeze(0)])
-                + super().forward(p[i_pred.squeeze(0)], t)
+                super().forward(p, t[i_pred.squeeze(0)])
+                + super().forward(p[i_true.squeeze(0)], t)
             )
 
 
-class SymmetricChamferLoss(SymmetricMSELoss):
+class SymmetricChamferLoss(SymmetricDistanceLoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.index = "nn_index"
+        self.index = "index"
 
     def forward(
         self,
@@ -95,18 +112,18 @@ class SymmetricChamferLoss(SymmetricMSELoss):
         return super().forward(
             y_pred.vertices,
             y_true.vertices,
-            y_pred.vertex_data["nn_index"],
-            y_true.vertex_data["nn_index"],
+            y_pred.vertex_data["index"],
+            y_true.vertex_data["index"],
         )
 
 
-class SymmetricCurvatureLoss(SymmetricMSELoss):
+class SymmetricCurvatureLoss(SymmetricDistanceLoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         self.n_smooth = 3
         self.curv = "curv"
-        self.index = "nn_index"
+        self.index = "index"
 
     def forward(
         self,
@@ -129,8 +146,8 @@ class SymmetricCurvatureLoss(SymmetricMSELoss):
         return super().forward(
             y_pred.vertex_data["curv"],
             y_true.vertex_data["curv"],
-            y_pred.vertex_data["nn_index"],
-            y_true.vertex_data["nn_index"],
+            y_pred.vertex_data["index"],
+            y_true.vertex_data["index"],
         )
 
 
@@ -156,8 +173,8 @@ class SymmetricCurvatureLoss(SymmetricMSELoss):
 #         loss : float
 #             Symmetric chamfer loss.
 #         """
-#         vertices_b = surface_b.vertices[surface_b.vertex_data["nn_index"]]
-#         vertices_a = surface_a.vertices[surface_a.vertex_data["nn_index"]]
+#         vertices_b = surface_b.vertices[surface_b.vertex_data["index"]]
+#         vertices_a = surface_a.vertices[surface_a.vertex_data["index"]]
 
 #         loss_a = self.mse_loss(surface_a.vertices, vertices_b)
 #         loss_b = self.mse_loss(surface_b.vertices, vertices_a)
@@ -183,13 +200,25 @@ class SymmetricCurvatureLoss(SymmetricMSELoss):
 #         """
 #         # assert "curv" in surface_a.vertex_data, "Curvature information should be stored in .vertex_data['curv']"
 #         # assert "curv" in surface_b.vertex_data, "Curvature information should be stored in .vertex_data['curv']"
-#         curv_b = surface_b.vertex_data["curv"][surface_b.vertex_data["nn_index"]]
-#         curv_a = surface_a.vertex_data["curv"][surface_a.vertex_data["nn_index"]]
+#         curv_b = surface_b.vertex_data["curv"][surface_b.vertex_data["index"]]
+#         curv_a = surface_a.vertex_data["curv"][surface_a.vertex_data["index"]]
 
 #         loss_a = self.mse_loss(surface_a.vertex_data["curv"], curv_b)
 #         loss_b = self.mse_loss(surface_b.vertex_data["curv"], curv_a)
 
 #         return 0.5 * (loss_a + loss_b)
+
+
+class HingeLoss(torch.nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.squared_distance_loss = SquaredDistanceLoss()
+
+    def forward(self, y_pred):
+        normals = y_pred.compute_face_normals()
+        edge_face_normals = normals[:, y_pred.topology.face_adjacency]
+        a, b = edge_face_normals.unbind(2)
+        return self.squared_distance_loss(a, b)
 
 
 class EdgeLengthVarianceLoss(torch.nn.Module):

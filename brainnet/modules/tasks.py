@@ -47,10 +47,11 @@ class SegmentationModule(TaskModule):
         self.softmax = torch.nn.Softmax(dim=dim)
 
     def forward(self, features):
-        return self.softmax(super().forward(features))
+        return super().forward(features)
 
     def postprocess(self, x, labels=None, dim=1):
         """Argmax with optional relabeling."""
+        # x = self.softmax(x)
         index = x.argmax(dim)
         return index if labels is None else labels[index]
 
