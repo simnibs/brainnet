@@ -7,6 +7,7 @@ feature_extractor:
     channels: [64, 128, 256, 512] # [64, 128, 256, 512, 1024]
     strides: [2, 2, 2] #[1, 1, 1, 1]
     # defaults:
+    # num_res_units: 0
     # act: PRELU
     # norm: INSTANCE
     # dropout: 0.0
@@ -43,15 +44,15 @@ tasks:
   #     name: SegmentationModule
   #     kwargs:
   #       out_channels: 33
-    # postprocess: true
-    # postprocess_kwargs:
-    #   labels: #[...]
+  #   postprocess: true
+  #   postprocess_kwargs:
+  #     labels: #[...]
 
   surface:
     module:
       name: SurfaceModule
       kwargs:
-        prediction_res: 5 # 0 - 6
+        prediction_res: 4 # 0 - 6
 
   # biasfield:
   #   module: BiasFieldModule

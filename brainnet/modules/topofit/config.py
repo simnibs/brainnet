@@ -1,10 +1,9 @@
-from typing import Union
-
-
 class UnetParameters:
     # manual specification
-    channels: Union[int, dict] = dict(
-        encoder=[64, 96, 128], ubend=192, decoder=[128, 96, 64]
+    channels: int | dict = dict(
+        # encoder=[64, 96, 128], ubend=192, decoder=[128, 96, 64]
+        encoder=[96, 96, 96], ubend=96, decoder=[96, 96, 96]
+        # encoder=[96, 128, 160], ubend=192, decoder=[160, 128, 96]
     )
     multiplier: int = 1
 
@@ -27,7 +26,7 @@ class UnetDeformParameters:
     # Maximum resolution for each deformation block
     # e.g., with `n_levels = 4` the u-nets will look like
     #
-    # 0 :      -0-
+    # 0 :       0
     # 1 :     1-0-1
     # 2 :   2-1-0-1-2
     # 3 : 3-2-1-0-1-2-3
@@ -37,7 +36,9 @@ class UnetDeformParameters:
     resolutions: list[int] = [0, 1, 2, 3, 4, 5, 6]
 
     # scaling of the deformation vector
-    euler_step_size: list[int] = [10, 10, 10, 10, 1, 1, 1]
+    euler_step_size: list[float] = [1, 1, 1, 1, 1, 1, 1]
+    # euler_step_size: list[float] = [1.0, 1.0, 1.0, 1.0, 0.1, 0.1, 0.1]
+    # euler_step_size: list[float] = [2.0, 2.0, 1.0, 1.0, 0.5, 0.1, 0.1]
 
     # number of iterations per resolution
     euler_iterations: list[int] = [1, 1, 1, 1, 1, 2, 1]

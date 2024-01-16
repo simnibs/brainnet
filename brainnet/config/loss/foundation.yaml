@@ -59,22 +59,22 @@ functions:
     loss:
       name: brainnet.modules.losses.MatchedDistanceLoss
 
-  white:hinge:
-    module:
-      name: SurfaceRegularizationLoss
-      kwargs:
-        y_pred: white
-    loss:
-      name: brainnet.modules.losses.HingeLoss
+  # white:hinge:
+  #   module:
+  #     name: SurfaceRegularizationLoss
+  #     kwargs:
+  #       y_pred: white
+  #   loss:
+  #     name: brainnet.modules.losses.HingeLoss
 
-  white:chamfer:
-    module:
-      name: SurfaceSupervisedLoss
-      kwargs:
-        y_pred: white
-        y_true: white
-    loss:
-      name: brainnet.modules.losses.SymmetricChamferLoss
+  # white:chamfer:
+  #   module:
+  #     name: SurfaceSupervisedLoss
+  #     kwargs:
+  #       y_pred: white
+  #       y_true: white
+  #   loss:
+  #     name: brainnet.modules.losses.SymmetricChamferLoss
 
   # white:curv:
   #   module:
@@ -102,22 +102,22 @@ functions:
     loss:
       name: brainnet.modules.losses.MatchedDistanceLoss
 
-  pial:hinge:
-    module:
-      name: SurfaceRegularizationLoss
-      kwargs:
-        y_pred: pial
-    loss:
-      name: brainnet.modules.losses.HingeLoss
+  # pial:hinge:
+  #   module:
+  #     name: SurfaceRegularizationLoss
+  #     kwargs:
+  #       y_pred: pial
+  #   loss:
+  #     name: brainnet.modules.losses.HingeLoss
 
-  pial:chamfer:
-    module:
-      name: SurfaceSupervisedLoss
-      kwargs:
-        y_pred: pial
-        y_true: pial
-    loss:
-      name: brainnet.modules.losses.SymmetricChamferLoss
+  # pial:chamfer:
+  #   module:
+  #     name: SurfaceSupervisedLoss
+  #     kwargs:
+  #       y_pred: pial
+  #       y_true: pial
+  #   loss:
+  #     name: brainnet.modules.losses.SymmetricChamferLoss
 
   # pial:curv:
   #   module:
@@ -188,14 +188,14 @@ weights:
   seg:DiceCE: 1.0
 
   # surface
-  white:matched: 0.01 #1.0
+  white:matched: 1.0
   white:chamfer: 1.0
   # white:curv: 1.0
 
   white:hinge: 1.0
   # white:edgelength: 1.0
 
-  pial:matched: 0.01 # 1.0
+  pial:matched: 0.001
   pial:chamfer: 1.0
   # pial:curv: 1.0
 
