@@ -1,4 +1,3 @@
-from copy import deepcopy
 from typing import Union
 
 import torch
@@ -6,7 +5,6 @@ from monai.networks.blocks import Convolution
 
 from brainnet.modules.topofit.config import TopoFitModelParameters, UnetParameters
 
-from brainnet.resources import Resources
 from brainnet.modules.topofit import layers
 from brainnet.modules.topofit.utilities import grid_sample
 from brainnet.mesh import topology
@@ -25,7 +23,7 @@ def make_unet_channels(in_channels: int, n_levels: int, multiplier: int) -> dict
     return dict(encoder=encoder, ubend=ubend, decoder=decoder)
 
 
-class GraphUnet(torch.nn.Module):
+class GraphUNet(torch.nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -37,7 +35,7 @@ class GraphUnet(torch.nn.Module):
         multiplier: int = 2,
         n_conv: int = 1,
     ):
-        """Similar to a conventional U-net achitecture but on a graph. We
+        """Similar to a conventional UNet achitecture but on a graph. We
         exploit the fact that the topologies represent a hierarchy of
         recursive subdivision. Consequently, we can move up and down this
         hierarchy to obtain different mesh resolutions.
@@ -56,7 +54,7 @@ class GraphUnet(torch.nn.Module):
 
 
         """
-        # The U-net architecture and naming
+        # The UNet architecture and naming
         #
         # ENCODER                         DECODER   Hierarchy level (example)
         #
@@ -92,27 +90,25 @@ class GraphUnet(torch.nn.Module):
         )
         assert isinstance(unet_channels, dict)
 
-        self.encoder_conv = torch.nn.ModuleList()
-        self.encoder_pool = torch.nn.ModuleList()
-        self.decoder_conv = torch.nn.ModuleList()
-        self.decoder_unpool = torch.nn.ModuleList()
-
         # Encoder
         in_ch = in_channels
 
         enc_topologies = self.topologies[1:][::-1]
         # get only the first channels if `topologies` is smaller than unet levels
         enc_channels = unet_channels["encoder"][::-1][: n_levels - 1][::-1]
+
+        self.encoder_conv = torch.nn.ModuleList()
+        self.encoder_pool = torch.nn.ModuleList()
         for out_ch, topology in zip(enc_channels, enc_topologies):
             self.encoder_conv.append(
-                layers.NConv(in_ch, out_ch, conv_module, topology, n_conv)
+                layers.nConv(in_ch, out_ch, conv_module, topology, n_conv)
             )
             self.encoder_pool.append(layers.GraphPool(topology, reduce))
 
             in_ch = out_ch
 
         # U bend
-        self.ubend_conv = layers.NConv(
+        self.ubend_conv = layers.nConv(
             in_ch,
             out_ch := unet_channels["ubend"],
             conv_module,
@@ -127,12 +123,15 @@ class GraphUnet(torch.nn.Module):
         skip_channels = enc_channels[::-1]
         # get only the first channels if `topologies` is smaller than unet levels
         dec_channels = unet_channels["decoder"][: n_levels - 1]
+
+        self.decoder_unpool = torch.nn.ModuleList()
+        self.decoder_conv = torch.nn.ModuleList()
         for out_ch, skip_ch, unpool_topology, conv_topology in zip(
             dec_channels, skip_channels, unpool_topologies, conv_topologies
         ):
             self.decoder_unpool.append(layers.GraphUnpool(unpool_topology, reduce))
             self.decoder_conv.append(
-                layers.NConv(
+                layers.nConv(
                     in_ch + skip_ch, out_ch, conv_module, conv_topology, n_conv
                 )
             )
@@ -156,12 +155,14 @@ class GraphUnet(torch.nn.Module):
         for conv, unpool, sf in zip(
             self.decoder_conv, self.decoder_unpool, skip_features[::-1]
         ):
-            features = conv(torch.concat((unpool(features), sf), -2))
+            features = unpool(features)
+            features = torch.concat((features, sf), -2)
+            features = conv(features)
 
         return features
 
 
-class GraphUnetDeform(torch.nn.Module):
+class GraphUNetDeform(torch.nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -171,15 +172,20 @@ class GraphUnetDeform(torch.nn.Module):
         euler_iterations: int,
         config_unet: UnetParameters,
     ) -> None:
-        """This graph deformation block uses a graph u-net to extract features
-        which are transformed to deformation vectors which are then applied to
+        """This graph deformation block uses a graph UNet to extract features
+        which are transformed to deformation vectors. These are then applied to
         the vertices at whose positions the features were estimated.
         """
         super().__init__()
-        self.euler_step_size = euler_step_size
+        # Whereas the original TopoFit works with coordinates in voxel space
+        # (e.g., range [0, 200]), we use normalized coordinates (range [-1, 1])
+        # so use this as an approximate scaling factor of the deformation
+        factor = 0.01
+
+        self.euler_step_size = euler_step_size * factor
         self.euler_iterations = euler_iterations
 
-        self.unet = GraphUnet(
+        self.unet = GraphUNet(
             in_channels,
             topologies,
             getattr(layers, config_unet.conv_module),
@@ -191,20 +197,14 @@ class GraphUnetDeform(torch.nn.Module):
         )
 
         # Final convolution block to estimate deformation field from features
-        (
-            reduce_index,
-            gather_index,
-        ) = self.get_prediction_topology().get_convolution_indices()
-
-        self.spatial_deform = conv_module(
-            self.unet.out_ch, 3, reduce_index, gather_index, activation=None
-        )
+        ri, gi = self.get_prediction_topology().get_convolution_indices()
+        self.spatial_deform = conv_module(self.unet.out_ch, 3, ri, gi, activation=None)
 
     def get_prediction_topology(self):
         return self.unet.get_prediction_topology()
 
     def forward(self, image, vertices):
-        """Apply graph U-net and estimate deformation vectors from the
+        """Apply graph UNet and estimate deformation vectors from the
         resulting features. A forward Euler scheme is used to move the vertices
         to their new locations by scaling the deformation vectors before they
         are applied to the vertices. This process is repeat
@@ -217,12 +217,10 @@ class GraphUnetDeform(torch.nn.Module):
             features = self.unet(features)  # graph features
             deformation = self.spatial_deform(features)
 
-            # x = deformation.norm(dim=-2)
-            # print(f"min {x.min().item():10.3f}")
-            # print(f"avg {x.min().item():10.3f}")
-            # print(f"max {x.min().item():10.3f}")
-
+            # v = vertices.as_tensor().detach().clone()
             vertices = vertices + self.euler_step_size * deformation
+
+            # print(torch.norm(vertices-v, dim=1).mean().detach().cpu().item())
 
         return vertices
 
@@ -295,9 +293,11 @@ class TopoFitGraph(torch.nn.Module):
         assert n_res >= prediction_res + 1
         self.prediction_res = prediction_res
 
-        # self.register_buffer(
-        #     "initial_faces", topology.initial_faces, persistent=False,
-        # )
+        # The topology is defined on the left hemisphere and although the
+        # topology is the same for both hemispheres, we need to reverse the
+        # order of the vertices in face array in order for the ordering to
+        # remain consistent (e.g., counter-clockwise) once the vertices are
+        # (almost) left-right mirrored
 
         # We use the left topology in the submodules which only use knowledge
         # of the neighborhoods to define the convolutions (and this is
@@ -307,14 +307,7 @@ class TopoFitGraph(torch.nn.Module):
             topology.initial_faces.to(self.device),
         )
 
-        # The topology is defined on the left hemisphere and although the
-        # topology is the same for both hemispheres, we need to reverse the
-        # order of the vertices in face array in order for the ordering to
-        # remain consistent (e.g., counter-clockwise) once the vertices are
-        # (almost) left-right mirrored
-
         # Add an initializer for the template positions
-
         # for hemi in default_hemispheres:
         #     self.add_module(
         #         f"template_initialization_{hemi}",
@@ -332,7 +325,7 @@ class TopoFitGraph(torch.nn.Module):
         )
         self.unet_deform = torch.nn.ModuleList(
             [
-                GraphUnetDeform(
+                GraphUNetDeform(
                     in_channels,
                     self.topologies[: res + 1],
                     conv_module,
@@ -357,11 +350,11 @@ class TopoFitGraph(torch.nn.Module):
         return self.topologies[self.prediction_res]
 
     def forward(
-            self,
-            features: torch.Tensor,
-            initial_vertices: dict[str, torch.Tensor],
-            # hemispheres: None | tuple | list = None,
-        ):
+        self,
+        features: torch.Tensor,
+        initial_vertices: dict[str, torch.Tensor],
+        # hemispheres: None | tuple | list = None,
+    ):
         """
         Faces can be retrieved from
 
@@ -389,33 +382,34 @@ class TopoFitGraph(torch.nn.Module):
         # out = {}
         # Position the initial template vertices
 
-
         # vertices = getattr(self, f"template_initialization_{hemi}")(
         #     features
         # )  # (N, 3, M)
 
+        self.set_image_center(features)
+
         # transpose to (N, 3, M) (.mT = batch transpose) such that coordinates
         # are in the channel dimension
-        out = {h: self._topofit_forward(features, v.mT) for h,v in initial_vertices.items()}
+        out = {h:self._forward_hemi(features, v.mT) for h,v in initial_vertices.items()}
 
         return out
 
-    def _topofit_forward(self, features, vertices):
+
+    def _forward_hemi(self, features, vertices):
         """TopoFit prediction."""
         # At each iteration
         #   1. Sample image features at the corresponding points on the surface
         #   2. use these features to predict a deformation of each point
 
+        vertices = self.normalize_coordinates(vertices)
+
         # Place white matter
         for res in range(self.prediction_res + 1):
-            # for i,unet_deform_block in enumerate(self.unet_deform):
             unet_deform = self.unet_deform[res]
             vertices = unet_deform(features, vertices)
-            vertices = (
-                unet_deform.get_prediction_topology().subdivide_vertices(vertices)
-                if res < self.prediction_res
-                else vertices
-            )
+            if res < self.prediction_res:
+                topo = unet_deform.get_prediction_topology()
+                vertices = topo.subdivide_vertices(vertices)
 
         # Expand white matter
 
@@ -423,5 +417,28 @@ class TopoFitGraph(torch.nn.Module):
         vertices_layer4 = self.linear_deform(features, vertices)
         vertices_pial = self.linear_deform(features, vertices_layer4)
 
+        vertices = self.unnormalize_coordinates(vertices)
+        vertices_pial = self.unnormalize_coordinates(vertices_pial)
+
+
         # Transpose back to (N, M, 3)
         return dict(white=vertices.mT, pial=vertices_pial.mT)
+
+
+    def set_image_center(self, image):
+        """This is used with grid sampling with align_corners=True."""
+        self._image_shape = torch.tensor(image.shape[2:], device=image.device)
+        center = 0.5 * (self._image_shape - 1.0)
+        self._image_center = center[None, :, None]
+
+    def normalize_coordinates(self, coords):
+        # vertices are in voxel coordinates
+
+        # Transform vertices from (0, shape) to (-half_shape, half_shape), then
+        # normalize to [-1, 1]
+        return (coords - self._image_center) / self._image_center
+        # return torch.clip((v - self._image_center) / self._image_center, -1.0, 1.0)
+
+
+    def unnormalize_coordinates(self, coords):
+        return self._image_center * coords + self._image_center
