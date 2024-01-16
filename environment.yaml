@@ -1,11 +1,20 @@
 name: brainnet
 channels:
   - conda-forge
+  - nvidia
 dependencies:
-- python = 3.11
-- monai
-- nibabel
-- numpy
-- scipy
-- torch=2
-- wandb
+  - python = 3.11
+  - monai >= 1.3
+  - nibabel
+  - numpy
+  - pyyaml
+  # or choose appropriate combination from https://pytorch.org/get-started/locally/
+  - pytorch::pytorch = 2.1.2
+  - pytorch::pytorch-cuda = 11.8
+  # - pytorch::cpuonly
+  - wandb
+  # for BrainSynth
+  - scipy >= 1.11
+  - scikit-learn >= 1.3
+  - pip:
+    - surfa >= 0.6
