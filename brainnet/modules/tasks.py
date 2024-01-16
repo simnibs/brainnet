@@ -123,7 +123,4 @@ class ContrastiveModule(torch.nn.Module):
     #         output['feat'][-1] = F.normalize(output['feat'][-1], dim = 1)
     #     return outputs
 
-
-class SurfaceModule(TopoFitGraph):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+SurfaceModule = TopoFitGraph

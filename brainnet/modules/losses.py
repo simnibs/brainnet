@@ -1,21 +1,6 @@
 import torch
-from torch.autograd import Variable
 
 from brainnet.mesh.surface import BatchedSurfaces
-
-
-# # Image (Tensor) input
-# IMAGE_LOSS = {}
-
-# # Surface input
-# SURFACE_LOSS = {
-#     EdgeLengthVarianceLoss,
-#     MatchedDistanceLoss,
-#     SymmetricChamferLoss,
-#     SymmetricCurvatureVectorLoss,
-# }
-# # Only operates on the predicted values
-# REGULARIZATION_LOSS = {EdgeLengthVarianceLoss, GradientSmoothness}
 
 
 # SURFACE LOSS FUNCTIONS

@@ -67,7 +67,7 @@ class BrainNet(torch.nn.Module):
         biasfieldmodule = [task for task in self.tasks.values() if isinstance(task, tasks.BiasFieldModule)]
         # Register a forward hook for the desired activation.
         if (n := len(biasfieldmodule)) > 0:
-            assert n == 1, "only one task of BiasFieldModule supported."
+            assert n == 1, "only one task of class BiasFieldModule supported."
             biasfieldmodule = biasfieldmodule[0]
             if biasfieldmodule.feature_level != -1:
                 self._feature_activations = {}
@@ -86,8 +86,6 @@ class BrainNet(torch.nn.Module):
         self,
         image: torch.Tensor,
         initial_vertices: torch.Tensor | None = None,
-        hemispheres: tuple | None = None,
-        # task_kwargs,
     ) -> dict:
         """
 
