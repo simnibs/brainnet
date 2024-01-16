@@ -7,16 +7,12 @@ from time import perf_counter
 import torch
 import wandb
 
-import colorama
-
 import brainsynth
 from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
 from brainsynth.dataset import get_dataloader_concatenated_and_split
-
 # for one hot enc
 from brainsynth.constants import constants
 from brainsynth.transforms import AsDiscreteWithReindex
-
 
 from brainnet.modules.brainnet import BrainNet
 from brainnet.modules.tasks import SurfaceModule
@@ -24,11 +20,13 @@ from brainnet.modules.criterion import Criterion
 from brainnet.mesh.surface import BatchedSurfaces
 
 fmt_epoch = lambda epoch: f"{epoch:05d}"
-fmt_model = lambda epoch: f"{fmt_epoch(epoch)}_model.pt"
-fmt_optim = lambda epoch: f"{fmt_epoch(epoch)}_optim.pt"
+fmt_state = lambda epoch: f"state_{fmt_epoch(epoch)}.pt"
+
+import nibabel as nib
 
 # import warnings
 # warnings.simplefilter("error")
+
 
 def _config_to_args_dataloader(config):
     tc = config.dataset
@@ -47,9 +45,7 @@ def _config_to_args_dataloader(config):
 """
 
 # filename = "/mrhome/jesperdn/repositories/brainnet/brainnet/config/train_segment_t1.yaml"
-filename = "/mrhome/jesperdn/repositories/brainnet/brainnet/config/train_foundation.yaml"
-config = load_config(filename)
-self = BrainNetTrainer(config)
+self = BrainNetTrainer(load_config("/mrhome/jesperdn/repositories/brainnet/brainnet/config/train_foundation.yaml"))
 
 (ds_id, images, surfaces, info) = next(iter(self.dataloader["train"]))
 
@@ -147,7 +143,7 @@ class BrainNetTrainer:
         # assert self.device == self.synth_device
 
         self.epoch = config.epoch
-        self.epoch.start = self.epoch.resume_from_checkpoint or 1
+        self.epoch.start = self.epoch.resume_from_checkpoint or 0
 
         self.latest_checkpoint = None
 
@@ -215,6 +211,7 @@ class BrainNetTrainer:
             config.model.feature_extractor, config.model.tasks, self.device
         )
         self.model.to(self.device)
+
         n_parameters = sum(
             p.numel() for p in self.model.parameters() if p.requires_grad
         )
@@ -243,6 +240,9 @@ class BrainNetTrainer:
         # load model and optimizer parameters
         self.load_checkpoint(self.epoch.resume_from_checkpoint)
 
+        # for g in self.optimizer.param_groups:
+        #     g["lr"] = 0.001
+
         # Get empty BatchedSurfaces. We update the vertices at each iteration
         self.surface_skeletons = dict(
             y_pred=self.get_surface_skeletons(),
@@ -258,7 +258,7 @@ class BrainNetTrainer:
 
     def get_hyper_params(self):
         return dict(
-            LR=self.optimizer.param_groups[0].lr,
+            LR=self._get_lr(),
         )
 
     def to_device(self, dict_of_tensors):
@@ -279,9 +279,9 @@ class BrainNetTrainer:
 
         self._wandb_init()
 
+        print("Using hyperparameters", self.get_hyper_params())
 
-
-        for n in range(self.epoch.start, self.epoch.max_allowed_epochs + 1):
+        for n in range(self.epoch.start + 1, self.epoch.max_allowed_epochs + 1):
             epoch = Epoch(n)
 
             # hyper_params = self.get_hyper_params()
@@ -295,6 +295,11 @@ class BrainNetTrainer:
                     break
 
                 t0 = perf_counter()
+
+                # Reset gradients in optimizer. Otherwise gradients would
+                # accumulate across multiple passes (whenever .backward is
+                # called)
+                self.optimizer.zero_grad()
 
                 # print("step", step)
 
@@ -310,21 +315,51 @@ class BrainNetTrainer:
 
                 t1 = perf_counter()
 
-                # add y_true_curv here
-                # criterion_kwargs = dict(y_true_curv=surfaces[...])
-
+                # if gradient issues, try
                 # with torch.autograd.set_detect_anomaly(True):
-                loss, wloss = self.step(image, y_true, init_verts)  # criterion_kwargs
+                loss, wloss, y_true, y_pred = self.step(image, y_true, init_verts)
+
+                if n % 5 == 0 and step == 0:
+                    # nib.Nifti1Image(
+                    #     y_pred["segmentation"][0].argmax(0).to(torch.int16).cpu().numpy(), torch.eye(4).numpy()
+                    # ).to_filename(f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/{n:03d}_seg.nii")
+                    nib.Nifti1Image(
+                        image[0,0].cpu().numpy(), torch.eye(4).numpy()
+                    ).to_filename(f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/{n:03d}_norm.nii")
+                    if "lh" in y_true["surface"]:
+                        nib.freesurfer.write_geometry(
+                            f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/{n:03d}_lh.white.pred",
+                            y_pred["surface"]["lh"]["white"].vertices[0].to(torch.float).detach().cpu().numpy(),
+                            y_pred["surface"]["lh"]["white"].faces.to(torch.int).detach().cpu().numpy()
+                        )
+                        # nib.freesurfer.write_geometry(
+                        #     f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/{n:03d}_lh.pial.pred",
+                        #     y_pred["surface"]["lh"]["pial"].vertices[0].to(torch.float).detach().cpu().numpy(),
+                        #     y_pred["surface"]["lh"]["pial"].faces.to(torch.int).detach().cpu().numpy()
+                        # )
+                        if n == self.epoch.start + 5:
+                            nib.freesurfer.write_geometry(
+                                f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/lh.white.init",
+                                init_verts["lh"][0].to(torch.float).detach().cpu().numpy(),
+                                self.model.tasks.surface.topologies[0].faces.to(torch.int).cpu().numpy()
+                            )
+                            nib.freesurfer.write_geometry(
+                                f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/lh.white.true",
+                                y_true["surface"]["lh"]["white"].vertices[0].to(torch.float).detach().cpu().numpy(),
+                                y_true["surface"]["lh"]["white"].faces.to(torch.int).detach().cpu().numpy()
+                            )
+                            # nib.freesurfer.write_geometry(
+                            #     f"/mnt/scratch/personal/jesperdn/results/BrainNet/inference/lh.pial.true",
+                            #     y_true["surface"]["lh"]["pial"].vertices[0].to(torch.float).detach().cpu().numpy(),
+                            #     y_true["surface"]["lh"]["pial"].faces.to(torch.int).detach().cpu().numpy()
+                            # )
 
                 t2 = perf_counter()
                 # compute weighted loss
                 # wloss = self.criterion.apply_weights(loss)
                 wloss_sum = sum(wloss.values())
 
-                # Reset gradients in optimizer. Otherwise gradients would
-                # accumulate across multiple passes (whenever .backward is
-                # called)
-                self.optimizer.zero_grad()
+
 
                 # Compute and accumulate gradients. backward() frees
                 # intermediate values of the graph (e.g., activations)
@@ -410,20 +445,10 @@ class BrainNetTrainer:
 
         return image, y_true, init_vertices
 
-    def step(self, image, y_true, init_verts=None, model_kwargs=None, criterion_kwargs=None):
-        if model_kwargs is None:
-            # if len(y_true["surface"]) > 0:
-            #     model_kwargs = dict(hemispheres=tuple(y_true["surface"].keys()))
-            # else:
-            #     model_kwargs = {}
-            model_kwargs = {}
+    def step(self, image, y_true, init_verts=None):
+        # , model_kwargs=None, criterion_kwargs=None
 
-        if init_verts is not None:
-            model_kwargs["initial_vertices"] = init_verts
-
-        criterion_kwargs = criterion_kwargs or {}
-
-        y_pred = self.model(image, **model_kwargs)
+        y_pred = self.model(image, initial_vertices = init_verts)
 
         # convert surface predictions to batched surfaces
         if (k := "surface") in y_pred:
@@ -432,10 +457,12 @@ class BrainNetTrainer:
 
             self.criterion.precompute_for_surface_loss(y_pred[k], y_true[k])
 
-        loss = self.criterion(y_pred, y_true, **criterion_kwargs)
+        loss = self.criterion(y_pred, y_true)
+        # print({k:v.item() for k,v in loss.items()})
+
         wloss = self.criterion.apply_normalized_weights(loss)
 
-        return loss, wloss
+        return loss, wloss, y_true, y_pred
 
 
     def _do_save_checkpoint(self, epoch):
@@ -490,31 +517,27 @@ class BrainNetTrainer:
 
         return val_epoch.loss
 
-    def load_checkpoint(self, epoch, load_model=True, load_optimizer=True):
+    def load_checkpoint(self, epoch):
         """Load parameters from a state dict."""
-        if epoch is None:
+        if epoch is None or epoch == 0:
             return
 
-        if load_model:
-            self.model.load_state_dict(
-                torch.load(self.checkpoint_dir / fmt_model(epoch))
-            )
-        if load_optimizer:
-            self.optimizer.load_state_dict(
-                torch.load(self.checkpoint_dir / fmt_optim(epoch))
-            )
+        name = fmt_state(epoch)
+        print(f"Initializing state from {name}")
+        state = torch.load(self.checkpoint_dir / name)
+        self.model.load_state_dict(state["model_state"])
+        self.optimizer.load_state_dict(state["optimizer_state"])
 
     def save_checkpoint(self, epoch):
         if not self._do_save_checkpoint(epoch):
             return
 
         torch.save(
-            self.model.state_dict(),
-            self.checkpoint_dir / fmt_model(epoch),
-        )
-        torch.save(
-            self.optimizer.state_dict(),
-            self.checkpoint_dir / fmt_optim(epoch),
+            dict(
+                model_state=self.model.state_dict(),
+                optimizer_state=self.optimizer.state_dict()
+            ),
+            self.checkpoint_dir / fmt_state(epoch),
         )
         self.latest_checkpoint = epoch
 
@@ -545,8 +568,6 @@ class BrainNetTrainer:
         """Replace vertex tensors with BatchedSurfaces objects."""
         for h, surfaces in data.items():
             for s in surfaces:
-                # convert metatensor to tensor otherwise the custom CUDA
-                # functions fail (nearest neighbor computation)
                 surface_skeleton[h][s].vertices = surfaces[s]
                 data[h][s] = surface_skeleton[h][s]
 
