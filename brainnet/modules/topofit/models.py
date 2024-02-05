@@ -156,7 +156,7 @@ class GraphUNet(torch.nn.Module):
             self.decoder_conv, self.decoder_unpool, skip_features[::-1]
         ):
             features = unpool(features)
-            features = torch.concat((features, sf), -2)
+            features = torch.concat((features, sf), dim=1)
             features = conv(features)
 
         return features
@@ -168,7 +168,7 @@ class GraphUNetDeform(torch.nn.Module):
         in_channels: int,
         topologies: list[topology.Topology],
         conv_module: Union[layers.GraphConv, layers.EdgeConv],
-        euler_step_size: float,
+        # euler_step_size: float, # unused
         euler_iterations: int,
         config_unet: UnetParameters,
     ) -> None:
@@ -177,12 +177,15 @@ class GraphUNetDeform(torch.nn.Module):
         the vertices at whose positions the features were estimated.
         """
         super().__init__()
+
+        ndim = 3
+
         # Whereas the original TopoFit works with coordinates in voxel space
         # (e.g., range [0, 200]), we use normalized coordinates (range [-1, 1])
         # so use this as an approximate scaling factor of the deformation
-        factor = 0.01
 
-        self.euler_step_size = euler_step_size * factor
+        self.euler_step_size = torch.nn.Parameter(torch.Tensor([1.0]))
+
         self.euler_iterations = euler_iterations
 
         self.unet = GraphUNet(
@@ -198,12 +201,14 @@ class GraphUNetDeform(torch.nn.Module):
 
         # Final convolution block to estimate deformation field from features
         ri, gi = self.get_prediction_topology().get_convolution_indices()
-        self.spatial_deform = conv_module(self.unet.out_ch, 3, ri, gi, activation=None)
+        self.spatial_deform = conv_module(
+            self.unet.out_ch, ndim, ri, gi, bias=False
+        )
 
     def get_prediction_topology(self):
         return self.unet.get_prediction_topology()
 
-    def forward(self, image, vertices):
+    def forward(self, features, vertices):
         """Apply graph UNet and estimate deformation vectors from the
         resulting features. A forward Euler scheme is used to move the vertices
         to their new locations by scaling the deformation vectors before they
@@ -211,65 +216,62 @@ class GraphUNetDeform(torch.nn.Module):
         `self.euler_iterations` number of times.
         """
         for _ in torch.arange(self.euler_iterations):
-            features = grid_sample(image, vertices)  # image features
+            sampled_features = grid_sample(features, vertices)  # image features
+
             # possibility to add normalized vertex coordinates as features?
-            # ...
-            features = self.unet(features)  # graph features
-            deformation = self.spatial_deform(features)
 
-            # v = vertices.as_tensor().detach().clone()
+            sampled_features = self.unet(sampled_features)  # graph features
+            deformation = self.spatial_deform(sampled_features)
             vertices = vertices + self.euler_step_size * deformation
-
-            # print(torch.norm(vertices-v, dim=1).mean().detach().cpu().item())
 
         return vertices
 
 
-class TopoFitTemplateInitialization(torch.nn.Module):
-    def __init__(self, in_channels, n_points) -> None:
-        super().__init__()
+# class TopoFitTemplateInitialization(torch.nn.Module):
+#     def __init__(self, in_channels, n_points) -> None:
+#         super().__init__()
 
-        conv_kwargs = dict(spatial_dims=3)
-        self.conv = Convolution(
-            in_channels=in_channels, out_channels=n_points, **conv_kwargs
-        )
+#         conv_kwargs = dict(spatial_dims=3)
+#         self.conv = Convolution(
+#             in_channels=in_channels, out_channels=n_points, **conv_kwargs
+#         )
 
-    def cache_shape_and_grid(self, shape, device):
-        """During training the shape will stay the same so no need to recreate
-        the grid on every forward pass.
-        """
-        if not hasattr(self, "shape") or shape != self.shape:
-            self.shape = shape
-            self.grid = torch.meshgrid(
-                [torch.arange(s, device=device) for s in shape], indexing="ij"
-            )
-            self.grid = tuple(g.ravel() for g in self.grid)
+#     def cache_shape_and_grid(self, shape, device):
+#         """During training the shape will stay the same so no need to recreate
+#         the grid on every forward pass.
+#         """
+#         if not hasattr(self, "shape") or shape != self.shape:
+#             self.shape = shape
+#             self.grid = torch.meshgrid(
+#                 [torch.arange(s, device=device) for s in shape], indexing="ij"
+#             )
+#             self.grid = tuple(g.ravel() for g in self.grid)
 
-            # self.register_buffer("grid", persistent=False)
+#             # self.register_buffer("grid", persistent=False)
 
-    def forward(self, features, eps=1e-6):
-        """Predict the coordinates of a number of points.
+#     def forward(self, features, eps=1e-6):
+#         """Predict the coordinates of a number of points.
 
-        Parameters
-        ----------
-        features : (N, C, ...)
+#         Parameters
+#         ----------
+#         features : (N, C, ...)
 
-        Returns
-        -------
-        vertices : (N, 3, M)
-            M is the number of predict vertices.
-        """
-        N = features.shape[0]
-        shape = features.shape[2:]
+#         Returns
+#         -------
+#         vertices : (N, 3, M)
+#             M is the number of predict vertices.
+#         """
+#         N = features.shape[0]
+#         shape = features.shape[2:]
 
-        self.cache_shape_and_grid(shape, features.device)
+#         self.cache_shape_and_grid(shape, features.device)
 
-        x = self.conv(features)
-        x = x.reshape(N, self.conv.out_channels, -1)
-        x = x / (x.sum(-1)[..., None] + eps)  # normalize channel maps
+#         x = self.conv(features)
+#         x = x.reshape(N, self.conv.out_channels, -1)
+#         x = x / (x.sum(-1)[..., None] + eps)  # normalize channel maps
 
-        # weigh coordinates (grid) by feature maps
-        return torch.stack([torch.sum(x * g.ravel(), dim=-1) for g in self.grid], dim=1)
+#         # weigh coordinates (grid) by feature maps
+#         return torch.stack([torch.sum(x * g.ravel(), dim=-1) for g in self.grid], dim=1)
 
 
 class TopoFitGraph(torch.nn.Module):
@@ -320,7 +322,6 @@ class TopoFitGraph(torch.nn.Module):
         conv_module = getattr(layers, config.unet_deform.conv_module)
         options_gdb = zip(
             config.unet_deform.resolutions,
-            config.unet_deform.euler_step_size,
             config.unet_deform.euler_iterations,
         )
         self.unet_deform = torch.nn.ModuleList(
@@ -329,11 +330,10 @@ class TopoFitGraph(torch.nn.Module):
                     in_channels,
                     self.topologies[: res + 1],
                     conv_module,
-                    euler_step_size,
                     euler_iterations,
                     config.unet_deform.unet,
                 )
-                for res, euler_step_size, euler_iterations in options_gdb
+                for res, euler_iterations in options_gdb
             ]
         )
 
@@ -378,21 +378,9 @@ class TopoFitGraph(torch.nn.Module):
         -------
 
         """
-        # hemispheres = default_hemispheres if hemispheres is None else hemispheres
-        # out = {}
-        # Position the initial template vertices
-
-        # vertices = getattr(self, f"template_initialization_{hemi}")(
-        #     features
-        # )  # (N, 3, M)
-
         self.set_image_center(features)
 
-        # transpose to (N, 3, M) (.mT = batch transpose) such that coordinates
-        # are in the channel dimension
-        out = {h:self._forward_hemi(features, v.mT) for h,v in initial_vertices.items()}
-
-        return out
+        return {h:self._forward_hemi(features, v) for h,v in initial_vertices.items()}
 
 
     def _forward_hemi(self, features, vertices):
@@ -401,12 +389,20 @@ class TopoFitGraph(torch.nn.Module):
         #   1. Sample image features at the corresponding points on the surface
         #   2. use these features to predict a deformation of each point
 
-        vertices = self.normalize_coordinates(vertices)
+        # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
+        # (feature) dimension
+
+        # vertices = self.normalize_coordinates(vertices.mT)
+
+        # ORIGINAL
+        vertices = vertices.mT
 
         # Place white matter
         for res in range(self.prediction_res + 1):
             unet_deform = self.unet_deform[res]
+            # deform vertices
             vertices = unet_deform(features, vertices)
+            # upsample
             if res < self.prediction_res:
                 topo = unet_deform.get_prediction_topology()
                 vertices = topo.subdivide_vertices(vertices)
@@ -417,9 +413,8 @@ class TopoFitGraph(torch.nn.Module):
         vertices_layer4 = self.linear_deform(features, vertices)
         vertices_pial = self.linear_deform(features, vertices_layer4)
 
-        vertices = self.unnormalize_coordinates(vertices)
-        vertices_pial = self.unnormalize_coordinates(vertices_pial)
-
+        # vertices = self.unnormalize_coordinates(vertices)
+        # vertices_pial = self.unnormalize_coordinates(vertices_pial)
 
         # Transpose back to (N, M, 3)
         return dict(white=vertices.mT, pial=vertices_pial.mT)

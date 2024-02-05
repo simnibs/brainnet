@@ -22,10 +22,9 @@ class GraphConv(torch.nn.Module):
         out_channels: int,
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
-        bias=True,
-        activation="leaky",
+        bias=False,
+        # activation="leaky",
         # dropout_p=0.0,
-        # init="normal",
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -33,20 +32,19 @@ class GraphConv(torch.nn.Module):
         self.reduce_index = reduce_index.long()  # repeats of vertex
         self.gather_index = gather_index.long()  # neighbors of vertex
 
-        # self.linear0 = torch.nn.Linear(in_channels, out_channels, bias=False)
-        # self.linear1 = torch.nn.Linear(in_channels, out_channels, bias)
-
-        self.conv_v = torch.nn.Conv1d(in_channels, out_channels, 1, bias=bias)
-        self.conv_n = torch.nn.Conv1d(in_channels, out_channels, 1, bias=bias)
+        kwargs = dict(kernel_size=1, stride=1, padding="valid", bias=bias)
+        self.conv_v = torch.nn.Conv1d(in_channels, out_channels, **kwargs)
+        self.conv_n = torch.nn.Conv1d(in_channels, out_channels, **kwargs)
 
         self.batchnorm = torch.nn.BatchNorm1d(out_channels)
 
-        if activation is None:
-            self.activation = lambda x: x
-        elif activation == "leaky":
-            self.activation = torch.nn.LeakyReLU(0.3)
-        else:
-            raise ValueError
+        # if activation is None:
+        #     self.activation = lambda x: x
+        # elif activation == "leaky":
+        #     self.activation = torch.nn.PReLU(init=0.3)
+        # else:
+        #     raise ValueError
+        self.activation = torch.nn.PReLU(init=0.3)
 
         # self.apply_dropout = dropout_p > 0.0
         # if self.apply_dropout:
@@ -65,12 +63,17 @@ class GraphConv(torch.nn.Module):
         # aggregate (neighbors): mean
         out = torch.zeros_like(F_v)
         out.index_reduce_(
-            -1,
-            self.reduce_index,
-            F_n[..., self.gather_index],
+            dim=2,
+            index=self.reduce_index,
+            source=F_n[..., self.gather_index],
             reduce="mean",
             include_self=False,
         )
+        # out.index_add_(
+        #     dim=2,
+        #     index=self.reduce_index,
+        #     source=F_n[..., self.gather_index],
+        # )
         # merge (v and neighbors): sum
         out = out + F_v
 
@@ -86,7 +89,8 @@ class EdgeConv(torch.nn.Module):
         out_channels: int,
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
-        activation="leaky",
+        batchnorm=True,
+        # activation="leaky",
         bias: bool = True,
     ):
         super().__init__()
@@ -98,14 +102,16 @@ class EdgeConv(torch.nn.Module):
         # self.linear = torch.nn.Linear(in_channels, out_channels, bias)
         self.conv = torch.nn.Conv1d(self.in_channels, out_channels, 1, bias=bias)
 
-        if activation is None:
-            self.activation = lambda x: x
-        elif activation == "leaky":
-            self.activation = torch.nn.LeakyReLU(0.3)
-        else:
-            raise ValueError
+        # if activation is None:
+        #     self.activation = lambda x: x
+        # elif activation == "leaky":
+        #     self.activation = torch.nn.PReLU(init=0.3)
+        # else:
+        #     raise ValueError
 
-        self.batchnorm = torch.nn.BatchNorm1d(out_channels)
+        self.activation = torch.nn.PReLU(init=0.3)
+
+        # self.batchnorm = torch.nn.BatchNorm1d(out_channels) if batchnorm else None
 
         # self.apply_dropout = dropout_p > 0.0
         # if self.apply_dropout:
@@ -119,7 +125,7 @@ class EdgeConv(torch.nn.Module):
         vertices = in_features[..., self.reduce_index]
         neighbors = in_features[..., self.gather_index]
 
-        concat_features = torch.cat([vertices, neighbors - vertices], dim=-2)
+        concat_features = torch.cat([vertices, neighbors - vertices], dim=1)
         F_e = self.conv(concat_features)
 
         # Index pooling of features
@@ -127,14 +133,15 @@ class EdgeConv(torch.nn.Module):
             out_shape, dtype=in_features.dtype, device=in_features.device
         )
         out.index_reduce_(
-            -1,
-            self.reduce_index,
-            F_e,
+            dim=-1,
+            index=self.reduce_index,
+            source=F_e,
             reduce="mean",
             include_self=False,
         )
 
-        out = self.batchnorm(out)
+        # if self.batchnorm is not None:
+        #     out = self.batchnorm(out)
 
         return self.activation(out)
 
@@ -231,10 +238,15 @@ class GraphUnpool(torch.nn.Module):
 
 class GraphLinearDeform(torch.nn.Module):
     def __init__(
-        self, in_channels: int, channels: list[int], n_iterations: int = 1
+        self, in_channels: int, channels: list[int],
+        n_iterations: int = 1,
+        batch_norm=False,
     ) -> None:
         super().__init__()
         """Quadrature deformation block.
+
+
+
 
         Parameters
         ----------
@@ -252,22 +264,21 @@ class GraphLinearDeform(torch.nn.Module):
         """
         # Whereas the original TopoFit works with coordinates in voxel space
         # (e.g., range [0, 200]), we use normalized coordinates (range [-1, 1])
-        factor = 0.01
 
         self.n_iterations = n_iterations
-        self.scale = factor / self.n_iterations
+        self.scale = 1 / self.n_iterations
 
+        # we might as well use linear layers but use 1D convolutions instead as
+        # that eats the tensors as (N, C)
         self.quad_block = torch.nn.Sequential()
         for out_ch in channels:
-            # self.quad_block.add_module(
-            #     f"Linear{i}", torch.nn.Linear(in_channels, out_ch)
-            # )
             self.quad_block.append(torch.nn.Conv1d(in_channels, out_ch, 1))
-            self.quad_block.append(torch.nn.BatchNorm1d(out_ch))
-            self.quad_block.append(torch.nn.LeakyReLU(0.3))
+            if batch_norm:
+                self.quad_block.append(torch.nn.BatchNorm1d(out_ch))
+            self.quad_block.append(torch.nn.PReLU(init=0.3))
             in_channels = out_ch
 
-        # self.quad_block.add_module(f"LinearDeform", torch.nn.Linear(in_channels, 3))
+        # we work in 3D so three output channels
         self.quad_block.append(torch.nn.Conv1d(in_channels, 3, 1))
 
 
