@@ -167,7 +167,7 @@ class BatchedSurfaces:
         E2 = E**2
         cot = torch.stack(
             [E2[..., i] + E2[..., j] - E2[..., k] for i, j, k in cot_index], -1
-        ) / 4 * area[..., None]
+        ) / (4 * area[..., None])
 
         return cot, area
 
@@ -368,33 +368,6 @@ class BatchedSurfaces:
         )
 
 
-    # def chamfer_distance(self, other: "BatchedSurfaces"):
-    #     """
-
-    #     Parameters
-    #     ----------
-
-
-    #     Returns
-    #     -------
-    #     dist :
-    #         (Squared) distance between closest points in point sets `a` and `b`.
-    #     index_other :
-    #         This array gives, for each element in `self.vertices`, the index of
-    #         the closest element in `other.vertices`.
-    #     index_self :
-    #         This array gives, for each element in `other.vertices`, the index
-    #         of the closest element in `self.vertices`.
-    #     """
-    #     # for each element in `self`, this is the index of the closest element
-    #     # in `other`
-    #     index_other = cuda_extensions.compute_nearest_neighbor(self.vertices, other.vertices)
-    #     dist = torch.norm(self.vertices - other.vertices[index_other], dim=-1)
-
-    #     return dist, index_other
-
-
-
     def compute_self_intersections(self):
         assert self.vertices.dtype == torch.float
         assert self.faces.dtype == torch.int64
@@ -402,6 +375,7 @@ class BatchedSurfaces:
         faces = self.faces.detach()
 
         # the extension returns (intersecting triangles, # intersecting triangles)
-        return torch.stack(
-            [cuda_extensions.compute_self_intersections(v, faces)[0] for v in vertices]
-        )#.nonzero().squeeze()
+        if vertices.shape[0] == 1:
+            return cuda_extensions.compute_self_intersections(vertices[0], faces)
+        else:
+            return [cuda_extensions.compute_self_intersections(v, faces)[0] for v in vertices]
