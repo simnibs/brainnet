@@ -184,7 +184,9 @@ class GraphUNetDeform(torch.nn.Module):
         # (e.g., range [0, 200]), we use normalized coordinates (range [-1, 1])
         # so use this as an approximate scaling factor of the deformation
 
-        self.euler_step_size = torch.nn.Parameter(torch.Tensor([1.0]))
+        # Initialize this way to get parameter._version == 1 like all the rest
+        self.euler_step_size = torch.nn.Parameter(torch.empty([1]))
+        torch.nn.init.ones_(self.euler_step_size)
 
         self.euler_iterations = euler_iterations
 
