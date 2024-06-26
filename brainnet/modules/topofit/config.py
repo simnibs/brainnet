@@ -11,9 +11,9 @@ Differences from the original TopoFit implementation
 class UnetParameters:
     # manual specification
     channels: int | dict = dict(
-        # encoder=[64, 96, 128], ubend=160, decoder=[128, 96, 64]
+        encoder=[64, 96, 128], ubend=160, decoder=[128, 96, 64]
         # encoder=[96, 128, 160], ubend=192, decoder=[160, 128, 96]
-        encoder=[96, 96, 96], ubend=96, decoder=[96, 96, 96]
+        # encoder=[96, 96, 96], ubend=96, decoder=[96, 96, 96]
     )
     multiplier: int = 1
 
@@ -45,16 +45,10 @@ class UnetDeformParameters:
     # 6 : 6-5-4-3-4-5-6
     resolutions: list[int] = [0, 1, 2, 3, 4, 5, 6]
 
-    # scaling of the deformation vector
-    # euler_step_size: list[float] = [1, 1, 1, 1, 1, 1, 1]
-    # euler_step_size: list[float] = [10, 10, 10, 10, 1, 1, 1]
-    # euler_step_size: list[float] = [0.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
-
     # number of iterations per resolution
     euler_iterations: list[int] = [1, 1, 1, 1, 1, 2, 1]
 
     conv_module: str = "EdgeConv" # {GraphConv, EdgeConv}
-
 
 class LinearDeformParameters:
     # white -> layer 4 -> pial

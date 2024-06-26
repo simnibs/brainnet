@@ -1,124 +1,226 @@
-PROJECT_NAME: &PROJECT BrainNet # same as wandb project name!
+PROJECT_NAME: &PROJECT BrainNetEdgeNet # same as wandb project name!
+RUN_NAME: &RUN SingleHemi2
 
-# DATASET     MODALITIES
-# ----        ----------
-# ADNI        T1
-# ADNI3       T1, FLAIR
-# ADHD200     T1
-# AIBL        T1, T2, FLAIR
-# HCP         T1, T2
-# OASIS3      CT
-
-# HEADRECO    T1, T2, CT, ...
-
+# ============================================================================
+# WANDB
+# ============================================================================
 
 # Logging using Weights & Biases (https://wandb.ai)
 wandb:
-  enable: false
+  enable: true
   project_name: *PROJECT
-  # entity: null  # username/team name to send data to
+  name: *RUN      # name used to identify run in UI
+  resume: true
   tags: null
-  name: null      # name used to identify run in UI
+  # entity: null  # username/team name to send data to
   # dir: null      # sub dir of results dir
 
 
+# ============================================================================
+# DEVICES
+# ============================================================================
+
 device:
   model: "cuda:0"    # the model we are training
-  synthesizer: "cpu" # the code synthesizing the images passed to the task network
+  synthesizer: "cuda:0" # the code synthesizing the images passed to the task network
 
+# ============================================================================
 # DATASET
-# =====================================
+# ============================================================================
 
 dataset:
-  dir: !Path /mnt/scratch/personal/jesperdn/datasets
+  dataset_kwargs: &DATASET_KWARGS
+    HCP:
+      data_dir: !Path /mnt/scratch/personal/jesperdn/datasets/HCP
+      default_images:     [norm]
+      optional_images:    [T1]
+      alternative_synth:  [norm, T1]
+      target_surface_resolution:  &TARGET_RES   5
+      target_surface_hemispheres: &TARGET_HEMI  lh
+      initial_surface_type:       &INIT_TYPE    template
+      initial_surface_resolution: &INIT_RES     0
+      load_only: &LOAD_ONLY true
+    OASIS3:
+      data_dir: !Path /mnt/scratch/personal/jesperdn/datasets/OASIS3
+      default_images:     [norm]
+      optional_images:    [T1]
+      alternative_synth:  [norm, T1]
+      target_surface_resolution:  *TARGET_RES
+      target_surface_hemispheres: *TARGET_HEMI
+      initial_surface_type:       *INIT_TYPE
+      initial_surface_resolution: *INIT_RES
+      load_only: *LOAD_ONLY
 
-  train: [HCP] # [HCP, WH2015] #[ADNI, OASIS3]
-  test: [] #[HCP]
-
-  # which optional images to use for each dataset. Images should be valid
-  optional_images:
-    HCP: []
-    WH2015: [] # [PD]
-
-  # if a synthetic image is not generated then use one of these real images instead
-  # (only relevant when probability of generating a synthetic contrast is < 1.0)
-  alternative_synth:
-    HCP: [norm]
-    WH2015: [norm] # [norm, PD]
-
-  split:
-    rng_seed: null # seed for reproducible dataset splits (null = no seed)
-    # splits:
-    #   train: 0.8
-    #   validation: 0.2
-    splits:
-      train: 1.0
-
-  kwargs:
-    # Initial surface resolution
-    surface_resolution: 4 # 0 - 6
-    surface_hemi: lh # random
-    # These images should be present for all datasets
-    #   constants.filenames.default_images
-    default_images: [generation, segmentation, norm]
-
-    # onehot_encoding:
-    #   segmentation: incl_csf
-
-  dataloader:
+  dataloader_kwargs: &DATALOADER_KWARGS
     batch_size: 1
-    num_workers: 2
+    num_workers: 4
     prefetch_factor: 2 # this seems to be PER dataset
 
+  dataloaders:
+    train:
+      subjects:
+        HCP: /mnt/scratch/personal/jesperdn/datasets/HCP_train.txt
+        OASIS3: /mnt/scratch/personal/jesperdn/datasets/OASIS3_train.txt
+      # synthesizer_kwargs:
+      #   config: synthesizer.yaml
+      dataset_kwargs: *DATASET_KWARGS
+      dataloader_kwargs: *DATALOADER_KWARGS
+    validation:
+      subjects:
+        HCP: /mnt/scratch/personal/jesperdn/datasets/HCP_validation.txt
+        OASIS3: /mnt/scratch/personal/jesperdn/datasets/OASIS3_validation.txt
+      # synthesizer_kwargs:
+      #   config: synthesizer.yaml
+      dataset_kwargs: *DATASET_KWARGS
+      dataloader_kwargs: *DATALOADER_KWARGS
+
+# ============================================================================
+# SYNTHESIZER
+# ============================================================================
 
 synthesizer:
-  config: null        # config file to use. If null, use default from BrainSynth
+  config: synthesizer_no_synth.yaml # synthesizer_no_synth.yaml        # config file to use. If null, use default from BrainSynth
   module: Synthesizer # Currently, there is only one synthesizer so...
 
+
+# ============================================================================
 # RESULTS
-# =====================================
+# ============================================================================
 
-# results are stored in resultsdir/PROJECT_NAME/...
+# results are stored in results_dir/PROJECT_NAME/RUN_NAME/
 results:
-  dir: !Path /mnt/scratch/personal/jesperdn/results     # PROJECT_NAME will be appended
-  # checkpoints: checkpoints # store checkpoints in this subdir of dir/project/
+  dir: !Path /mnt/scratch/personal/jesperdn/results # PROJECT_NAME will be appended
 
-# NOTE paths should be relative to the directory of the current yaml file
+# NOTE when including yaml files, paths should be relative to the directory of
+# the current yaml file
 
+
+# ============================================================================
 # MODEL
-# =====================================
+# ============================================================================
 
 # > contents of this node is passed to BrainNet
-model: !include models/foundation.yaml
+# model: !include models/foundation.yaml
+model:
+  body:
+    model: UNet
+    kwargs:
+      spatial_dims: 3
+      in_channels: 1
+      encoder_channels: [[32], [64], [96], [128], [160]]
+      decoder_channels: [[128], [96], [64], [64]]
+  heads:
+    surface:
+      module:
+        name: SurfaceModule
+        kwargs:
+          prediction_res: *TARGET_RES
+      runtime_kwargs:
+        return_pial: true
 
+# ============================================================================
 # LOSS
-# =====================================
+# ============================================================================
 
 # Specify the loss
 # > contents of this node is passed to Criterion
-loss: !include loss/foundation.yaml
+loss: !include loss/foundation_00000.yaml
 
-# if input is not explicitly specified, then the name of the task is used
-# &INIT_DK {softmax: true, to_onehot_y: true}
+reinitialize_loss:
+  "200": !Path loss/foundation_00200.yaml
+  "600": !Path loss/foundation_00600.yaml
+  "1000": !Path loss/foundation_01000.yaml
+  "1400": !Path loss/foundation_01400.yaml
+  "1800": !Path loss/foundation_01800.yaml
+  "2200": !Path loss/foundation_02200.yaml
 
+  "2600": !Path loss/foundation_02200.yaml
+
+  "3000": !Path loss/foundation_03000.yaml
+  "3400": !Path loss/foundation_03000.yaml
+  "3800": !Path loss/foundation_03800.yaml
+
+
+
+# ============================================================================
 # TRAINING PARAMETERS
-# =====================================
+# ============================================================================
+surface_decoupling:
+  decouple: false
+  decouple_amount: 0.2
 
 epoch:
-  resume_from_checkpoint: 300 # 200 # e.g., 100
-  max_allowed_epochs: 400 # 1000
-  steps_per_epoch: 100
-  steps_per_validation: 20
+  resume_from_checkpoint: 2600
+  max_allowed_epochs: 3000
+  steps_per_epoch: &STEPS 100
+  steps_per_validation: 50
   validate_every: 10
-  save_state_every: 10
+  save_state_every: 20
+  load_optimizer_checkpoint: true
+
+# estimate inter-task affinities
+estimate_ITA: false
+
+# SGD     1e-3 - 1e-8
+# AdamW   1e-2 - 1e-8
 
 optimizer:
-  name: AdamW # SGD, Adam, AdamW
+  name: AdamW
   kwargs:
-    lr: 1.0e-2
+    lr: 1.0e-4 # the default lr
+
+  # lr_factor: 0.5 # applied after optimizer state is loaded
+
+  # body: BrainNet.body.[]
+  # heads:  BrainNet.heads.[]
+  # lr_parameter_groups:
+    # body: 1.0e-4
+    # heads:
+      # surface: 1.0e-4
+      # segmentation: 1.0e-3
+
+
+# optimizer:
+#   name: SGD
+#   kwargs:
+#     lr: 1.0e-8
+#     momentum: 0.9
+
+# 100 & 1
+# 10 & 10
+# lr_scheduler:
+#   model: OneCycleLR
+#   kwargs:
+#     # max_lr: 1.0e-6 # set by parameters from optimizer section
+#     # epochs: 200
+#     # steps_per_epoch: *STEPS
+#     total_steps: 400
+#     # pct_start=0.3
+#     div_factor: 25   # 100     # init_lr  = max_lr / div_factor
+#     final_div_factor: 10 # 1  # final_lr = init_lr / final_div_factor = max_lr / (div_factor * final_div_factor)
+#     three_phase: True
+
+  # model: CyclicLR
+  # kwargs:
+  #   # base_lr: 1.0e-6 # set by parameters from optimizer section
+  #   # max_lr: 1.0e-4 # set a multiplication factor instead!
+  #   step_size_up: 100 # = step_size_down
+  #   cycle_momentum: false
+  #   max_lr_factor: 5 # multiplication factor: max_lr = base_lr * max_lr_factor
+
+#   model: CosineAnnealingLR
+#   kwargs:
+#     T_max: 200000 # 100 * 200
+#     eta_min: 1.0e-3
+
+  # model: LinearLR
+  # kwargs:
+  #   start_factor: 0.1
+  #   end_factor: 1.0
+  #   total_iters: 50 # epochs !
 
 convergence:
-  minimum_lr: &MIN_LR 1.0e-8
+  minimum_lr: &MIN_LR 1.0e-10
 
 auto_schedulers:
   # ChainedSchedulers are called on validation loss, thus "epochs" refers to the number
@@ -131,45 +233,9 @@ auto_schedulers:
   #     min_lr: *MIN_LR      # lower bound on LR
   #     verbose: true
 
-# DEEPSURFER uses three phases with different weighting of these losses:
-#           matched chamfer Hinge
-# stage 1 : 1       1       100     end epoch 400
-# stage 2 : 0.1     1       10      end epoch 800
-# stage 3 : 0.0001  1       0.5/0.2 (white/pial)
 
-# At the specified epoch, update the entry
-manual_schedulers:
-  # loss_weights:
-  #   "400":
-  #     surface:
-  #       white:
-  #         MatchedDistanceLoss: 0.1
-  #         SymmetricChamferLoss: 1.0
-  #         SymmetricCurvatureLoss: 10.0
-  #         EdgeLengthVarianceLoss: 1.0
-  #       pial:
-  #         MatchedDistanceLoss: 0.1
-  #         SymmetricChamferLoss: 1.0
-  #         SymmetricCurvatureLoss: 10.0
-  #         EdgeLengthVarianceLoss: 1.0
-  #   "800":
-  #     surface:
-  #       white:
-  #         MatchedDistanceLoss: 0.0001
-  #         SymmetricChamferLoss: 1.0
-  #         SymmetricCurvatureLoss: 0.5
-  #         EdgeLengthVarianceLoss: 1.0
-  #       pial:
-  #         MatchedDistanceLoss: 0.0001
-  #         SymmetricChamferLoss: 1.0
-  #         SymmetricCurvatureLoss: 0.2
-  #         EdgeLengthVarianceLoss: 1.0
-  # tasks:
-  #   "1000":
-  #     surface:
-  #       module_kwargs:
-  #         prediction_res: 5
-  #   "2000":
-  #     surface:
-  #       module_kwargs:
-  #         prediction_res: 6
+
+# LossWeightScheduler
+# action: MultiplyEvery
+# frequency: 50
+# factor: 0.9

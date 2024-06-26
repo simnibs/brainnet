@@ -1,0 +1,278 @@
+# Specify losses for each task
+
+# if y_pred and y_true are not specified then the task name is used to grab the relevant output and target
+# module: this is essentially a wrapper around the loss function which, for
+#         example, takes care of passing the correct input to the loss function
+#         from brainnet.modules.task_losses
+# loss: name of the actual loss function used
+
+# Normalize loss weights to sum to one
+# normalize_weights: true
+
+# # normalize loss weights to sum to one (i.e., within tasks)
+# normalize_loss_weights: true
+# # normalize task weights to sum to one (i.e., across tasks)
+# normalize_task_weights: true
+
+# criterion:
+#   # kwargs
+#   prepare_for_surface_loss:
+#     n_samples: 50000
+#     smooth_y_true: True
+#     curv_weight: 1.0
+
+
+
+# Entries should match the tasks of the selected model
+functions:
+
+  # Segmentation
+
+  # Adam with LR 1e-3 for 200 epochs initially
+
+  # seg:
+  #   DiceCE:
+  #     module:
+  #       name: SupervisedLoss
+  #       kwargs: # initialization kwargs for module
+  #         y_pred: segmentation
+  #         y_true: segmentation
+  #     loss:
+  #       name: monai.losses.DiceCELoss
+  #       kwargs: # initialization kwargs for loss function
+  #         # include_background: false  # default = true
+  #         softmax: true     # apply softmax before dice loss
+  #         # lambda_dice: 0.5  # default = 1.0
+  #         # lambda_ce: 0.5    # default = 1.0
+
+  # seg:
+  #   DiceCE:
+  #     module:
+  #       name: MaskedSupervisedLoss
+  #       kwargs: # initialization kwargs for module
+  #         y_pred: segmentation
+  #         y_true: segmentation
+  #     loss:
+  #       name: monai.losses.DiceCELoss
+  #       kwargs: # initialization kwargs for loss function
+  #         # include_background: false  # default = true
+  #         softmax: true     # apply softmax before dice loss
+  #         # lambda_dice: 0.5  # default = 1.0
+  #         # lambda_ce: 0.5    # default = 1.0
+
+
+  # Surface
+  # Loss is averaged across lh and rh (as available)
+
+  white:
+    matched:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: white
+          y_true: white
+      loss:
+        name: brainnet.modules.losses.MatchedDistanceLoss
+
+    hinge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: white
+      loss:
+        name: brainnet.modules.losses.HingeLoss
+
+    edge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: white
+      loss:
+        name: brainnet.modules.losses.EdgeLengthVarianceLoss
+
+    chamfer:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: white
+          y_true: white
+      loss:
+        # name: brainnet.modules.losses.AsymmetricChamferLoss
+        name: brainnet.modules.losses.SymmetricChamferLoss
+
+    curv:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: white
+          y_true: white
+      loss:
+        name: brainnet.modules.losses.SymmetricCurvatureNormLoss
+        # name: brainnet.modules.losses.AsymmetricCurvatureNormLoss
+
+
+  pial:
+    matched:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: pial
+          y_true: pial
+      loss:
+        name: brainnet.modules.losses.MatchedDistanceLoss
+
+    hinge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: pial
+      loss:
+        name: brainnet.modules.losses.HingeLoss
+
+    edge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: pial
+      loss:
+        name: brainnet.modules.losses.EdgeLengthVarianceLoss
+
+    chamfer:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: pial
+          y_true: pial
+      loss:
+        # name: brainnet.modules.losses.AsymmetricChamferLoss
+        name: brainnet.modules.losses.SymmetricChamferLoss
+
+    curv:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: pial
+          y_true: pial
+      loss:
+        name: brainnet.modules.losses.SymmetricCurvatureNormLoss
+        # name: brainnet.modules.losses.AsymmetricCurvatureNormLoss
+
+  # cross:
+  #   thickness:
+  #     module:
+  #       name: SurfaceSupervisedLoss
+  #       kwargs:
+  #         y_pred: null # pass white *and* pial
+  #         y_true: null # pass white *and* pial
+  #     loss:
+  #       name: brainnet.modules.losses.SymmetricThicknessLoss
+
+
+  # Biasfield
+
+  # bias:MSE:
+  #   module:
+  #     name: SoftMaskedSupervisedLoss
+  #     kwargs:
+  #       y_pred: biasfield
+  #       y_true: biasfield
+  #       mask: segmentation      # image to use for masking
+  #       background_channel: 0   # channel number to use for masking (= lut.background)
+  #   loss:
+  #     name: torch.nn.MSELoss
+
+  # PD synthesis
+  # PD:l1:
+  #   module:
+  #     name: SupervisedLoss
+  #     kwargs:
+  #       y_pred: PD
+  #       y_true: PD
+  #   loss:
+  #     name: torch.nn.L1Loss
+  # PD:dice:
+  #   module:
+  #     name: ModelSupervisedLoss
+  #     kwargs:
+  #       y_pred: PD
+  #       y_true: segmentation
+  #       model: !include config/model/segment_t1.yaml
+  #       model_state: PathToStateDict.pt
+  #   loss:
+  #     name: monai.losses.DiceCELoss
+  #     include_background: true
+
+
+  # Optional tasks
+  # T1:
+  #   L1: # !ImageLoss
+  #     module: ImageLoss
+  #     loss: L1Loss
+  #   Dice (sup):
+  #     module: ModelSupervisedLoss
+  #     loss: DiceLoss
+  #     y_true: segmentation
+  #     model: /path/to/model_t1.pt # should contain the network structure itself (variable `model`)
+  #     state: /path/to/state_t1.pt # model state (variable `state_dict`)
+  # CT:
+  #   L1:
+  #     module: ImageLoss
+  #     loss: L1Loss
+  #   Dice (sup):
+  #     module: ModelSupervisedLoss
+  #     loss: DiceLoss
+  #     y_true: segmentation
+  #     model: /path/to/model_ct.pt
+  #     state: /path/to/state_ct.pt
+
+
+# DEEPSURFER uses three phases with different weighting of these losses:
+#           matched chamfer Hinge
+# stage 1 : 1       1       100     end epoch 400
+# stage 2 : 0.1     1       10      end epoch 800
+# stage 3 : 0.0001  1       0.5/0.2 (white/pial)
+
+
+head_weights:
+  seg: 1.0
+  white: 1.0
+  pial: 1.0
+  cross: 1.0
+  # T1: 1.0
+  # PD: 1.0
+
+loss_weights:
+  seg:
+    DiceCE: 1.0
+
+    #           1     200     400     600     800     1000    1200    1400    ... 1800
+    # pred res  4     4       4       4       4       5       5       5       5
+    # ----------------------------------------------------------------------------------
+    # matched   1.0   1.0     1.0     0.01    0.01    0.001            0.0        0.0
+    # hinge   100.0  10.0    10.0     0.1     0.1     0.01             0.0        0.0
+    # edge     10.0  10.0    10.0    10.0    10.0     10.0             5.0        2.5
+    # chamfer                         1.0     1.0     1.0      1.0     1.0        1.0
+    # curv                           50.0    50.0    10.0     10.0    10.0        5.0/2.5
+    #
+
+  white:
+    matched: &matched   1.0
+    hinge: &hinge     100.0
+    edge: &edge         5.0
+    chamfer: &chamfer   0.0
+    curv: &curv         0.0
+  pial:
+    matched: *matched
+    hinge: *hinge
+    edge: *edge
+    chamfer: *chamfer
+    curv: *curv
+  # cross:
+  #   thickness: 1.0
+
+  # T1:
+  #   l1: 1.0
+  #   DiceCE: 1.0
+  # PD:
+  #   l1: 1.0
+  #   DiceCE: 1.0

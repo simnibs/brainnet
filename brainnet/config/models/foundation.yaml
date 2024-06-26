@@ -1,35 +1,39 @@
-feature_extractor:
+# feature_extractor:
+body:
+  # model: UNet
+  # kwargs:
+  #   spatial_dims: 3
+  #   in_channels: 1
+  #   out_channels: 64
+  #   channels: [64, 128, 256, 512] # [64, 128, 256, 512, 1024]
+  #   strides: [2, 2, 2] #[1, 1, 1, 1]
+  #   # defaults:
+  #   num_res_units: 2
+  #   # act: PRELU
+  #   # norm: INSTANCE
+  #   # dropout: 0.0
+  #   # bias: true
+  #   # adn_ordering: NDA # order of activation, dropout, normalization
+
   model: UNet
   kwargs:
     spatial_dims: 3
     in_channels: 1
-    out_channels: 64
-    channels: [64, 128, 256, 512] # [64, 128, 256, 512, 1024]
-    strides: [2, 2, 2] #[1, 1, 1, 1]
-    # defaults:
-    # num_res_units: 0
-    # act: PRELU
-    # norm: INSTANCE
-    # dropout: 0.0
-    # bias: true
-    # adn_ordering: NDA # order of activation, dropout, normalization
+    encoder_channels: [[32], [64], [96], [128], [160]]
+    decoder_channels: [[128], [96], [64], [64]]
+
+# model: RegUNet
+# kwargs:
+#   spatial_dims: 3
+#   in_channels: 1
+#   num_channel_initial: 64
+#   depth: 3
+#   out_channels: 64
 
 # DEFINE TASKS
 
-# Defining tasks
-# --------------
-# Tasks is a dict defining the desired "tasks" to perform. These are chained
-# after the feature extraction stage. Each task is defined by a name and a dict
-# with the following entries
-#
-# module              str   name of valid task module as found in MedID.models.task_modules.py.
-# module_kwargs       dict  key-word arguments to pass to the module constructor.
-# postprocess         bool  if a task module defines a `postprocess` method then apply this.
-# postprocess_kwargs  dict  key-word arguments to pass to this method postprocess method.
-
 # NOTES:
 # - Number of `in_channels` are given by `out_channels` of the feature extractor
-
 
 # NOTE:
 
@@ -37,22 +41,26 @@ feature_extractor:
 # computed for samples where this image is available. This is typically
 # relevant for image synthesis.
 
-tasks:
+heads:
+  surface:
+    module:
+      name: SurfaceModule
+      kwargs:
+        prediction_res: 4 # available resolutions: 0 - 6
+    runtime_kwargs:
+      return_pial: true
 
   # segmentation:
   #   module:
   #     name: SegmentationModule
   #     kwargs:
   #       out_channels: 33
+
   #   postprocess: true
   #   postprocess_kwargs:
   #     labels: #[...]
 
-  surface:
-    module:
-      name: SurfaceModule
-      kwargs:
-        prediction_res: 4 # 0 - 6
+
 
   # biasfield:
   #   module: BiasFieldModule

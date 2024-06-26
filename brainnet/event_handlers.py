@@ -66,10 +66,29 @@ def evaluate_model(engine, name, evaluator, dataloader):
 
 
 
+def optimizer_set_lr(engine, lr):
+    if isinstance(lr, (float, int)):
+        for param_group in engine.process_function.optimizer.param_groups:
+            param_group["lr"] = lr
+    else:
+        for param_group,gr_lr in zip(engine.process_function.optimizer.param_groups, lr):
+            param_group["lr"] = gr_lr
+
+def optimizer_multiply_lr(engine, factor):
+    if isinstance(factor, (float, int)):
+        for param_group in engine.process_function.optimizer.param_groups:
+            param_group["lr"] = factor
+    else:
+        for param_group,gr_factor in zip(engine.process_function.optimizer.param_groups, factor):
+            param_group["lr"] = gr_factor
+
+
+
+
 # WANDB LOGGING
 
 def wandb_init(engine, config):
-    wandb_dir = Path(config.wandb_dir)
+    wandb_dir = config.wandb_dir
     if not wandb_dir.exists():
         wandb_dir.mkdir(parents=True)
 

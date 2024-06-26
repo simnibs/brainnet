@@ -16,14 +16,14 @@ smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, cu
 
 
 def atleast_nd_prepend(t, n):
-    if t.ndim == n:
+    if t.ndim >= n:
         return t
     else:
         return atleast_nd_prepend(t[None], n)
 
 
 def atleast_nd_append(t, n):
-    if t.ndim == n:
+    if t.ndim >= n:
         return t
     else:
         return atleast_nd_append(t[..., None], n)
@@ -523,7 +523,7 @@ class TemplateSurfaces:
 
     def compute_self_intersections(self):
         assert self.vertices.dtype == torch.float
-        assert self.faces.dtype == torch.int64
+        assert self.faces.dtype == torch.int # torch.int64
         vertices = self.vertices.detach()
         faces = self.faces.detach()
 

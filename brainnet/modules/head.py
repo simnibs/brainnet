@@ -2,7 +2,7 @@ import torch
 
 import monai
 from monai.networks.blocks import Convolution
-from brainnet.modules.topofit.models import TopoFitGraph
+from brainnet.modules.topofit.models import TopoFitGraph, TopoFitGraphAdjust
 
 """
 image -> feature extractor -> task nets -> prediction
@@ -10,14 +10,14 @@ image -> feature extractor -> task nets -> prediction
 Downstream task networks. These all takes as input a feature tensor
 
 and returns a prediction.
-
+1
 """
 
 # def apply_postprocessing(module, *args, **kwargs):
 #     return module.postprocess(*args, **kwargs) if hasattr(module, "postprocess") else
 
 
-class TaskModule(torch.nn.Module):
+class HeadModule(torch.nn.Module):
     def __init__(self, in_channels, out_channels, extra_convs=None) -> None:
         super().__init__()
 
@@ -40,7 +40,7 @@ class TaskModule(torch.nn.Module):
         return self.convs(features)
 
 
-class SegmentationModule(TaskModule):
+class SegmentationModule(HeadModule):
     def __init__(self, *args, dim=1, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -56,7 +56,7 @@ class SegmentationModule(TaskModule):
         return index if labels is None else labels[index]
 
 
-class SuperResolutionModule(TaskModule):
+class SuperResolutionModule(HeadModule):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -93,7 +93,11 @@ class BiasFieldModule(torch.nn.Module):
         if self.feature_level is not None:
             features = features[self.feature_level]
         x = self.convolve(features)
-        x = x if self.out_shape.equal(torch.tensor(x.shape)) else monai.transforms.Resize(x)
+        x = (
+            x
+            if self.out_shape.equal(torch.tensor(x.shape))
+            else monai.transforms.Resize(x)
+        )
         return x.exp()
 
 
@@ -123,4 +127,8 @@ class ContrastiveModule(torch.nn.Module):
     #         output['feat'][-1] = F.normalize(output['feat'][-1], dim = 1)
     #     return outputs
 
+
 SurfaceModule = TopoFitGraph
+SurfaceAdjustModule = TopoFitGraphAdjust
+
+surface_modules = (SurfaceModule, SurfaceAdjustModule)

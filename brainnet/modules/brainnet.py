@@ -1,24 +1,24 @@
 from types import SimpleNamespace
 
-from monai.networks import nets
 import torch
 
-from brainnet.modules import tasks
+from brainnet.modules import head
 
-VALID_FEATURE_EXTRACTORS = {
+VALID_BASE_NETS = {
     "UNet",
     "ResNet",
 }
 
+from brainnet.modules.body.unet import UNet
 
 class BrainNet(torch.nn.Module):
-    def __init__(self, feature_extractor_config, task_config, device):
-        """Construct the BrainNet model consisting of feature extractor and
-        tasks.
+    def __init__(self, body_config, head_config, device):
+        """Construct the BrainNet model consisting of body (image feature
+        extractor) and one or more heads (task specific predictors).
 
         Parameters
         ----------
-        feature_extractor_config : _type_
+        body_config : _type_
             _description_
         task_config : _type_
             _description_
@@ -28,46 +28,50 @@ class BrainNet(torch.nn.Module):
         device = torch.device(device)
 
         assert (
-            feature_extractor_config.model in VALID_FEATURE_EXTRACTORS
-        ), f"Invalid feature network. Please chose from {VALID_FEATURE_EXTRACTORS}"
+            body_config.model in VALID_BASE_NETS
+        ), f"Invalid feature network. Please chose from {VALID_BASE_NETS}"
 
         # Build feature extractor
-        self.feature_extractor = getattr(nets, feature_extractor_config.model)(
-            **(vars(feature_extractor_config.kwargs) if feature_extractor_config.kwargs is not None else {})
+        # self.body = getattr(nets, body_config.model)(
+        #     **(vars(body_config.kwargs) if body_config.kwargs is not None else {})
+        # )
+        self.body = UNet(
+            **(vars(body_config.kwargs) if body_config.kwargs is not None else {})
         )
 
-        # set `in_channels` for tasks to `out_channels` from feature extractor
-        for task in vars(task_config).values():
-            if not hasattr(task.module, "kwargs"):
-                task.module.kwargs = SimpleNamespace()
+        # set `in_channels` for heads to `out_channels` from feature extractor
+        for h in vars(head_config).values():
+            if not hasattr(h.module, "kwargs"):
+                h.module.kwargs = SimpleNamespace()
 
-            if not hasattr(task.module.kwargs, "in_channels"):
-                task.module.kwargs.in_channels = feature_extractor_config.kwargs.out_channels
+            if not hasattr(h.module.kwargs, "in_channels"):
+                # task.module.kwargs.in_channels = body_config.kwargs.out_channels
+                h.module.kwargs.in_channels = body_config.kwargs.decoder_channels[-1][-1]
 
             # Module-specific setup
-            if task.module.name == "SurfaceModule":
-                task.module.kwargs.device = device
+            if h.module.name in {"SurfaceModule", "SurfaceAdjustModule"}:
+                h.module.kwargs.device = device
 
-            elif task.module.name == "BiasFieldModule":
+            elif h.module.name == "BiasFieldModule":
                 raise NotImplementedError
 
-                if "in_channels" not in task["module_kwargs"]:
+                if "in_channels" not in h["module_kwargs"]:
                     pass
-                if "target_shape" not in task["module_kwargs"]:
+                if "target_shape" not in h["module_kwargs"]:
                     pass
 
-        # Build tasks, e.g., segmentation, SR, surface
-        self.tasks = torch.nn.ModuleDict(
+        # Build heads, e.g., segmentation, SR, surface
+        self.heads = torch.nn.ModuleDict(
             {
-                name: getattr(tasks, task.module.name)(**vars(task.module.kwargs))
-                for name, task in vars(task_config).items()
+                name: getattr(head, head.module.name)(**vars(head.module.kwargs))
+                for name, head in vars(head_config).items()
             }
         )
 
-        biasfieldmodule = [task for task in self.tasks.values() if isinstance(task, tasks.BiasFieldModule)]
+        biasfieldmodule = [head for head in self.heads.values() if isinstance(head, head.BiasFieldModule)]
         # Register a forward hook for the desired activation.
         if (n := len(biasfieldmodule)) > 0:
-            assert n == 1, "only one task of class BiasFieldModule supported."
+            assert n == 1, "only one task head of class BiasFieldModule supported."
             biasfieldmodule = biasfieldmodule[0]
             if biasfieldmodule.feature_level != -1:
                 self._feature_activations = {}
@@ -78,14 +82,15 @@ class BrainNet(torch.nn.Module):
                     return hook
 
                 # string, e.g., model.1.submodule.1.submodule.1
-                self._feature_hook = self.feature_extractor.get_submodule(
-                    task_config.feature_submodule
+                self._feature_hook = self.body.get_submodule(
+                    head_config.feature_submodule
                 ).register_forward_hook(_activation_from_layer("bias_field_features"))
 
     def forward(
         self,
         image: torch.Tensor,
-        initial_vertices: torch.Tensor | None = None,
+        initial_vertices: None | dict = None,
+        head_kwargs = None,
     ) -> dict:
         """
 
@@ -102,25 +107,29 @@ class BrainNet(torch.nn.Module):
             Dictionary containing the output of each task using the task name
             as the key.
         """
-        features = self.feature_extractor(image)
         pred = {}
-        for name, task in self.tasks.items():
-            if isinstance(task, tasks.TaskModule):
-                y = task(features)
-            elif isinstance(task, tasks.BiasFieldModule):
-                if task.feature_level == -1:
-                    y = task(features)
+        head_kwargs = head_kwargs or {}
+
+        features = self.body(image)
+
+        for name, head in self.heads.items():
+            kwargs = head_kwargs[name] if name in head_kwargs else {}
+            if isinstance(head, head.HeadModule):
+                y = head(features, **kwargs)
+            elif isinstance(head, head.BiasFieldModule):
+                if head.feature_level == -1:
+                    y = head(features, **kwargs)
                 else:
                     intermediate_features = self._feature_activations[
                         "bias_field_features"
                     ]
-                    y = task(intermediate_features)
+                    y = head(intermediate_features, **kwargs)
                     self._feature_hook.remove()
-            elif isinstance(task, tasks.ContrastiveModule):
-                y = task(features)
-            elif isinstance(task, tasks.SurfaceModule):
-                y = task(features, initial_vertices)
+            elif isinstance(head, head.ContrastiveModule):
+                y = head(features, **kwargs)
+            elif isinstance(head, head.surface_modules):
+                y = head(features, initial_vertices, **kwargs)
             else:
-                raise ValueError(f"Unknown task class {task}")
+                raise ValueError(f"Unknown head class {head}")
             pred[name] = y
         return pred

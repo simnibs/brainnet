@@ -1,7 +1,8 @@
-
 import torch
 
 from brainnet.modules.topofit.utilities import grid_sample
+from brainnet.mesh.surface import TemplateSurfaces
+
 
 class GraphConv(torch.nn.Module):
     """Graph convolution block from Morris et al. (2018) as presented in eq. 5.
@@ -23,7 +24,6 @@ class GraphConv(torch.nn.Module):
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
         bias=False,
-        # activation="leaky",
         # dropout_p=0.0,
     ):
         super().__init__()
@@ -49,7 +49,6 @@ class GraphConv(torch.nn.Module):
         # self.apply_dropout = dropout_p > 0.0
         # if self.apply_dropout:
         #     self.dropout = torch.nn.Dropout1d(dropout_p)
-
 
     def forward(self, in_features):
         # F_in : (batch, channels, vertices)
@@ -89,9 +88,9 @@ class EdgeConv(torch.nn.Module):
         out_channels: int,
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
-        batchnorm=True,
-        # activation="leaky",
+        # batchnorm=True,
         bias: bool = True,
+        init_zeros: bool = False,
     ):
         super().__init__()
         self.in_channels = 2 * in_channels  # vertex and neighbor concatenation
@@ -102,12 +101,10 @@ class EdgeConv(torch.nn.Module):
         # self.linear = torch.nn.Linear(in_channels, out_channels, bias)
         self.conv = torch.nn.Conv1d(self.in_channels, out_channels, 1, bias=bias)
 
-        # if activation is None:
-        #     self.activation = lambda x: x
-        # elif activation == "leaky":
-        #     self.activation = torch.nn.PReLU(init=0.3)
-        # else:
-        #     raise ValueError
+        if init_zeros:
+            torch.nn.init.zeros_(self.conv.weight)
+            if bias:
+                torch.nn.init.zeros_(self.conv.bias)
 
         self.activation = torch.nn.PReLU(init=0.3)
 
@@ -129,9 +126,7 @@ class EdgeConv(torch.nn.Module):
         F_e = self.conv(concat_features)
 
         # Index pooling of features
-        out = torch.zeros(
-            out_shape, dtype=in_features.dtype, device=in_features.device
-        )
+        out = torch.zeros(out_shape, dtype=in_features.dtype, device=in_features.device)
         out.index_reduce_(
             dim=-1,
             index=self.reduce_index,
@@ -238,9 +233,13 @@ class GraphUnpool(torch.nn.Module):
 
 class GraphLinearDeform(torch.nn.Module):
     def __init__(
-        self, in_channels: int, channels: list[int],
+        self,
+        in_channels: int,
+        channels: list[int],
         n_iterations: int = 1,
-        batch_norm=False,
+        batch_norm = False,
+        add_normal_features = False,
+        topology=None,
     ) -> None:
         super().__init__()
         """Quadrature deformation block.
@@ -262,14 +261,24 @@ class GraphLinearDeform(torch.nn.Module):
 
 
         """
-        # Whereas the original TopoFit works with coordinates in voxel space
-        # (e.g., range [0, 200]), we use normalized coordinates (range [-1, 1])
+        ndim = 3
 
+        self.add_normal_features = add_normal_features
         self.n_iterations = n_iterations
         self.scale = 1 / self.n_iterations
 
+        if self.add_normal_features:
+            assert topology is not None
+            # initialize with batch size = 1
+            self._surface = TemplateSurfaces(
+                torch.empty((1, topology.n_vertices, 3), device=topology.faces.device),
+                topology.faces,
+            )
+
+            in_channels += 3
+
         # we might as well use linear layers but use 1D convolutions instead as
-        # that eats the tensors as (N, C)
+        # that expects tensors of the format (N, C)
         self.quad_block = torch.nn.Sequential()
         for out_ch in channels:
             self.quad_block.append(torch.nn.Conv1d(in_channels, out_ch, 1))
@@ -279,8 +288,7 @@ class GraphLinearDeform(torch.nn.Module):
             in_channels = out_ch
 
         # we work in 3D so three output channels
-        self.quad_block.append(torch.nn.Conv1d(in_channels, 3, 1))
-
+        self.quad_block.append(torch.nn.Conv1d(in_channels, ndim, 1))
 
     def forward(self, image, vertices):
         """
@@ -290,8 +298,14 @@ class GraphLinearDeform(torch.nn.Module):
         vertices :
             shape (N, M, 3)
         """
-        for _ in torch.arange(self.n_iterations):
+        for _ in torch.arange(self.n_iterations, device=image.device):
             features = grid_sample(image, vertices)
+
+            if self.add_normal_features:
+                self._surface.vertices = vertices.mT
+                nn = self._surface.compute_vertex_normals().mT
+                features = torch.cat((features, nn), dim=1)
+
             features = self.quad_block(features)
             vertices = vertices + self.scale * features
 

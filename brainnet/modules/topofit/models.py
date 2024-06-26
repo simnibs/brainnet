@@ -1,13 +1,10 @@
-from typing import Union
-
 import torch
-from monai.networks.blocks import Convolution
 
-from brainnet.modules.topofit.config import TopoFitModelParameters, UnetParameters
+from brainnet.mesh import topology
 
 from brainnet.modules.topofit import layers
+from brainnet.modules.topofit.config import TopoFitModelParameters, UnetParameters
 from brainnet.modules.topofit.utilities import grid_sample
-from brainnet.mesh import topology
 
 default_hemispheres = ("lh", "rh")
 
@@ -28,9 +25,9 @@ class GraphUNet(torch.nn.Module):
         self,
         in_channels: int,
         topologies: list[topology.Topology],
-        conv_module: Union[layers.GraphConv, layers.EdgeConv],
+        conv_module: layers.GraphConv | layers.EdgeConv,
         reduce: str = "amax",
-        channels: Union[int, dict] = 32,
+        channels: int | dict = 32,
         n_levels: int = 4,
         multiplier: int = 2,
         n_conv: int = 1,
@@ -167,7 +164,7 @@ class GraphUNetDeform(torch.nn.Module):
         self,
         in_channels: int,
         topologies: list[topology.Topology],
-        conv_module: Union[layers.GraphConv, layers.EdgeConv],
+        conv_module: layers.GraphConv | layers.EdgeConv,
         # euler_step_size: float, # unused
         euler_iterations: int,
         config_unet: UnetParameters,
@@ -178,17 +175,12 @@ class GraphUNetDeform(torch.nn.Module):
         """
         super().__init__()
 
-        ndim = 3
-
-        # Whereas the original TopoFit works with coordinates in voxel space
-        # (e.g., range [0, 200]), we use normalized coordinates (range [-1, 1])
-        # so use this as an approximate scaling factor of the deformation
+        spatial_dims = 3
+        self.euler_iterations = euler_iterations
 
         # Initialize this way to get parameter._version == 1 like all the rest
         self.euler_step_size = torch.nn.Parameter(torch.empty([1]))
         torch.nn.init.ones_(self.euler_step_size)
-
-        self.euler_iterations = euler_iterations
 
         self.unet = GraphUNet(
             in_channels,
@@ -204,7 +196,7 @@ class GraphUNetDeform(torch.nn.Module):
         # Final convolution block to estimate deformation field from features
         ri, gi = self.get_prediction_topology().get_convolution_indices()
         self.spatial_deform = conv_module(
-            self.unet.out_ch, ndim, ri, gi, bias=False
+            self.unet.out_ch, spatial_dims, ri, gi, bias=False, init_zeros=True
         )
 
     def get_prediction_topology(self):
@@ -217,11 +209,9 @@ class GraphUNetDeform(torch.nn.Module):
         are applied to the vertices. This process is repeat
         `self.euler_iterations` number of times.
         """
+
         for _ in torch.arange(self.euler_iterations):
             sampled_features = grid_sample(features, vertices)  # image features
-
-            # possibility to add normalized vertex coordinates as features?
-
             sampled_features = self.unet(sampled_features)  # graph features
             deformation = self.spatial_deform(sampled_features)
             vertices = vertices + self.euler_step_size * deformation
@@ -282,13 +272,13 @@ class TopoFitGraph(torch.nn.Module):
         in_channels: int,
         prediction_res: int = 6,
         # n_template_vertices: int = 62,
-        device="cpu",
+        device: str | torch.device = "cpu",
         # image_shape: torch.IntTensor | torch.LongTensor,
         # config: None | config.TopoFitModelParameters = None,
     ) -> None:
         super().__init__()
 
-        self.device = device
+        self.device = torch.device(device)
 
         config = TopoFitModelParameters
 
@@ -345,8 +335,8 @@ class TopoFitGraph(torch.nn.Module):
             in_channels,
             config.linear_deform.channels,
             config.linear_deform.n_iterations,
+            topology=self.get_prediction_topology(),
         )
-        # self.linear_deform1 = GraphLinearDeform(in_channels,  **kwargs_quad)
 
     def get_prediction_topology(self):
         return self.topologies[self.prediction_res]
@@ -355,7 +345,7 @@ class TopoFitGraph(torch.nn.Module):
         self,
         features: torch.Tensor,
         initial_vertices: dict[str, torch.Tensor],
-        # hemispheres: None | tuple | list = None,
+        return_pial=True,
     ):
         """
         Faces can be retrieved from
@@ -382,10 +372,12 @@ class TopoFitGraph(torch.nn.Module):
         """
         self.set_image_center(features)
 
-        return {h:self._forward_hemi(features, v) for h,v in initial_vertices.items()}
+        return {
+            h: self._forward_hemi(features, v, return_pial)
+            for h, v in initial_vertices.items()
+        }
 
-
-    def _forward_hemi(self, features, vertices):
+    def _forward_hemi(self, features, vertices, return_pial):
         """TopoFit prediction."""
         # At each iteration
         #   1. Sample image features at the corresponding points on the surface
@@ -409,18 +401,22 @@ class TopoFitGraph(torch.nn.Module):
                 topo = unet_deform.get_prediction_topology()
                 vertices = topo.subdivide_vertices(vertices)
 
-        # Expand white matter
-
-        # NOTE Currently layer4 is not supervised so it is not valid
-        vertices_layer4 = self.linear_deform(features, vertices)
-        vertices_pial = self.linear_deform(features, vertices_layer4)
-
-        # vertices = self.unnormalize_coordinates(vertices)
-        # vertices_pial = self.unnormalize_coordinates(vertices_pial)
-
         # Transpose back to (N, M, 3)
-        return dict(white=vertices.mT, pial=vertices_pial.mT)
+        out = dict(white=vertices.mT)
 
+        if return_pial:
+            # Expand white matter
+
+            # NOTE Currently layer4 is not supervised so it is not valid
+            vertices_layer4 = self.linear_deform(features, vertices)
+            vertices_pial = self.linear_deform(features, vertices_layer4)
+
+            # vertices = self.unnormalize_coordinates(vertices)
+            # vertices_pial = self.unnormalize_coordinates(vertices_pial)
+
+            out["pial"] = vertices_pial.mT
+
+        return out
 
     def set_image_center(self, image):
         """This is used with grid sampling with align_corners=True."""
@@ -436,6 +432,47 @@ class TopoFitGraph(torch.nn.Module):
         return (coords - self._image_center) / self._image_center
         # return torch.clip((v - self._image_center) / self._image_center, -1.0, 1.0)
 
-
     def unnormalize_coordinates(self, coords):
         return self._image_center * coords + self._image_center
+
+
+class TopoFitGraphAdjust(torch.nn.Module):
+    def __init__(
+        self,
+        surfaces,
+        in_channels,
+        resolution: int = 6,
+        channels: list[int] = [32],
+        n_iterations: int = 5,
+        device: str = "cpu",
+    ) -> None:
+        super().__init__()
+
+        self.prediction_topology = topology.get_recursively_subdivided_topology(
+            resolution,
+            topology.initial_faces.to(device),
+        )[-1]
+
+        self.deformation = torch.nn.ModuleDict(
+            {
+                k: layers.GraphLinearDeform(
+                    in_channels, channels, n_iterations, topology=self.prediction_topology
+                )
+                for k in surfaces
+            }
+        )
+
+    def get_prediction_topology(self):
+        return self.prediction_topology
+
+    def forward(
+        self, features: torch.Tensor, initial_vertices: dict[str, dict[str, torch.Tensor]],
+    ):
+        # initial_vertices, e.g.,
+        #   {lh: {white: tensor, pial: tensor}, rh: {white: tensor, pial:tensor}}
+        return {
+            hemi: {
+                surf: self.deformation[surf](features, v.mT).mT for surf, v in surfs.items()
+            }
+            for hemi, surfs in initial_vertices.items()
+        }

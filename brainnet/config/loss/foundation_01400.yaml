@@ -1,0 +1,110 @@
+functions:
+  white:
+    matched:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: white
+          y_true: white
+      loss:
+        name: brainnet.modules.losses.MatchedDistanceLoss
+    hinge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: white
+      loss:
+        name: brainnet.modules.losses.HingeLoss
+    edge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: white
+      loss:
+        name: brainnet.modules.losses.EdgeLengthVarianceLoss
+    chamfer:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: white
+          y_true: white
+      loss:
+        name: brainnet.modules.losses.SymmetricChamferLoss
+    curv:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: white
+          y_true: white
+      loss:
+        name: brainnet.modules.losses.SymmetricCurvatureNormLoss
+  pial:
+    matched:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: pial
+          y_true: pial
+      loss:
+        name: brainnet.modules.losses.MatchedDistanceLoss
+    hinge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: pial
+      loss:
+        name: brainnet.modules.losses.HingeLoss
+    edge:
+      module:
+        name: SurfaceRegularizationLoss
+        kwargs:
+          y_pred: pial
+      loss:
+        name: brainnet.modules.losses.EdgeLengthVarianceLoss
+    chamfer:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: pial
+          y_true: pial
+      loss:
+        name: brainnet.modules.losses.SymmetricChamferLoss
+    curv:
+      module:
+        name: SurfaceSupervisedLoss
+        kwargs:
+          y_pred: pial
+          y_true: pial
+      loss:
+        name: brainnet.modules.losses.SymmetricCurvatureNormLoss
+  # cross:
+  #   thickness:
+  #     module:
+  #       name: SurfaceSupervisedLoss
+  #       kwargs:
+  #         y_pred: null # pass white *and* pial
+  #         y_true: null # pass white *and* pial
+  #     loss:
+  #       name: brainnet.modules.losses.SymmetricThicknessLoss
+
+head_weights:
+  seg: 1.0
+  white: 1.0
+  pial: 1.0
+  # cross: 1.0
+
+loss_weights:
+  white:
+    matched: &matched   0.001
+    hinge: &hinge       0.0
+    edge: &edge         2.5
+    chamfer: &chamfer   1.0
+    curv: &curv        10.0
+  pial:
+    matched:            *matched
+    hinge:              *hinge
+    edge:               *edge
+    chamfer:            *chamfer
+    curv:               5.0 # half of white curv
+  # cross:
+  #   thickness: 1.0

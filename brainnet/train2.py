@@ -22,7 +22,7 @@ from brainsynth.dataset import get_dataloader_concatenated_and_split
 
 from brainnet.mesh.surface import TemplateSurfaces
 from brainnet.modules.brainnet import BrainNet
-from brainnet.modules.heads import SurfaceModule
+from brainnet.modules.head import SurfaceModule
 from brainnet.modules.criterion import Criterion
 from brainnet.utilities import recursive_dict_sum
 
@@ -196,7 +196,7 @@ def initialize_dataloaders(ds_config: dict, dl_config: dict):
     # the latter dict has presedence
     return {
         s: setup_dataloader(
-            DatasetConfig(**(config["general"] | config[s])).dataset_kwargs,
+            DatasetConfig(**config[s]).dataset_kwargs,
             dl_config
         )
         for s in subsets
@@ -211,24 +211,9 @@ def initialize_synthesizer(config: dict):
 
 
 def initialize_wandb(engine, config):
-    """Enable logging with wandb."""
-    if not config.enable:
-        engine.state.wandb = None
-
-    engine.add_event_handler(Events.STARTED, event_handlers.wandb_init)
-    engine.add_event_handler(Events.EPOCH_COMPLETED, event_handlers.wandb_log)
-    engine.add_event_handler(Events.COMPLETED, event_handlers.wandb_stop)
-
 
 
 def initialize(config):
-
-
-    synthesizer = brainsynth.Synthesizer(
-        config.synthesizer.config,
-        device=synth_device,
-    )
-    synthesizer.to(synth_device)
 
 
 
@@ -307,6 +292,8 @@ def add_state_entries_(trainer, config):
     trainer.state._update_attrs()
 
 
+train_setup = TrainSetup()
+
 validation_interval = 20
 log_interval = 20
 
@@ -321,12 +308,28 @@ train_step = SupervisedTrainingStep(train_synthesizer, model, train_criterion)
 trainer = Engine(train_step)
 add_state_entries_(trainer, config)
 
-initialize_wandb(trainer, config.wandb)
 
 
+def initialize_events(engine, config):
 
-# LOG - TERMINAL
-trainer.add_event_handler(Events.EPOCH_COMPLETED, event_handlers.TerminalLogger())
+    # Events from config
+    for e in config.events:
+        engine.add_event_handler(
+            getattr(Events, e.event)(**e.event_filter),
+            e.action(**e.action_kwargs)
+        )
+
+    # Enable logging with wandb
+    if config.enable:
+        engine.add_event_handler(Events.STARTED, event_handlers.wandb_init)
+        engine.add_event_handler(Events.EPOCH_COMPLETED, event_handlers.wandb_log)
+        engine.add_event_handler(Events.COMPLETED, event_handlers.wandb_stop)
+    else:
+        engine.state.wandb = None
+
+
+    # TERMINAL logging
+    engine.add_event_handler(Events.EPOCH_COMPLETED, event_handlers.TerminalLogger())
 
 
 # Evaluation
