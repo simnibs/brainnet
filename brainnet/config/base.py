@@ -11,10 +11,16 @@ from brainnet.modules.loss_wrappers import RegularizationLoss, SupervisedLoss
 
 
 @dataclass
-class EventAction:
-    event: CallableEventWithFilter
-    action: Callable
-    action_kwargs: dict | None
+class LossParameters:
+    functions: dict[str, dict[str, RegularizationLoss | SupervisedLoss]]
+    head_weights: dict[str, float]
+    loss_weights: dict[str, dict[str, float]]
+
+
+@dataclass
+class CriterionParameters:
+    train: LossParameters
+    validation: LossParameters
 
 
 @dataclass
@@ -22,12 +28,11 @@ class DataloaderParameters:
     batch_size: int = 1
     num_workers: int = 4
     prefetch_factor: int = 2
-    kwargs: dict | None = None
+    # kwargs: dict | None = None
 
-    def __post_init__(self):
-        if self.kwargs is None:
-            self.kwargs = {}
-
+    # def __post_init__(self):
+    #     if self.kwargs is None:
+    #         self.kwargs = {}
 
 @dataclass
 class DatasetParameters:
@@ -36,10 +41,10 @@ class DatasetParameters:
 
 
 @dataclass
-class LossParameters:
-    functions: dict[str, dict[str, RegularizationLoss | SupervisedLoss]]
-    head_weights: dict[str, float]
-    loss_weights: dict[str, dict[str, float]]
+class EventAction:
+    event: CallableEventWithFilter
+    handler: Callable
+    kwargs: dict | None # kwargs passed to handler (besides engine)
 
 
 @dataclass
@@ -68,10 +73,20 @@ class OptimizerParameters:
 @dataclass
 class ResultsParameters:
     out_dir: Path | str
+    checkpoint_prefix: str = "ckpt"
+    checkpoint_subdir: str = "checkpoint"
+    examples_subdir: str = "examples"
+    save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
 
     def __post_init__(self):
         self.out_dir = Path(self.out_dir)
+        self.checkpoint_dir = self.out_dir / self.checkpoint_subdir
+        self.examples_dir = self.out_dir / self.examples_subdir
 
+        if not self.checkpoint_dir.exists():
+            self.checkpoint_dir.mkdir(parents=True)
+        if not self.examples_dir.exists():
+            self.examples_dir.mkdir(parents=True)
 
 @dataclass
 class SynthesizerParameters:
@@ -83,14 +98,15 @@ class SynthesizerParameters:
 class TrainParameters:
     max_epochs: int
     resume_from_checkpoint: int
-    train_epoch_iter: int = 100
-    val_epoch_iter: int = 50
-    validate_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=10)
-    save_state_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
+    epoch_length_train: int = 100
+    epoch_length_val: int = 50
+    evaluate_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=10)
     events: list[EventAction] | None = None
 
+    enable_amp: bool = True
+
     # Estimate inter-task affinity (ITA)
-    estimate_ITA: bool = False
+    enable_ITA_estimation: bool = False
 
     # Consider the model "converged" when the LR is reduced to this value
     minimum_lr: float = 1e-10
@@ -105,12 +121,14 @@ class WandbParameters:
     project: str
     name: str
     wandb_dir: Path | str
-    resume: str = "auto"
-    kwargs: dict | None = None
+    log_on: CallableEventWithFilter
+    #resume: str = "auto"
 
-    def __post_init__(self):
-        if self.kwargs is None:
-            self.kwargs = {}
+    # kwargs: dict | None = None
+
+    # def __post_init__(self):
+    #     if self.kwargs is None:
+    #         self.kwargs = {}
 
 
 @dataclass
@@ -120,12 +138,12 @@ class TrainSetup:
     run: str
     device: str | torch.device
 
+    criterion: CriterionParameters
     dataloader: DataloaderParameters
     dataset: DatasetParameters
-    loss: LossParameters
     model: ModelParameters
     optimizer: OptimizerParameters
     results: ResultsParameters
-    synthesizer: dict
+    synthesizer: SynthesizerParameters
     train_params: TrainParameters
     wandb: WandbParameters

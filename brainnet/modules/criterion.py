@@ -1,8 +1,7 @@
 import torch
 
-from brainnet.modules import loss_wrappers
-from brainnet.modules import losses
-from brainsynth.config.utilities import recursive_namespace_to_dict
+from brainnet.config import LossParameters
+import brainnet.modules
 
 def recursive_dict_setter(d, k, v):
     if len(k) == 1:
@@ -12,75 +11,14 @@ def recursive_dict_setter(d, k, v):
 
 class Criterion(torch.nn.Module):
 
-    def _update_has_ChamferLoss(self):
-        self.has_ChamferLoss = any(
-            isinstance(
-                loss.loss_fn,
-                (
-                    losses.AsymmetricChamferLoss,
-                    losses.SymmetricChamferLoss,
-                    losses.SymmetricCurvatureNormLoss,
-                    losses.AsymmetricCurvatureNormLoss,
-                ),
-            )
-            and (self.head_weights[head] > 0.0)
-            and (self.loss_weights[head][name] > 0.0)
-            for head, head_losses in self.losses.items()
-            for name, loss in head_losses.items()
-        )
-
-    def _update_active_losses(self):
-        self.active_losses = {
-            head: [name for name in losses if self.loss_weights[head][name] > 0.0]
-            for head, losses in self.losses.items()
-        }
-
-    @property
-    def loss_weights(self):
-        return self._loss_weights
-
-    @loss_weights.setter
-    def loss_weights(self, value):
-
-        if hasattr(self, "_loss_weights"):
-            for k,v in value.items():
-                if isinstance(k, (list,tuple)):
-                    recursive_dict_setter(self._loss_weights, k, v)
-                else:
-                    self._loss_weights[k] = v
-        else:
-            self._loss_weights = value
-
-        self._update_has_ChamferLoss()
-        self._update_active_losses()
-
-
-    @property
-    def head_weights(self):
-        return self._head_weights
-
-    @head_weights.setter
-    def head_weights(self, value):
-        if hasattr(self, "_head_weights"):
-            for k,v in value.items():
-                if isinstance(k, (list,tuple)):
-                    recursive_dict_setter(self._head_weights, k, v)
-                else:
-                    self._head_weights[k] = v
-        else:
-            self._head_weights = value
-
-
-        self._update_has_ChamferLoss()
-
-    def __init__(self, config) -> None:
+    def __init__(self, config: LossParameters) -> None:
         super().__init__()
 
-        # self.weight_threshold = weight_threshold
-        self.config = config
+        self.loss_functions = config.functions
 
-        self.head_weights = recursive_namespace_to_dict(config.head_weights)
-        self.loss_weights = recursive_namespace_to_dict(config.loss_weights)
+        self._head_weights = config.head_weights
+        self._loss_weights = config.loss_weights
+        self._set_active_heads() # sets everything
 
         # across_task_normalizer is computed on every forward pass depending on
         # which task losses are feasible
@@ -90,13 +28,7 @@ class Criterion(torch.nn.Module):
         # }
         # self.across_task_normalizer = {}
 
-        self.losses = {
-            head: {
-                loss_name: self.setup_loss(loss_config)
-                for loss_name, loss_config in vars(head_losses).items()
-            }
-            for head, head_losses in vars(config.functions).items()
-        }
+
 
         # self.lambda_within = {
         #     task: {
@@ -115,53 +47,67 @@ class Criterion(torch.nn.Module):
         #     for task, losses in self.loss_weights.items()
         # }
 
-        # self.has_SymmetricLoss = any(
-        #     isinstance(
-        #         loss.loss_fn, (losses.SymmetricMeanSquaredNormLoss, losses.ASymmetricCurvatureNormLoss)
-        #     )
-        #     for task_losses in self.losses.values()
-        #     for loss in task_losses.values()
-        # )
-        # self.has_CurvatureLoss = any(
-        #     isinstance(loss.loss_fn, (losses.SymmetricCurvatureNormLoss, losses.MatchedCurvatureLoss, losses.AsymmetricCurvatureAngleLoss))
-        #     for task_losses in self.losses.values()
-        #     for loss in task_losses.values()
-        # )
-        self.has_ChamferLoss = any(
+    def _set_active_heads(self):
+        self._active_heads = [h for h,v in self._head_weights.items() if v > 0.0]
+        # if any heads changed status we need to update active losses
+        self._set_active_losses()
+
+    def _set_active_losses(self):
+        # if a head is inactive, all its losses are ignored
+        self._active_losses = {
+            head: [n for n,v in self._loss_weights[head].items() if v > 0.0]
+            for head in self._active_heads
+        }
+        self._set_needs_sampling()
+
+    def _set_needs_sampling(self):
+        """We keep track of this because we can avoid some calculations (e.g.,
+        sampling points and finding nearest neighbors) when there is no active
+        chamfer/curvature loss.
+        """
+        self._needs_sampling = any(
             isinstance(
-                loss.loss_fn,
+                self.loss_functions[head][loss].loss_fn,
                 (
-                    losses.AsymmetricChamferLoss,
-                    losses.SymmetricChamferLoss,
-                    losses.SymmetricCurvatureNormLoss,
-                    losses.AsymmetricCurvatureNormLoss,
+                    brainnet.modules.losses.AsymmetricChamferLoss,
+                    brainnet.modules.losses.AsymmetricCurvatureNormLoss,
+                    brainnet.modules.losses.SymmetricChamferLoss,
+                    brainnet.modules.losses.SymmetricCurvatureNormLoss,
                 ),
             )
-            and (self.head_weights[head] > 0.0)
-            and (self.loss_weights[head][name] > 0.0)
-            for head, head_losses in self.losses.items()
-            for name, loss in head_losses.items()
+            for head, v in self._active_losses.items() for loss in v
         )
 
-        self.active_losses = {
-            head: [name for name in losses if self.loss_weights[head][name] > 0.0]
-            for head, losses in self.losses.items()
-        }
+    def update_head_weights(self, weights):
+        for k,v in weights.items():
+            if isinstance(k, (list,tuple)):
+                recursive_dict_setter(self._head_weights, k, v)
+            else:
+                self._head_weights[k] = v
+        self._set_active_heads()
 
-    @staticmethod
-    def setup_loss(config):
-        # assert "module" in kwargs, "Loss definition should contain `module` definition"
-        # assert "loss" in kwargs, "Loss definition should contain `loss` definition"
+    def update_loss_weights(self, weights):
+        for k,v in weights.items():
+            if isinstance(k, (list,tuple)):
+                recursive_dict_setter(self._loss_weights, k, v)
+            else:
+                self._loss_weights[k] = v
+        self._set_active_losses()
 
-        module = config.module.name
-        module_kw = vars(config.module.kwargs)
+    # @staticmethod
+    # def setup_loss(config):
+    #     # assert "module" in kwargs, "Loss definition should contain `module` definition"
+    #     # assert "loss" in kwargs, "Loss definition should contain `loss` definition"
 
-        loss_fn = config.loss.name
-        loss_kw = vars(config.loss.kwargs) if hasattr(config.loss, "kwargs") else None
+    #     module = config.module.name
+    #     module_kw = vars(config.module.kwargs)
 
-        return getattr(loss_wrappers, module)(
-            loss_fn, **module_kw, loss_fn_kwargs=loss_kw
-        )
+    #     loss_fn = config.loss.name
+    #     loss_kw = vars(config.loss.kwargs) if hasattr(config.loss, "kwargs") else None
+
+    #     return getattr(loss_wrappers, module)(
+    #         loss_fn, **module_kw, loss_fn_kwargs=loss_kw
+    #     )
 
     def apply_weights(self, loss_dict):
         """Apply normalized weights. `forward` needs to be run in order to
@@ -175,11 +121,11 @@ class Criterion(torch.nn.Module):
         """
         return {
             head: {
-                name: loss * self.loss_weights[head][name]
+                loss: value * self._loss_weights[head][loss]
                 # * self.within_task_normalizer[task]
-                * self.head_weights[head]
+                * self._head_weights[head]
                 # * self.across_task_normalizer[task]
-                for name, loss in losses.items()
+                for loss, value in losses.items()
             }
             for head, losses in loss_dict.items()
         }
@@ -194,7 +140,7 @@ class Criterion(torch.nn.Module):
         """Precompute useful things for calculating the losses."""
         # smooth_y_true = False #True # apply smoothing to y_true before calculating K (and H)
 
-        if not self.has_ChamferLoss:
+        if not self._needs_sampling:
             return
 
         # n_samples = self.config.prepare_for_surface_loss.n_samples
@@ -343,30 +289,50 @@ class Criterion(torch.nn.Module):
 
         # Compute raw loss
         loss_dict = {}
-        for head, head_losses in self.losses.items():
+        for head, losses in self._active_losses.items():
             loss_dict[head] = {}
-            found = False
+            for loss in losses:
+                loss_fn = self.loss_functions[head][loss]
+                # we try as this will usually be okay
+                try:
+                    match loss_fn:
+                        case brainnet.modules.loss_wrappers.SupervisedLoss():
+                            value = loss_fn(y_pred, y_true)
+                        case brainnet.modules.loss_wrappers.RegularizationLoss():
+                            value = loss_fn(y_pred)
+                        case _:
+                            raise ValueError
+                    loss_dict[head][loss] = value
+                except KeyError:
+                    # Required data does not exist in y_pred and/or y_true
+                    pass
 
-            for name, loss in head_losses.items():
 
-                if self.loss_weights[head][name] > 0.0:
-                    # we try as this will usually be okay
-                    try:
-                        match loss:
-                            case loss_wrappers.SupervisedLoss():
-                                value = loss(y_pred, y_true)
-                            case loss_wrappers.RegularizationLoss():
-                                value = loss(y_pred)
-                            case _:
-                                raise ValueError
-                        loss_dict[head][name] = value
-                        found = True
-                    except KeyError:
-                        # Required data does not exist in y_pred and/or y_true
-                        pass
+        # loss_dict = {}
+        # for head, head_losses in self.loss_functions.items():
+        #     loss_dict[head] = {}
+        #     found = False
 
-            if not found:
-                del loss_dict[head]
+        #     for name, loss in head_losses.items():
+
+        #         if self._loss_weights[head][name] > 0.0:
+        #             # we try as this will usually be okay
+        #             try:
+        #                 match loss:
+        #                     case loss_wrappers.SupervisedLoss():
+        #                         value = loss(y_pred, y_true)
+        #                     case loss_wrappers.RegularizationLoss():
+        #                         value = loss(y_pred)
+        #                     case _:
+        #                         raise ValueError
+        #                 loss_dict[head][name] = value
+        #                 found = True
+        #             except KeyError:
+        #                 # Required data does not exist in y_pred and/or y_true
+        #                 pass
+
+        #     if not found:
+        #         del loss_dict[head]
 
         # set the across task normalizer
 
@@ -376,3 +342,68 @@ class Criterion(torch.nn.Module):
         # }
 
         return loss_dict
+
+
+import brainnet.utilities
+
+from typing import Callable
+
+import torch
+
+from ignite.exceptions import NotComputableError
+from ignite.metrics.metric import Metric, reinit__is_reduced, sync_all_reduce
+
+class CriterionAggregator(Metric):
+
+    required_output_keys: tuple[str,str] = ("raw", "weighted") #("y_pred", "y", "criterion_kwargs")
+    _state_dict_all_req_keys: tuple[str,str] = ("_sum", "_num_examples")
+
+    def __init__(
+        self,
+        # loss_fn: Callable,
+        output_transform: Callable = lambda x: x,
+        # batch_size: Callable = len,
+        device: str | torch.device = torch.device("cpu"),
+    ):
+        """This "metric" is based on ignite.metrics.Loss but works with a dict of
+        (averaged) losses rather than computing a single loss from y_pred and
+        y. All entries (losses) are averaged separately.
+
+        NOTE This is accurate only when all batches are of equal size!
+        """
+        super().__init__(output_transform, device=device)
+        # self._loss_fn = loss_fn
+        # self._batch_size = batch_size
+
+    @reinit__is_reduced
+    def reset(self) -> None:
+        self._sum = {}
+        self._num_examples = {}
+
+    @reinit__is_reduced
+    def update(self, input_loss: tuple[dict, dict]) -> None:
+        # if len(output) == 2:
+        #     y_pred, y = cast(tuple[torch.Tensor, torch.Tensor], output)
+        #     kwargs: dict = {}
+        # else:
+        #     y_pred, y, kwargs = cast(tuple[torch.Tensor, torch.Tensor, dict], output)
+
+        # loss averaged over batch
+        # loss = self._loss_fn(y_pred, y, **kwargs).detach()
+
+        # the input is converted from mapping to tuple so convert back
+        loss = dict(zip(self.required_output_keys, input_loss))
+
+        # n = self._batch_size(y)
+        batch_size = 1
+        if batch_size > 1:
+            brainnet.utilities.recursive_dict_multiply(loss, batch_size)
+        brainnet.utilities.add_dict(self._sum, loss)
+        brainnet.utilities.increment_dict_count(self._num_examples, loss, batch_size)
+
+
+    @sync_all_reduce("_sum", "_num_examples")
+    def compute(self) -> dict:
+        if len(self._num_examples) == 0:
+            raise NotComputableError("Loss must have at least one example before it can be computed.")
+        return brainnet.utilities.divide_dict(self._sum, self._num_examples)

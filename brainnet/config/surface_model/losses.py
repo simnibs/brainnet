@@ -49,6 +49,24 @@ from brainnet.modules.losses import (
     SymmetricCurvatureNormLoss,
 )
 
+# brainseg = dict(
+#   dice: SupervisedLoss(DiceLoss(), y_pred="brainseg", y_true="brainseg")
+# )
+
+#   DiceCE:
+#     module:
+#       name: SupervisedLoss
+#       kwargs: # initialization kwargs for module
+#         y_pred: segmentation
+#         y_true: segmentation
+#     loss:
+#       name: monai.losses.DiceCELoss
+#       kwargs: # initialization kwargs for loss function
+#         # include_background: false  # default = true
+#         softmax: true     # apply softmax before dice loss
+#         # lambda_dice: 0.5  # default = 1.0
+#         # lambda_ce: 0.5    # default = 1.0
+
 functions = dict(
     white=dict(
         matched=SurfaceSupervisedLoss(
@@ -79,16 +97,19 @@ functions = dict(
     thickness=dict(
         angle=SurfaceRegularizationLoss(
             MatchedAngleLoss(inner="white", outer="pial", cosine_cutoff=0.5),
+            y_pred = None, # pass everything through, i.e., both white and pial
         ),
     ),
 )
 
-head_weights = dict(seg=1.0, white=1.0, pial=1.0, cross=1.0)
+# brainseg=1.0
+head_weights = dict(white=1.0, pial=1.0, thickness=0.0)
 
+# brainseg=dict(dice=1.0),
 loss_weights=dict(
-        seg=dict(DiceCE=1.0),
         white=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
-        pial=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0)
+        pial=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
+        thickness=dict(angle=1.0),
     )
 
 #           1     200     400     600     800     1000    1200    1400    ... 1800

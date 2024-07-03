@@ -53,7 +53,7 @@ def flatten_dict(d: dict, out: None | dict = None, prefix=None): # sep=":"
     return out
 
 def multiply_dicts(values, weights, out: None | dict = None, threshold=1e-8):
-    """Multiply two dicts entry-wise. All entries much match exact."""
+    """Multiply two dicts entry-wise. All entries much match exactly."""
     if out is None:
         out = {}
     for k,v in values.items():
@@ -63,3 +63,61 @@ def multiply_dicts(values, weights, out: None | dict = None, threshold=1e-8):
         else:
             out[k] = v * weights[k] if (weights[k] >= threshold) else 0
     return out
+
+
+def add_dict(a: dict, b: dict):
+    """Add `b` to `a` entrywise (in place). If an entry in `b` doesn't exist in
+    `a`, it is created.
+    """
+    for k,v in b.items():
+        if k in a:
+            if isinstance(v, dict):
+                add_dict(a[k], v)
+            else:
+                a[k] += v
+        else:
+            a[k] = v
+    return a
+
+
+def increment_dict_count(a: dict, b: dict, value: int = 1):
+    """For each entry in `b`, increment the value of the corresponding entry in
+    `a` by 1 (in place). If an entry in `b` doesn't exist in `a`, it is
+    created with a value of 1.
+
+    NOTE a and b should match in the sense that if
+
+        a = dict(a=1)
+        b = dict(a=dict(x=2))
+
+    this will overwrite a=1 with a=dict(x=1)
+
+    but this works
+
+        a = dict(a=dict(y=1))
+        b = dict(a=dict(x=2))
+
+    """
+    for k,v in b.items():
+        if k in a: # error if this is a leaf node in a but not in b!
+            if isinstance(v, dict):
+                increment_dict_count(a[k], v, value)
+            else:
+                a[k] += value
+        else:
+            if isinstance(v, dict):
+                a[k] = {}
+                increment_dict_count(a[k], v, value)
+            else:
+                a[k] = value
+    return a
+
+
+def divide_dict(a: dict, b: dict):
+    """Divide values of `a` with those in `b`. Entries should match."""
+    for k,v in a.items():
+        if isinstance(v, dict):
+            divide_dict(a[k], b[k])
+        else:
+            a[k] /= b[k]
+    return a

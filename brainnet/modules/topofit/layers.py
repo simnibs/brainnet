@@ -126,7 +126,7 @@ class EdgeConv(torch.nn.Module):
         F_e = self.conv(concat_features)
 
         # Index pooling of features
-        out = torch.zeros(out_shape, dtype=in_features.dtype, device=in_features.device)
+        out = torch.zeros(out_shape, dtype=F_e.dtype, device=in_features.device)
         out.index_reduce_(
             dim=-1,
             index=self.reduce_index,
@@ -274,7 +274,6 @@ class GraphLinearDeform(torch.nn.Module):
                 torch.empty((1, topology.n_vertices, 3), device=topology.faces.device),
                 topology.faces,
             )
-
             in_channels += 3
 
         # we might as well use linear layers but use 1D convolutions instead as

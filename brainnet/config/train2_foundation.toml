@@ -1,0 +1,89 @@
+
+
+# results are stored in results_dir/PROJECT_NAME/RUN_NAME/
+[results]
+dir = "/mnt/scratch/personal/jesperdn/results" # PROJECT_NAME will be appended
+
+
+# This section defines keyword arguments passed to DatasetConfig
+
+[dataset]
+[dataset.general]
+target_surface_resolution = 5
+target_surface_hemispheres = "lh"
+initial_surface_resolution = 0
+
+[dataset.train]
+root_dir = "/mnt/projects/CORTECH/nobackup/training_data"
+subject_dir = "/mnt/projects/CORTECH/nobackup/training_data_subjects"
+subject_subset = "train"
+# synthesizer = None
+# datasets = ["ABIDE", "HCP"] # default: all
+# images = ["generation_labels", "t1w"]
+# ds_structure = "flat"
+
+[dataset.validation]
+root_dir = "/mnt/projects/CORTECH/nobackup/training_data"
+subject_dir = "/mnt/projects/CORTECH/nobackup/training_data_subjects"
+subject_subset = "validation"
+# synthesizer = None
+# datasets = ["ABIDE", "HCP"] # default: all
+# images = ["generation_labels", "t1w"]
+# ds_structure = "flat"
+
+[dataloader]
+batch_size = 1
+num_workers = 4
+prefetch_factor = 2 # this seems to be PER dataset..?
+
+
+# kwargs to SynthesizerConfig
+[synthesizer]
+builder = "DefaultSynthBuilder"
+# in_res = [1.0, 1.0, 1.0]
+out_size = [192, 192, 192]
+# align_corners = True
+out_center_str = "lh"
+# segmentation_labels = "brainseg"
+# photo_mode = False
+# photo_spacing_range = [2.0, 7.0]
+# photo_thickness = 0.001
+# alternative_images = [t1w, t2w]
+device = "cuda:0"
+
+[model]
+device = "cuda:0"
+filename = "path/to/model.toml"
+
+# > contents of this node is passed to BrainNet
+# model: !include models/foundation.yaml
+model:
+  body:
+    model: UNet
+    kwargs:
+      spatial_dims: 3
+      in_channels: 1
+      encoder_channels: [[32], [64], [96], [128], [160]]
+      decoder_channels: [[128], [96], [64], [64]]
+  heads:
+    surface:
+      module:
+        name: SurfaceModule
+        kwargs:
+          prediction_res: *TARGET_RES
+      runtime_kwargs:
+        return_pial: true
+
+[loss]
+filename = "path/to/model.model"
+
+# Logging using Weights & Biases (https://wandb.ai)
+[wandb]
+enable = true
+project_name = "BrainNet"
+name = "LH_run1"      # name used to identify run in UI
+resume = true
+# tags =
+# entity = null  # username/team name to send data to
+# dir = null      # sub dir of results dir
+

@@ -1,4 +1,5 @@
 from brainnet.config.base import (
+    CriterionParameters,
     DataloaderParameters,
     DatasetParameters,
     EventAction,

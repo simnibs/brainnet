@@ -2,8 +2,12 @@ from pathlib import Path
 
 import torch
 
+import brainsynth.config
+
 from brainnet import config
 from brainnet.modules import body, head
+
+from ignite.engine import Events
 
 # Parameters defined in other files
 from .events import events
@@ -17,7 +21,7 @@ project: str = "BrainNet"
 run: str = "lh-01"
 device: str | torch.device  = torch.device("cuda:0")
 
-target_surface_resolution: int = 5
+target_surface_resolution: int = 4
 target_surface_hemisphere: str = "lh"
 initial_surface_resolution: int = 0
 
@@ -37,11 +41,16 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 # TRAINING PARAMETERS
 # =============================================================================
 
+
 cfg_train = config.TrainParameters(
-    max_epochs = 2000,
-    resume_from_checkpoint = 0,
+    max_epochs = 400,
+    resume_from_checkpoint = 0, # 400
+    epoch_length_train=100,
+    epoch_length_val=25,
+    # evaluate_on=Events.EPOCH_COMPLETED,
     events=events,
     surface_decoupling_amount = 0.2, # 0.0 to disable
+    enable_amp=False,
 )
 
 # =============================================================================
@@ -71,6 +80,7 @@ cfg_dataset = config.DatasetParameters(
         root_dir = root_dir / "training_data",
         subject_dir = root_dir / "training_data_subjects",
         subject_subset = "validation",
+        images = ["t1w"],
         target_surface_resolution = target_surface_resolution,
         target_surface_hemispheres = target_surface_hemisphere,
         initial_surface_resolution = initial_surface_resolution,
@@ -79,10 +89,13 @@ cfg_dataset = config.DatasetParameters(
 
 
 # =============================================================================
-# MODEL
+# CRITERION
 # =============================================================================
 
-# cfg_loss = ...
+cfg_criterion = config.CriterionParameters(
+    train=cfg_loss,
+    validation=cfg_loss, # could/should be different...
+)
 
 # =============================================================================
 # MODEL
@@ -135,7 +148,6 @@ cfg_model = config.ModelParameters(
 
 cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=1.0e-4))
 
-
 # =============================================================================
 # RESULTS
 # =============================================================================
@@ -146,13 +158,15 @@ cfg_results = config.ResultsParameters(out_dir=out_dir / project / run)
 # SYNTHESIZER
 # =============================================================================
 
-cfg_synth = SynthesizerParameters(
-    train=SynthesizerConfig(
-        builder = "DefaultSynthBuilder",
+out_size = [128, 224, 160]
+out_center_str = "lh"
+
+cfg_synth = config.SynthesizerParameters(
+    train=brainsynth.config.SynthesizerConfig(
+        builder = "OnlySynthBuilder",
         # in_res = [1.0, 1.0, 1.0]
-        out_size = [192, 192, 192],
-        # align_corners = True
-        out_center_str = "lh",
+        out_size = out_size,
+        out_center_str = out_center_str,
         # segmentation_labels = "brainseg"
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
@@ -160,17 +174,15 @@ cfg_synth = SynthesizerParameters(
         # alternative_images = [t1w, t2w]
         device = device,
     ),
-    validation=SynthesizerConfig(
-        builder = "ValidationSynthBuilder",
-        # in_res = [1.0, 1.0, 1.0]
-        out_size = [192, 192, 192],
-        # align_corners = True
-        out_center_str = "lh",
+    validation=brainsynth.config.SynthesizerConfig(
+        builder = "OnlySelectBuilder",
+        out_size = out_size,
+        out_center_str = out_center_str,
         # segmentation_labels = "brainseg"
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        # alternative_images = [t1w, t2w]
+        alternative_images = ["t1w", "t2w", "flair"],
         device = device,
     ),
 )
@@ -184,6 +196,7 @@ cfg_wandb = config.WandbParameters(
     project=project,
     name=run,
     wandb_dir=out_dir / "wandb",
+    log_on = cfg_train.evaluate_on,
     # kwargs = dict(
     # tags =,
     # entity = None,  # username/team name to send data to
@@ -195,9 +208,9 @@ train_setup = config.TrainSetup(
     project,
     run,
     device,
+    cfg_criterion,
     cfg_dataloader,
     cfg_dataset,
-    cfg_loss,
     cfg_model,
     cfg_optimizer,
     cfg_results,

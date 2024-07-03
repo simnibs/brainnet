@@ -18,7 +18,7 @@ def function_from_string(fn_str):
 
 
 class RegularizationLoss(torch.nn.Module):
-    def __init__(self, loss_fn, y_pred: str) -> None:
+    def __init__(self, loss_fn, y_pred: None | str) -> None:
         """_summary_
 
         Parameters
