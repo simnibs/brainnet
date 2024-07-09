@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 import torch
 from ignite.engine.events import CallableEventWithFilter
@@ -73,13 +73,19 @@ class OptimizerParameters:
 @dataclass
 class ResultsParameters:
     out_dir: Path | str
-    checkpoint_prefix: str = "ckpt"
+    load_from_dir: None | Path | str = None
+    checkpoint_prefix: str = "state"
     checkpoint_subdir: str = "checkpoint"
     examples_subdir: str = "examples"
     save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
+    save_example_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
+    checkpoint_filename_pattern: str = "{filename_prefix}_{name}_{global_step:05d}.pt"
+    require_empty: bool = False # require that checkpoints do not already exist
 
     def __post_init__(self):
         self.out_dir = Path(self.out_dir)
+        self.load_from_dir = self.out_dir if self.load_from_dir is None else Path(self.load_from_dir)
+        self._from_checkpoint_dir = self.load_from_dir / self.checkpoint_subdir
         self.checkpoint_dir = self.out_dir / self.checkpoint_subdir
         self.examples_dir = self.out_dir / self.examples_subdir
 
@@ -97,11 +103,12 @@ class SynthesizerParameters:
 @dataclass
 class TrainParameters:
     max_epochs: int
-    resume_from_checkpoint: int
+    load_checkpoint: int = 0 # do not load
     epoch_length_train: int = 100
     epoch_length_val: int = 50
     evaluate_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=10)
-    events: list[EventAction] | None = None
+    events_trainer: list[EventAction] | None = None
+    events_evaluators: list[EventAction] | None = None
 
     enable_amp: bool = True
 
@@ -122,7 +129,12 @@ class WandbParameters:
     name: str
     wandb_dir: Path | str
     log_on: CallableEventWithFilter
-    #resume: str = "auto"
+    run_id: None | str = None
+    resume: None | str = "allow"
+    tags: None | Sequence = None
+    #fork_from: None | str = None
+
+    # resume: str = "auto"
 
     # kwargs: dict | None = None
 

@@ -1,6 +1,5 @@
 import argparse
 import copy
-import functools
 import importlib
 from pathlib import Path
 import sys
@@ -48,13 +47,14 @@ def recursive_itemize(d, out=None):
     return out
 
 
-def add_custom_events(engine, events: list[EventAction]):
+def add_custom_events(engine, events: list[EventAction], other: Engine | None = None):
     """Set all custom events."""
+
     for e in events:
         engine.add_event_handler(e.event, e.handler, **e.kwargs)
 
 
-def add_model_checkpoint(engine, to_save: dict[str, Any], config):
+def add_model_checkpoint(engine, to_save: dict[str, Any], config: brainnet.config.ResultsParameters):
     """
 
     Parameters
@@ -63,7 +63,7 @@ def add_model_checkpoint(engine, to_save: dict[str, Any], config):
     to_save : dict
         Dictionary containing the items to save, e.g., model, optimizer,
         engine.
-    config : ResultsParameters
+    config : brainnet.config.ResultsParameters
         Results configuration.
     """
     # Checkpoint to store n_saved best models wrt score function
@@ -71,16 +71,29 @@ def add_model_checkpoint(engine, to_save: dict[str, Any], config):
         config.checkpoint_dir,
         config.checkpoint_prefix,
         n_saved=None,  # keep all
-        require_empty=False,
+        require_empty=config.require_empty,
+        filename_pattern=config.checkpoint_filename_pattern,
         # score_function=score_function,
         # score_name="accuracy",
-        global_step_transform=lambda e, _: e.state.epoch # use epoch instead of iteration
+        global_step_transform=lambda e, _: e.state.epoch,  # use epoch instead of iteration
     )
 
     engine.add_event_handler(config.save_checkpoint_on, model_checkpoint, to_save)
 
 
-def add_wandb_events(engine, evaluators, config: brainnet.config.WandbParameters):
+def load_checkpoint(to_load, train_setup):
+    if train_setup.train_params.load_checkpoint != 0:
+        ckpt_name = train_setup.results.checkpoint_filename_pattern.format(
+            filename_prefix=train_setup.results.checkpoint_prefix,
+            name="checkpoint",
+            global_step=train_setup.train_params.load_checkpoint,
+        )
+        print(f"Loading checkpoint {ckpt_name}")
+        ckpt = train_setup.results._from_checkpoint_dir / ckpt_name
+        ModelCheckpoint.load_objects(to_load, ckpt)
+
+
+def add_wandb_logger(engine, evaluators, config: brainnet.config.WandbParameters):
     """Logging with Wandb"""
     if not config.enable:
         return
@@ -130,28 +143,31 @@ def add_wandb_events(engine, evaluators, config: brainnet.config.WandbParameters
         project=config.project,
         name=config.name,
         dir=wandb_dir,
-        #resume=config.resume,
+        resume=config.resume,
+        id=config.run_id,
+        tags=config.tags,
+        #fork_from=config.fork_from,
         # **config.kwargs,
         # log the configuration of the run
         # config=recursive_namespace_to_dict(config),
     )
 
+    # Log the loss accumulated during training
+    engine.add_event_handler(
+        Events.EPOCH_COMPLETED, event_handlers.wandb_log_engine, logger, "trainer"
+    )
+
+    # Log the loss accumuated during evaluation
     for k, v in evaluators.items():
-        engine.add_event_handler(config.log_on, event_handlers.wandb_log, logger, k, v)
+        engine.add_event_handler(
+            config.log_on, event_handlers.wandb_log_evaluator, logger, k, v
+        )
 
-    engine.add_event_handler(Events.COMPLETED, logger.finish)
-
-    # if config.enable:
-    #     engine.add_event_handler(Events.STARTED, event_handlers.wandb_init)
-    #     engine.add_event_handler(Events.EPOCH_COMPLETED, event_handlers.wandb_log)
-    #     engine.add_event_handler(Events.COMPLETED, event_handlers.wandb_stop)
-    # else:
-    #     engine.state.wandb = None
+    # Add an event that closes the logger on completion
+    engine.add_event_handler(Events.COMPLETED, event_handlers.wandb_finish, logger)
 
 
-
-
-def add_log_events(engine):
+def add_terminal_logger(engine):
     """Logging to terminal."""
     engine.add_event_handler(Events.EPOCH_COMPLETED, event_handlers.log_epoch)
 
@@ -178,6 +194,20 @@ def add_log_events(engine):
 #     engine.state._update_attrs()
 
 
+def write_example_to_disk(engine: Engine, evaluators: dict[str, Engine], config: brainnet.config.ResultsParameters):
+    engine.add_event_handler(
+        config.save_example_on,
+        event_handlers.write_example,
+        evaluators=evaluators,
+        config=config,
+    )
+
+
+def add_metric_to_engine(engine):
+    metric = CriterionAggregator()
+    metric.attach(engine, "loss")
+
+
 def add_evaluation_event(
     engine: Engine,
     criterion: Criterion,
@@ -200,18 +230,26 @@ def add_evaluation_event(
     )
     evaluator = Engine(eval_step)
 
+    # Add an event that synchronizes iteration and epoch count from the trainer
+    # evaluator.add_event_handler(
+    #     Events.STARTED,
+    #     event_handlers.synchronize_state,
+    #     other=engine,
+    #     attrs=["iteration", "epoch"],
+    # )
+
     # attach metric to the evaluator
     metric.attach(evaluator, "loss")
 
-    evaluate_model = functools.partial(
+    # add an event to TRAINER that performs the evaluation
+    engine.add_event_handler(
+        evaluate_on,
         event_handlers.evaluate_model,
         evaluator=evaluator,
         dataloader=dataloader,
         epoch_length=epoch_length,
         logger=logger,
     )
-    # add an event to TRAINER that performs the evaluation
-    engine.add_event_handler(evaluate_on, evaluate_model)
 
     return evaluator
 
@@ -362,7 +400,7 @@ class SupervisedTrainingStep(SupervisedStep):
         loss = recursive_itemize(loss)
 
         # these are stored in engine.state.output
-        return loss, y_pred, y_true
+        return loss, image, y_pred, y_true
 
 
 class EvaluationStep(SupervisedStep):
@@ -380,9 +418,12 @@ class EvaluationStep(SupervisedStep):
                     image, init_verts  # , head_kwargs=engine.state.head_runtime_kwargs
                 )
                 loss = self.compute_loss(y_pred, y_true)
+
+        # we don't need the weighted loss
+        del loss["weighted"]
         loss = recursive_itemize(loss)
 
-        return loss
+        return loss, image, y_pred, y_true
 
 
 # def initialize(config):
@@ -402,10 +443,19 @@ def train(args):
 
     train_setup_file = args.config  # "brainnet.config.surface_model.main"
 
-    print("Setup training")
-    print(f"  Using configuration file in {train_setup_file}")
+    print("Setting up training...")
 
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
+
+    sep_line = 79 * "="
+
+    # Overwrite args from command line if provided
+    if args.load_checkpoint is not None:
+        train_setup.train_params.load_checkpoint = args.load_checkpoint
+    if args.max_epochs is not None:
+        train_setup.train_params.max_epochs = args.max_epochs
+    if args.no_wandb:
+        train_setup.wandb.enable = False
 
     criterion = brainnet.initializers.init_criterion(train_setup.criterion)
     dataloader = brainnet.initializers.init_dataloader(
@@ -428,12 +478,13 @@ def train(args):
     )
     trainer = Engine(train_step)
 
-    # add_state_entries(trainer, config)
-    add_log_events(trainer)
-    add_custom_events(trainer, train_setup.train_params.events)
+    # The order in which the events are added to the engine is important!
 
-    # trainer.add_event_handler(Events.ITERATION_COMPLETED, log_iter)
+    # Aggregate average loss over epoch
+    add_metric_to_engine(trainer)
+    add_terminal_logger(trainer)
 
+    # Add evaluation
     kwargs = dict(
         engine=trainer,
         model=model,
@@ -441,38 +492,52 @@ def train(args):
         epoch_length=train_setup.train_params.epoch_length_val,
         enable_amp=train_setup.train_params.enable_amp,
     )
-    eval_train = add_evaluation_event(
-        criterion=criterion["validation"],  # NOTE here we use the validation criterion!
-        synth=synth["train"],
-        dataloader=dataloader["train"],
-        logger=event_handlers.MetricLogger(key="loss", name="train"),
-        **kwargs,
-    )
-    eval_validation = add_evaluation_event(
-        criterion=criterion["validation"],
-        synth=synth["validation"],
-        dataloader=dataloader["validation"],
-        logger=event_handlers.MetricLogger(key="loss", name="validation"),
-        **kwargs,
-    )
-
-    add_wandb_events(
-        trainer, dict(train=eval_train, validation=eval_validation), train_setup.wandb
+    evaluators = dict(
+        # train = add_evaluation_event(
+        #     criterion=criterion["validation"],  # NOTE here we use the validation criterion!
+        #     synth=synth["train"],
+        #     dataloader=dataloader["train"],
+        #     logger=event_handlers.MetricLogger(key="loss", name="train"),
+        #     **kwargs,
+        # ),
+        validation=add_evaluation_event(
+            criterion=criterion["validation"],
+            synth=synth["validation"],
+            dataloader=dataloader["validation"],
+            logger=event_handlers.MetricLogger(key="loss", name="validation"),
+            **kwargs,
+        ),
     )
 
-    to_save = dict(model=model, optimizer=optimizer, engine=trainer)
+    add_wandb_logger(trainer, evaluators, train_setup.wandb)
+
+    # Should be triggered after metrics has been computed!
+    add_custom_events(trainer, train_setup.train_params.events_trainer)
+    for e in evaluators.values():
+        add_custom_events(e, train_setup.train_params.events_evaluators)
+
+
+    # to_save = dict(model=model, optimizer=optimizer, engine=trainer)
+    # load_checkpoint(to_save, train_setup)
+
+    # Include this in the checkpoint
+    to_save = dict(model=model, optimizer=optimizer, engine=trainer,
+                   **{f"criterion[{k}]": v for k,v in criterion.items()})
+
     add_model_checkpoint(trainer, to_save, train_setup.results)
+    write_example_to_disk(trainer, evaluators, train_setup.results)
 
-
-    # trainer.add_event_handler(train_setup.train_params.save_state_on, save_examples, {"model": model})
-
-    # def on_iteration_completed(engine):
-    #     iteration = engine.state.iteration
-    #     epoch = engine.state.epoch
-    #     loss = engine.state.output
-    #     print(f"Epoch: {epoch}, Iteration: {iteration}, Loss: {loss}")
+    load_checkpoint(to_save, train_setup)
 
     print("Setup completed. Starting training at epoch ...")
+
+    print(sep_line)
+    print(f"Config file     {train_setup_file}")
+    print(f"Project         {train_setup.project:30s}")
+    print(f"Run             {train_setup.run:30s}")
+    print(f"Output dir      {train_setup.results.out_dir}")
+    print(f"Wandb enabled   {train_setup.wandb.enable}")
+    print(sep_line)
 
     # Start the training
     trainer.run(
@@ -483,19 +548,22 @@ def train(args):
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "config", help="Configuration file defining the training setup."
+    description = "Main interface to training a BrainNet model. For convenience, a few parameters are exposed on the command line. Values provided here will overwrite those set in the configuration file."
+    parser = argparse.ArgumentParser(
+        prog="BrainNetTrainer", description=description,
     )
-    parser.add_argument("--resume-wandb", action="store_true")
-    # parser.add_argument("--dataset-config", default="dataset.yaml", help="Dataset configuration file.")
+    parser.add_argument(
+        "config", help="Configuration file defining the parameters for training."
+    )
+    parser.add_argument("--load-checkpoint", default=None, type=int, help="Resume training from this checkpoint.")
+    parser.add_argument("--max-epochs", default=None, type=int, help="Terminate training when this number of epochs is reached.")
+    parser.add_argument("--no-wandb", action="store_true", default=False, help="Disable logging with wandb.")
 
     return parser.parse_args(argv[1:])
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv)
-
     train(args)
 
 # import torch

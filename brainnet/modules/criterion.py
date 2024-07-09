@@ -1,3 +1,5 @@
+from typing import Any, Mapping
+
 import torch
 
 from brainnet.config import LossParameters
@@ -29,7 +31,6 @@ class Criterion(torch.nn.Module):
         # self.across_task_normalizer = {}
 
 
-
         # self.lambda_within = {
         #     task: {
         #         loss_name: self.setup_loss(loss_config)
@@ -46,6 +47,29 @@ class Criterion(torch.nn.Module):
         #     task: torch.nn.ParameterDict({k: v * within_task_normalizer[task] for k,v in losses})
         #     for task, losses in self.loss_weights.items()
         # }
+
+    def state_dict(self):
+        state_dict = super().state_dict()
+        state_dict["_head_weights"] = self._head_weights
+        state_dict["_loss_weights"] = self._loss_weights
+        state_dict["_active_heads"] = self._active_heads
+        state_dict["_active_losses"] = self._active_losses
+        state_dict["_needs_sampling"] = self._needs_sampling
+        return state_dict
+
+    def load_state_dict(
+            self,
+            state_dict: Mapping[str, Any],
+            strict: bool = True,
+            assign: bool = False
+        ):
+        self._head_weights = state_dict.pop("_head_weights")
+        self._loss_weights = state_dict.pop("_loss_weights")
+        self._active_heads = state_dict.pop("_active_heads")
+        self._active_losses = state_dict.pop("_active_losses")
+        self._needs_sampling = state_dict.pop("_needs_sampling")
+        super().load_state_dict(state_dict, strict, assign)
+
 
     def _set_active_heads(self):
         self._active_heads = [h for h,v in self._head_weights.items() if v > 0.0]
@@ -346,7 +370,7 @@ class Criterion(torch.nn.Module):
 
 import brainnet.utilities
 
-from typing import Callable
+from typing import Callable, Mapping
 
 import torch
 
@@ -362,18 +386,16 @@ class CriterionAggregator(Metric):
         self,
         # loss_fn: Callable,
         output_transform: Callable = lambda x: x,
-        # batch_size: Callable = len,
+        batch_size: Callable = len,
         device: str | torch.device = torch.device("cpu"),
     ):
         """This "metric" is based on ignite.metrics.Loss but works with a dict of
         (averaged) losses rather than computing a single loss from y_pred and
         y. All entries (losses) are averaged separately.
-
-        NOTE This is accurate only when all batches are of equal size!
         """
         super().__init__(output_transform, device=device)
         # self._loss_fn = loss_fn
-        # self._batch_size = batch_size
+        self._batch_size = batch_size
 
     @reinit__is_reduced
     def reset(self) -> None:
@@ -381,21 +403,16 @@ class CriterionAggregator(Metric):
         self._num_examples = {}
 
     @reinit__is_reduced
-    def update(self, input_loss: tuple[dict, dict]) -> None:
-        # if len(output) == 2:
-        #     y_pred, y = cast(tuple[torch.Tensor, torch.Tensor], output)
-        #     kwargs: dict = {}
-        # else:
-        #     y_pred, y, kwargs = cast(tuple[torch.Tensor, torch.Tensor, dict], output)
-
-        # loss averaged over batch
-        # loss = self._loss_fn(y_pred, y, **kwargs).detach()
+    def update(self, output: tuple) -> None:
+        if len(output) == 4:
+            loss, x, _, _ = output # out signature: loss, x, y_pred, y_true
+        else:
+            ValueError(f"Wrong output signature from engine for CriterionAggregator. Expected (loss, x, y_pred, y_true), got output of length {len(output)}.")
 
         # the input is converted from mapping to tuple so convert back
-        loss = dict(zip(self.required_output_keys, input_loss))
+        # loss = dict(zip(self.required_output_keys, input_loss))
 
-        # n = self._batch_size(y)
-        batch_size = 1
+        batch_size = self._batch_size(x)
         if batch_size > 1:
             brainnet.utilities.recursive_dict_multiply(loss, batch_size)
         brainnet.utilities.add_dict(self._sum, loss)

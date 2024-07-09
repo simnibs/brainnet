@@ -10,7 +10,7 @@ from brainnet.modules import body, head
 from ignite.engine import Events
 
 # Parameters defined in other files
-from .events import events
+from brainnet.config.surface_model import events_trainer, events_evaluators
 from .losses import cfg_loss
 
 # =============================================================================
@@ -18,10 +18,13 @@ from .losses import cfg_loss
 # =============================================================================
 
 project: str = "BrainNet"
-run: str = "lh-01"
+# run: str = "lh-01-1mm_iso"
+run: str = "lh-01-RandRes-t1w"
+run_id: None | str = None # f"{run}-00"
+resume_from_run: str = "lh-01-RandRes" #run
 device: str | torch.device  = torch.device("cuda:0")
 
-target_surface_resolution: int = 4
+target_surface_resolution: int = 5
 target_surface_hemisphere: str = "lh"
 initial_surface_resolution: int = 0
 
@@ -43,12 +46,12 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 
 
 cfg_train = config.TrainParameters(
-    max_epochs = 400,
-    resume_from_checkpoint = 0, # 400
+    max_epochs = 3000,
     epoch_length_train=100,
     epoch_length_val=25,
     # evaluate_on=Events.EPOCH_COMPLETED,
-    events=events,
+    events_trainer=events_trainer.events,
+    events_evaluators=events_evaluators.events,
     surface_decoupling_amount = 0.2, # 0.0 to disable
     enable_amp=False,
 )
@@ -71,6 +74,7 @@ cfg_dataset = config.DatasetParameters(
         # synthesizer = SynthesizerConfig( ... ),
         # datasets = ["ABIDE", "HCP"], # default: all
         # images = ["generation_labels", "t1w"],
+        images = ["t1w"],
         # ds_structure = "flat",
         target_surface_resolution = target_surface_resolution,
         target_surface_hemispheres = target_surface_hemisphere,
@@ -116,31 +120,11 @@ cfg_model = config.ModelParameters(
             prediction_res=target_surface_resolution,
             device=device,
         ),
+#                 kwargs = dict(prediction_res = target_surface_resolution),
+
         # segmentation = SegmentationModule(...)
     ),
 )
-
-# model_conf = config.ModelParameters(
-#     device = device,
-#     body = dict(
-#         model = "UNet",
-#         kwargs = dict(
-#             spatial_dims = 3,
-#             in_channels = 1,
-#             encoder_channels = [[32], [64], [96], [128], [160]],
-#             decoder_channels = [[128], [96], [64], [64]],
-#         )
-#     ),
-#     heads = dict(
-#         surface = dict(
-#             module = dict(
-#                 name = "SurfaceModule",
-#                 kwargs = dict(prediction_res = target_surface_resolution),
-#             ),
-#             runtime_kwargs = dict(return_pial = True),
-#         ),
-#     ),
-# )
 
 # =============================================================================
 # OPTIMIZER
@@ -152,7 +136,10 @@ cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=1.0e-4))
 # RESULTS
 # =============================================================================
 
-cfg_results = config.ResultsParameters(out_dir=out_dir / project / run)
+cfg_results = config.ResultsParameters(
+    out_dir=out_dir / project / run,
+    load_from_dir = out_dir / project / resume_from_run,
+)
 
 # =============================================================================
 # SYNTHESIZER
@@ -163,7 +150,8 @@ out_center_str = "lh"
 
 cfg_synth = config.SynthesizerParameters(
     train=brainsynth.config.SynthesizerConfig(
-        builder = "OnlySynthBuilder",
+        # builder = "OnlySynth",
+        builder = "OnlySelect",
         # in_res = [1.0, 1.0, 1.0]
         out_size = out_size,
         out_center_str = out_center_str,
@@ -171,18 +159,18 @@ cfg_synth = config.SynthesizerParameters(
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        # alternative_images = [t1w, t2w]
+        alternative_images = ["t1w"],
         device = device,
     ),
     validation=brainsynth.config.SynthesizerConfig(
-        builder = "OnlySelectBuilder",
+        builder = "OnlySelect",
         out_size = out_size,
         out_center_str = out_center_str,
         # segmentation_labels = "brainseg"
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        alternative_images = ["t1w", "t2w", "flair"],
+        alternative_images = ["t1w"], # ["t1w", "t2w", "flair"],
         device = device,
     ),
 )
@@ -197,6 +185,8 @@ cfg_wandb = config.WandbParameters(
     name=run,
     wandb_dir=out_dir / "wandb",
     log_on = cfg_train.evaluate_on,
+    run_id = run_id,
+    tags=["adapt"]
     # kwargs = dict(
     # tags =,
     # entity = None,  # username/team name to send data to
