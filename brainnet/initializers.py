@@ -46,7 +46,7 @@ def init_optimizer(config, model):
 
 def init_dataloader(
         ds_config: brainnet.config.DatasetParameters,
-        dl_config: brainnet.config.DataloaderParameters
+        dl_config: brainnet.config.DataloaderParameters,
     ):
     return {
         subset: brainsynth.dataset.setup_dataloader(config, vars(dl_config))

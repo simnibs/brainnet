@@ -33,6 +33,21 @@ from brainnet.utilities import recursive_dict_sum
 # )
 # lines = pv.PolyData(points, cells)
 
+def print_memory_usage(device):
+    # https://medium.com/deep-learning-for-protein-design/a-comprehensive-guide-to-memory-usage-in-pytorch-b9b7c78031d3
+    total_memory = torch.cuda.get_device_properties(device).total_memory * 1e-9
+    alloc = torch.cuda.memory_allocated(device) * 1e-9
+    alloc_max = torch.cuda.max_memory_allocated(device) * 1e-9
+    res = torch.cuda.memory_reserved(device) * 1e-9
+    res_max = torch.cuda.max_memory_reserved(device) * 1e-9
+
+    print("Memory [GB]        Current           Max")
+    print("----------------------------------------")
+    print(f"Total                            {total_memory:7.3f}")
+    print(f"Allocated          {alloc:7.3f}       {alloc_max:7.3f}")
+    print(f"Reserved           {res:7.3f}       {res_max:7.3f}")
+    print("----------------------------------------")
+
 
 def recursive_itemize(d, out=None):
     """Recursively call .item() on values."""
@@ -320,12 +335,12 @@ class SupervisedStep:
 
             # REMOVE BATCH DIMENSION
             for k, v in images.items():
-                images[k] = v.squeeze()
+                images[k] = v.squeeze(0)
             for k, v in surfaces.items():
                 for kk, vv in v.items():
-                    surfaces[k][kk] = vv.squeeze()
+                    surfaces[k][kk] = vv.squeeze(0)
             for k, v in init_verts.items():
-                init_verts[k] = v.squeeze()
+                init_verts[k] = v.squeeze(0)
 
             with torch.no_grad():
                 y_true = self.synthesizer(images, surfaces, init_verts, unpack=False)
