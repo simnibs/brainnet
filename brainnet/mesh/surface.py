@@ -133,7 +133,7 @@ class TemplateSurfaces:
         sq_u = u.sqrt()
         sampled_coords = torch.stack(((1 - sq_u), sq_u * (1 - w), sq_u * w), dim=2)
 
-        samples = self.interpolate_vertex_feature_to_barycentric_coords(
+        samples = self.interpolate_vertex_features(
             self.vertices, sampled_faces, sampled_coords
         )
         if return_sampled_faces_and_bc:
@@ -141,7 +141,7 @@ class TemplateSurfaces:
         else:
             return samples
 
-    def interpolate_vertex_feature_to_barycentric_coords(
+    def interpolate_vertex_features(
         self, x, faces, barycentric_coords
     ):
         """Sample a set of features (B, N[, C]) onto the barycentric coordinates

@@ -248,27 +248,6 @@ def wandb_log_engine(engine, logger, name):
     logger.log(data, step=engine.state.epoch)
 
 
-# # Training loss
-# @trainer.on(Events.EPOCH_COMPLETED)
-# def log_training_results(trainer):
-#     train_evaluator.run(train_loader)
-#     metrics = train_evaluator.state.metrics
-#     print(f"Training Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['loss']:.2f}")
-
-# # Validation loss
-# @trainer.on(Events.EPOCH_COMPLETED)
-# def log_validation_results(trainer):
-#     val_evaluator.run(val_loader)
-#     metrics = val_evaluator.state.metrics
-#     print(f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['loss']:.2f}")
-
-# @trainer.on(Events.EPOCH_COMPLETED)
-# def write_results():
-#     write_results("train", n, image, y_pred, y_true, init_verts)
-
-# Write example to disk
-
-
 def write_surface(
     v: dict, vol_info: dict, out_dir: Path, prefix: str, tag: str, label: str
 ):

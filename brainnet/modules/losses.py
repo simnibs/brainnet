@@ -1,3 +1,5 @@
+import functools
+
 import torch
 
 from brainnet.mesh.surface import TemplateSurfaces
@@ -15,6 +17,7 @@ class MSELoss(torch.nn.Module):
         else:
             return torch.sum(w * (a - b) ** 2) / w.sum()
 
+
 class MeanSquaredNormLoss(torch.nn.Module):
     def __init__(self, dim=-1) -> None:
         super().__init__()
@@ -28,6 +31,7 @@ class MeanSquaredNormLoss(torch.nn.Module):
             return torch.sum((a - b) ** 2, self.dim).mean()
         else:
             return torch.sum(w * torch.sum((a - b) ** 2, self.dim)) / w.sum()
+
 
 class CosineSimilarityLoss(torch.nn.CosineSimilarity):
     def __init__(self, dim: int = -1, eps: float = 1e-8) -> None:
@@ -58,7 +62,9 @@ class MatchedDistanceLoss(MeanSquaredNormLoss):
         loss
             _description_
         """
-        weights = y_true.vertex_data["weights"] if "weights" in y_true.vertex_data else None
+        weights = (
+            y_true.vertex_data["weights"] if "weights" in y_true.vertex_data else None
+        )
         return super().forward(y_pred.vertices, y_true.vertices, weights)
 
 
@@ -109,6 +115,7 @@ class SymmetricMeanSquaredNormLoss(MeanSquaredNormLoss):
                 super().forward(p, t[i_pred.squeeze(0)], w_pred)
                 + super().forward(p[i_true.squeeze(0)], t, w_true)
             )
+
 
 class SymmetricMSELoss(MSELoss):
     def __init__(self, *args, **kwargs) -> None:
@@ -171,8 +178,16 @@ class SymmetricChamferLoss(SymmetricMeanSquaredNormLoss):
         y_pred: TemplateSurfaces,
         y_true: TemplateSurfaces,
     ):
-        w_pred = y_pred.vertex_data["weights_sampled"] if "weights_sampled" in y_pred.vertex_data else None
-        w_true = y_true.vertex_data["weights_sampled"] if "weights_sampled" in y_true.vertex_data else None
+        w_pred = (
+            y_pred.vertex_data["weights_sampled"]
+            if "weights_sampled" in y_pred.vertex_data
+            else None
+        )
+        w_true = (
+            y_true.vertex_data["weights_sampled"]
+            if "weights_sampled" in y_true.vertex_data
+            else None
+        )
         return super().forward(
             y_pred.vertex_data["points_sampled"],
             y_true.vertex_data["points_sampled"],
@@ -181,8 +196,8 @@ class SymmetricChamferLoss(SymmetricMeanSquaredNormLoss):
             w_pred,
             w_true,
             # broadcast against points_sampled
-            #torch.clamp(1 + y_pred.vertex_data["H_sampled"].abs(), max=5)[..., None],
-            #torch.clamp(1 + y_true.vertex_data["H_sampled"].abs(), max=5)[..., None],
+            # torch.clamp(1 + y_pred.vertex_data["H_sampled"].abs(), max=5)[..., None],
+            # torch.clamp(1 + y_true.vertex_data["H_sampled"].abs(), max=5)[..., None],
         )
 
 
@@ -327,7 +342,6 @@ class HingeLoss(MeanSquaredNormLoss):
         return super().forward(a, b)
 
 
-
 # class VertexToVertexAngleLoss(torch.nn.CosineSimilarity):
 
 #     def __init__(self, cosine_cutoff = None, dim: int = 2) -> None:
@@ -355,10 +369,15 @@ class HingeLoss(MeanSquaredNormLoss):
 #         return cos, loss, loss.mean()
 
 
-
 class MatchedAngleLoss(torch.nn.CosineSimilarity):
 
-    def __init__(self, inner: str = "white", outer: str = "pial", cosine_cutoff: None | float = None, dim: int = 2) -> None:
+    def __init__(
+        self,
+        inner: str = "white",
+        outer: str = "pial",
+        cosine_cutoff: None | float = None,
+        dim: int = 2,
+    ) -> None:
         super().__init__(dim=dim)
 
         self.inner = inner
@@ -371,18 +390,19 @@ class MatchedAngleLoss(torch.nn.CosineSimilarity):
 
         nw = y_pred[self.inner].compute_vertex_normals()
 
-        cos = super().forward(vp-vw, nw)
+        cos = super().forward(vp - vw, nw)
 
         if self.cosine_cutoff is not None:
             cos_valid = cos[cos <= self.cosine_cutoff]
-            loss = (1 - cos_valid)**2
+            loss = (1 - cos_valid) ** 2
             # avoid empty array
             if loss.numel() == 0:
                 loss = torch.tensor([0.0], device=cos_valid.device)
         else:
-            loss = (1 - cos)**2
+            loss = (1 - cos) ** 2
 
         return loss.mean()
+
 
 class SymmetricThicknessLoss(SymmetricMeanSquaredNormLoss):
     def __init__(self, *args, **kwargs) -> None:
@@ -391,12 +411,11 @@ class SymmetricThicknessLoss(SymmetricMeanSquaredNormLoss):
         self.inner = "white"
         self.outer = "pial"
 
-
     def compute_thickness_vector(self, y):
 
         y_in = y[self.inner]
         y_out = y[self.outer]
-        ref = y_in # arbitrary
+        ref = y_in  # arbitrary
 
         # these are indices into y_pred[h][outer]!
         index = ref.nearest_neighbor_tensors(
@@ -404,7 +423,10 @@ class SymmetricThicknessLoss(SymmetricMeanSquaredNormLoss):
             y_out.vertex_data["points_sampled"],
         )
         ix = y_out.batch_ix[:, None]
-        y_inner_th_vec = y_out.vertex_data["points_sampled"][ix, index] - y_in.vertex_data["points_sampled"]
+        y_inner_th_vec = (
+            y_out.vertex_data["points_sampled"][ix, index]
+            - y_in.vertex_data["points_sampled"]
+        )
 
         # these are indices into y_pred[h][inner]!
         index = ref.nearest_neighbor_tensors(
@@ -412,7 +434,10 @@ class SymmetricThicknessLoss(SymmetricMeanSquaredNormLoss):
             y_in.vertex_data["points_sampled"],
         )
         ix = y_in.batch_ix[:, None]
-        y_outer_th_vec = y_out.vertex_data["points_sampled"] - y_in.vertex_data["points_sampled"][ix, index]
+        y_outer_th_vec = (
+            y_out.vertex_data["points_sampled"]
+            - y_in.vertex_data["points_sampled"][ix, index]
+        )
 
         # inner_th_vec
         #   vector from sampled points on INNER surface to closest
@@ -422,7 +447,6 @@ class SymmetricThicknessLoss(SymmetricMeanSquaredNormLoss):
         #   sampled point on INNER surface
 
         return y_inner_th_vec, y_outer_th_vec
-
 
     def forward(self, y_pred, y_true):
         """Compute the thickness vectors"""
@@ -489,6 +513,231 @@ class EdgeLengthVarianceLoss(torch.nn.Module):
 
 # IMAGE LOSS FUNCTIONS
 
+
+class GradientLoss(torch.nn.Module):
+    def __init__(
+        self, spacing: float = 1.0, dim: list[int] | tuple = (2, 3, 4)
+    ) -> None:
+        """Gradient loss over entire image.
+
+        Parameters
+        ----------
+        spacing : int
+            Voxel spacing.
+        dim :
+            Dimensions of input image over which to calculate the gradient.
+        """
+        super().__init__()
+        self.spacing = spacing
+        self.dim = dim
+
+    def forward(self, image):
+        # assume size is (N,C,W,H,D). When `image` is an SVF in 3D C=3.
+        grad = torch.gradient(image, spacing=self.spacing, dim=self.dim)
+        # stack to (3,N,C,W,H,D)
+        return torch.stack(grad).norm(dim=0).mean()
+
+
+class MaskedGradientLoss(torch.nn.Module):
+    def __init__(self, spacing: float = 1.0, method: str = "forward") -> None:
+        """Gradient loss over selected voxels.
+
+        Parameters
+        ----------
+        spacing : float, optional
+            Voxel spacing.
+        """
+        super().__init__()
+        self.spacing = spacing
+        self.method = method
+
+    def _clamp_slices_(self, indices: list[slice], minval=None, maxval=None):
+        for s in indices:
+            if minval is not None:
+                s.start = min(s.start, minval)
+            if maxval is not None:
+                s.stop = max(s.stop, maxval)
+
+    def _clamp_scatter_(self, indices: torch.Tensor, minval=None, maxval=None):
+        for i in range(len(indices)):
+            indices[i].clamp_(min=minval, max=maxval)
+
+    def compute_gradient(self, image, indices):
+        spatial_dims = image.size()[2:]
+        match self.method:
+            case "forward":
+                # indices[0].clamp(max=spatial_dims[2]-1)
+                # indices[1].clamp(max=spatial_dims[3]-1)
+                # indices[2].clamp(max=spatial_dims[4]-1)
+                if isinstance(indices, torch.Tensor):
+                    self._clamp_scatter_(indices, maxval=spatial_dims - 1)
+                elif isinstance(indices, list[slice]):
+                    self._clamp_slices_(indices, maxval=spatial_dims - 1)
+
+                f_x = image[:, :, *indices][None]
+                f_xh = torch.stack(
+                    (
+                        image[:, :, indices[0] + 1, indices[1], indices[2]],
+                        image[:, :, indices[0], indices[1] + 1, indices[2]],
+                        image[:, :, indices[0], indices[1], indices[2] + 1],
+                    )
+                )
+
+            case "backward":
+                # indices[0].clamp(min=1)
+                # indices[1].clamp(min=1)
+                # indices[2].clamp(min=1)
+
+                f_xh = image[:, :, *indices][None]
+                f_x = torch.stack(
+                    (
+                        image[:, :, indices[0] - 1, indices[1], indices[2]],
+                        image[:, :, indices[0], indices[1] - 1, indices[2]],
+                        image[:, :, indices[0], indices[1], indices[2] - 1],
+                    )
+                )
+            case "center":
+                # indices[0].clamp(min=1, max=spatial_dims[2]-1)
+                # indices[1].clamp(min=1, max=spatial_dims[3]-1)
+                # indices[2].clamp(min=1, max=spatial_dims[4]-1)
+
+                raise NotImplementedError
+            case _:
+                raise ValueError(f"Invalid method '{self.method}'")
+
+        return (f_xh - f_x) / self.spacing  # (3, N, C, m)
+
+    def _gradient_loss(self, grad):
+        return grad.abs().mean()
+
+    def forward(self, image, indices):
+        # N=2
+        # C=3
+        # dims = (3,4,5)
+        # m = 4 # number of voxels to select
+        # image = torch.rand((N,C,*dims))
+
+        # indices = torch.stack([torch.randint(0,d,(m,)) for d in dims])
+
+        # ignore edges
+        # indices = torch.stack([torch.randint(1,d-1,(m,)) for d in dims])
+        # indices = [slice(10,20), slice(2,15), slice(5,15)]
+        # indices: (3, m)
+        # selected_voxels = image[..., *indices]
+        # selected_voxels = (N,C,m)
+
+        # image: n,c,w,h,d
+        # sel : n,c,m where m is the number of selected voxels
+        grad = self.compute_gradient(image, indices)
+        return self._gradient_loss(grad)
+
+
+class NormalizedCrossCorrelationLoss(torch.nn.Module):
+    def __init__(
+        self,
+        n_channels: int = 1,
+        n_spatial_dims: int = 3,
+        kernel_size: int | list[int] | tuple = 5,
+        ignore_ncc_sign: bool = False,
+        device: str | torch.device = "cpu",
+    ) -> None:
+        super().__init__()
+        self.ignore_ncc_sign = ignore_ncc_sign
+        device = torch.device(device) if isinstance(device, str) else device
+        if isinstance(kernel_size, int):
+            kernel_size = n_spatial_dims * [kernel_size]
+        kernel = torch.ones((n_channels, n_channels, *kernel_size), device=device)
+        self.nw = kernel.sum()
+        self.conv = functools.partial(
+            getattr(torch.nn.functional, f"conv{n_spatial_dims}d"),
+            weight=kernel,
+            #padding="same", # tuple(i // 2 for i in kernel_size),
+        )
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor):
+
+        # rename to simplify notation
+        f = y_pred
+        g = y_true
+
+        # we don't need to form the fully expanded array, however, this tends
+        # to be numerically unstable when the variance in an area is very
+        # small.
+        sum_f = self.conv(f)
+        sum_g = self.conv(g)
+        sum_f2 = self.conv(f**2)
+        sum_g2 = self.conv(g**2)
+        sum_fg = self.conv(f * g)
+
+        # mean_f = sum_f / self.nw
+        # mean_g = sum_g / self.nw
+
+        var_fg = self.nw * sum_fg - sum_f * sum_g
+        var_f = self.nw * sum_f2 - sum_f**2
+        var_g = self.nw * sum_g2 - sum_g**2
+
+        valid = (var_f > 0) & (var_g > 0)
+
+        ncc = torch.zeros_like(var_f)
+        ncc[valid] = var_fg[valid] / (var_f[valid].sqrt() * var_g[valid].sqrt())
+
+        # ncc = torch.nan_to_num(var_fg / (std_f * std_g))
+
+        invalid = (ncc < -1.0) | (ncc > 1.0)
+
+        # For now, just
+        ncc[invalid] = 0
+
+        # if invalid.any():
+        #     indices = torch.stack(torch.where(invalid)).T
+
+        #     select = ncc[invalid]
+        #     select_clamp = select.clamp(-1.0, 1.0)
+
+        #     invalid[invalid] = ~torch.isclose(select, select_clamp, atol=1e-3)
+
+        # -1.0 <= ncc.mean() <= 1.0 or 0 <= ncc.abs.mean() <= 1.0 where 1.0 is
+        # perfect
+        ncc = ncc.abs() if self.ignore_ncc_sign else ncc
+        return 1 - ncc.mean()
+
+# torch.corrcoef(torch.stack((f[win].ravel(), g[win].ravel())))
+
+
+# torch.sum( (f[win]-f[win].mean()) * (g[win]-g[win].mean()) ) / (
+#     f[win].std() * g[win].std()
+# ) / self.nw
+
+# x1 = f[win].sum()
+# x2 = g[win].sum()
+# x3 = (f[win]**2).sum()
+# x4 = (g[win]**2).sum()
+# x5 = (f[win] * g[win]).sum()
+
+# idx = (1,0,116,66,177)
+# idx1 = (1,0,idx[2]+2,idx[3]+2,idx[4]+2)
+
+# win = (1,0,slice(idx1[2]-2,idx1[2]+3), slice(idx1[3]-2, idx1[3]+3), slice(idx1[4]-2, idx1[4]+3))
+# win1 = (1,0,slice(idx[2]-2,idx[2]+3), slice(idx[3]-2, idx[3]+3), slice(idx[4]-2, idx[4]+3))
+
+# for i in zip(torch.randint(10,180,(10,)),torch.randint(10,180,(10,)),torch.randint(10,180,(10,))):
+#     idx = (1,0,i[0], i[1], i[2])
+#     idx1 = (1,0,i[0]+2, i[1]+2, i[2]+2)
+
+#     win = (1,0,slice(idx1[2]-2,idx1[2]+3), slice(idx1[3]-2, idx1[3]+3), slice(idx1[4]-2, idx1[4]+3))
+
+#     print(torch.cov(torch.stack((f[win].ravel(), g[win].ravel()))))
+
+#     print(torch.corrcoef(torch.stack((f[win].ravel(), g[win].ravel()))))
+#     print(ncc[idx])
+#     print()
+
+
+# idx = (1,0,106,181,30)
+# idx1 = (1,0,106+2,181+2,30+2)
+
+# win = (1,0,slice(106-2,106+3), slice(181-2, 181+3), slice(30-2, 30+3))
+# win1 = (1,0,slice(106,106+3+2), slice(181, 181+3+2), slice(30, 30+3+2))
 
 # def compute_per_channel_dice(y_pred, y_true, epsilon=1e-6, weight=None):
 #     """

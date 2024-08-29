@@ -2,7 +2,7 @@ import torch
 
 
 def get_recursively_subdivided_topology(
-    n_recursions: int = 0, faces: torch.IntTensor | None = None
+    n_recursions: int = 0, faces: torch.Tensor | None = None
 ):
     assert n_recursions >= 0
     faces = faces if faces is not None else initial_faces
@@ -17,12 +17,15 @@ def get_recursively_subdivided_topology(
 
 
 class Topology:
-    def __init__(self, faces: torch.IntTensor):
+    def __init__(self, faces: torch.Tensor):
         self.subdivision_factor = 4
         self.faces = faces
         self.n_faces = faces.shape[0]
         self.n_vertices = self.n_faces_to_n_vertices(self.n_faces)
         self._reversed_face_order = (0, 2, 1)
+        self.edge_pairs = torch.tensor(
+            [[1, 2], [2, 0], [0, 1]], dtype=torch.int, device=self.faces.device
+        )
 
         (
             self.vertex_adjacency,
@@ -38,9 +41,13 @@ class Topology:
     def edges_from_faces(self, apply_sort=False):
         """Apply *within*-edge sort no matter what."""
         # pairs = torch.LongTensor([[0, 1], [1, 2], [2, 0]])
-        pairs = torch.LongTensor([[1, 2], [2, 0], [0, 1]])
+        # pairs = torch.tensor([[1, 2], [2, 0], [0, 1]], device=self.faces.device)
         edges = torch.stack(
-            [self.faces[:, pairs[:, 0]], self.faces[:, pairs[:, 1]]], dim=2
+            [
+                self.faces[:, self.edge_pairs[:, 0]],
+                self.faces[:, self.edge_pairs[:, 1]],
+            ],
+            dim=2,
         )
         edges = edges.reshape((-1, 2))
         edges, _ = edges.sort(1)

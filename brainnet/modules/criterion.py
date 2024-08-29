@@ -1,9 +1,13 @@
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import torch
+from ignite.exceptions import NotComputableError
+from ignite.metrics.metric import Metric, reinit__is_reduced, sync_all_reduce
 
 from brainnet.config import LossParameters
 import brainnet.modules
+import brainnet.utilities
+
 
 def recursive_dict_setter(d, k, v):
     if len(k) == 1:
@@ -261,52 +265,20 @@ class Criterion(torch.nn.Module):
 
         weight = None
 
-        points, sf, sb = surface.sample_points(
+        points, samp_face, samp_coo = surface.sample_points(
             n_samples,
             weights=weight,
             return_sampled_faces_and_bc=True,
         )
-        sampled_K = surface.interpolate_vertex_feature_to_barycentric_coords(K, sf, sb)
-        sampled_H = surface.interpolate_vertex_feature_to_barycentric_coords(H, sf, sb)
+        sampled_K = surface.interpolate_vertex_features(K, samp_face, samp_coo)
+        sampled_H = surface.interpolate_vertex_features(H, samp_face, samp_coo)
         if "weights" in surface.vertex_data:
-            sampled_weights = surface.interpolate_vertex_feature_to_barycentric_coords(
-                surface.vertex_data["weights"], sf, sb
+            sampled_weights = surface.interpolate_vertex_features(
+                surface.vertex_data["weights"], samp_face, samp_coo
             )
         else:
             sampled_weights = None
         return points, sampled_K, sampled_H, sampled_weights
-
-    # def precompute_for_surface_loss(self, y_pred: dict, y_true: dict):
-    #     index_name = "index"
-    #     curvature_name = "curv"
-
-    #     n_smooth = 1
-
-    #     if self.has_SymmetricLoss:  # chamfer *or* curvature
-    #         # compute nearest neighbors
-    #         for h, surfaces in y_pred.items():
-    #             for s in surfaces:
-    #                 # these are indices into y_true!
-    #                 index = y_pred[h][s].nearest_neighbor(y_true[h][s])
-    #                 y_pred[h][s].vertex_data[index_name] = index
-    #                 # these are indices into y_pred!
-    #                 index = y_true[h][s].nearest_neighbor(y_pred[h][s])
-    #                 y_true[h][s].vertex_data[index_name] = index
-
-    #     # compute curvature
-    #     if self.has_CurvatureLoss:
-    #         for h, surfaces in y_pred.items():
-    #             for s in surfaces:
-    #                 curv = y_pred[h][s].compute_laplace_beltrami_operator()
-    #                 y_pred[h][s].vertex_data[curvature_name] = curv
-
-    #                 curv = y_true[h][s].compute_laplace_beltrami_operator()
-    #                 if n_smooth > 0:
-    #                     # smooth the true surface curvature
-    #                     curv = y_true[h][s].compute_iterative_spatial_smoothing(
-    #                         curv, n_smooth
-    #                     )
-    #                 y_true[h][s].vertex_data[curvature_name] = curv
 
     def forward(self, y_pred, y_true):
         """Compute all losses that is possible given the entries in `y_pred`"""
@@ -331,51 +303,8 @@ class Criterion(torch.nn.Module):
                     # Required data does not exist in y_pred and/or y_true
                     pass
 
-
-        # loss_dict = {}
-        # for head, head_losses in self.loss_functions.items():
-        #     loss_dict[head] = {}
-        #     found = False
-
-        #     for name, loss in head_losses.items():
-
-        #         if self._loss_weights[head][name] > 0.0:
-        #             # we try as this will usually be okay
-        #             try:
-        #                 match loss:
-        #                     case loss_wrappers.SupervisedLoss():
-        #                         value = loss(y_pred, y_true)
-        #                     case loss_wrappers.RegularizationLoss():
-        #                         value = loss(y_pred)
-        #                     case _:
-        #                         raise ValueError
-        #                 loss_dict[head][name] = value
-        #                 found = True
-        #             except KeyError:
-        #                 # Required data does not exist in y_pred and/or y_true
-        #                 pass
-
-        #     if not found:
-        #         del loss_dict[head]
-
-        # set the across task normalizer
-
-        # wn = 1 / sum(self.task_weights[t] for t in loss_dict)
-        # self.across_task_normalizer = {
-        #     t: self.task_weights[t] * wn for t in loss_dict
-        # }
-
         return loss_dict
 
-
-import brainnet.utilities
-
-from typing import Callable, Mapping
-
-import torch
-
-from ignite.exceptions import NotComputableError
-from ignite.metrics.metric import Metric, reinit__is_reduced, sync_all_reduce
 
 class CriterionAggregator(Metric):
 

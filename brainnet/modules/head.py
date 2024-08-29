@@ -1,7 +1,6 @@
 import torch
 
-import monai
-from monai.networks.blocks import Convolution
+from brainnet.modules.blocks import ConvBlock
 from brainnet.modules.topofit.models import TopoFitGraph, TopoFitGraphAdjust
 
 """
@@ -18,26 +17,33 @@ and returns a prediction.
 
 
 class HeadModule(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, extra_convs=None) -> None:
+    def __init__(self, channels: tuple | list[int], init_zeros: bool = True) -> None:
+        """_summary_
+
+        Parameters
+        ----------
+        channels : tuple | list[int]
+            The first value defines number of input channels and the last value
+            defines output channels. For example, [64, 64, 3] gives two conv
+            layers: 64 -> 64 and 64 -> 3.
+        """
         super().__init__()
-
-        extra_convs = [] if extra_convs is None else extra_convs
-        assert isinstance(extra_convs, list)
-
-        conv_kwargs = dict(spatial_dims=3)
-
-        in_chs = [in_channels] + extra_convs
-        out_chs = extra_convs + [out_channels]
 
         self.convs = torch.nn.Sequential(
             *[
-                Convolution(in_channels=in_ch, out_channels=out_ch, **conv_kwargs)
-                for in_ch, out_ch in zip(in_chs, out_chs)
+                ConvBlock(3, in_ch, out_ch, init_zeros=init_zeros)
+                for in_ch, out_ch in zip(channels[:-1], channels[1:])
             ]
         )
 
     def forward(self, features):
         return self.convs(features)
+
+
+class SVFModule(HeadModule):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
 
 
 class SegmentationModule(HeadModule):
@@ -61,44 +67,44 @@ class SuperResolutionModule(HeadModule):
         super().__init__(*args, **kwargs)
 
 
-class BiasFieldModule(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        in_shape: torch.Size | torch.Tensor,
-        out_shape: torch.Size | torch.Tensor,
-    ) -> None:
-        """Perform (up)convolution on the specified features and scale to the
-        target shape if necessary.
-        """
-        super().__init__()
+# class BiasFieldModule(torch.nn.Module):
+#     def __init__(
+#         self,
+#         in_channels: int,
+#         out_channels: int,
+#         in_shape: torch.Size | torch.Tensor,
+#         out_shape: torch.Size | torch.Tensor,
+#     ) -> None:
+#         """Perform (up)convolution on the specified features and scale to the
+#         target shape if necessary.
+#         """
+#         super().__init__()
 
-        # expose in config
-        self.in_shape = torch.tensor(in_shape)
-        self.out_shape = torch.tensor(out_shape)
+#         # expose in config
+#         self.in_shape = torch.tensor(in_shape)
+#         self.out_shape = torch.tensor(out_shape)
 
-        if self.in_shape.equal(self.out_shape):
-            self.convolve = Convolution(in_channels, out_channels, spatial_dims=3)
-        else:
-            self.convolve = torch.nn.ConvTranspose3d(
-                in_channels, out_channels, kernel_size=8, stride=8, padding=0
-            )
+#         if self.in_shape.equal(self.out_shape):
+#             self.convolve = Convolution(in_channels, out_channels, spatial_dims=3)
+#         else:
+#             self.convolve = torch.nn.ConvTranspose3d(
+#                 in_channels, out_channels, kernel_size=8, stride=8, padding=0
+#             )
 
-        self.resize = monai.transforms.Resize(
-            self.out_shape, mode="trilinear"
-        )  # area is default
+#         self.resize = monai.transforms.Resize(
+#             self.out_shape, mode="trilinear"
+#         )  # area is default
 
-    def forward(self, features):
-        if self.feature_level is not None:
-            features = features[self.feature_level]
-        x = self.convolve(features)
-        x = (
-            x
-            if self.out_shape.equal(torch.tensor(x.shape))
-            else monai.transforms.Resize(x)
-        )
-        return x.exp()
+#     def forward(self, features):
+#         if self.feature_level is not None:
+#             features = features[self.feature_level]
+#         x = self.convolve(features)
+#         x = (
+#             x
+#             if self.out_shape.equal(torch.tensor(x.shape))
+#             else monai.transforms.Resize(x)
+#         )
+#         return x.exp()
 
 
 class ContrastiveModule(torch.nn.Module):

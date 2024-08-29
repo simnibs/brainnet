@@ -121,3 +121,16 @@ def divide_dict(a: dict, b: dict):
         else:
             a[k] /= b[k]
     return a
+
+
+def recursive_itemize(d, out=None):
+    """Recursively call .item() on values."""
+    if out is None:
+        out = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            out[k] = {}
+            recursive_itemize(v, out[k])
+        else:
+            out[k] = v.item()
+    return out

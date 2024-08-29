@@ -4,10 +4,11 @@ import brainsynth
 import brainnet.config
 import brainnet.modules
 
-def init_model(config: brainnet.config.ModelParameters):
+def init_model(config: brainnet.config.BrainNetParameters):
     # Device is needed as arg for topofit for now...
     device = torch.device(config.device)
-    model = brainnet.modules.BrainNet(config.body, config.heads, device)
+    model_cls = getattr(brainnet.modules, config.model)
+    model = model_cls(**vars(config))
     model.to(device)
     return model
 
@@ -58,4 +59,4 @@ def init_criterion(config: brainnet.config.CriterionParameters):
     return {subset: brainnet.Criterion(v) for subset,v in vars(config).items()}
 
 def init_synthesizer(config: brainnet.config.SynthesizerParameters):
-    return {subset: brainsynth.Synthesizer(v) for subset,v in vars(config).items()}
+    return {subset: None if v is None else brainsynth.Synthesizer(v) for subset,v in vars(config).items()}

@@ -49,11 +49,18 @@ class EventAction:
 
 @dataclass
 class ModelParameters:
-    """Filename is only used if config is not specified."""
     device: torch.device
     body: torch.nn.Module
+
+@dataclass
+class BrainNetParameters(ModelParameters):
+    model = "BrainNet"
     heads: dict[str, torch.nn.Module]
 
+@dataclass
+class BrainRegParameters(ModelParameters):
+    model = "BrainReg"
+    svf: torch.nn.Module
 
 @dataclass
 class OptimizerParameters:
@@ -118,8 +125,11 @@ class TrainParameters:
     # Consider the model "converged" when the LR is reduced to this value
     minimum_lr: float = 1e-10
 
-    surface_decoupling_amount: float = 0.2 # 0.0 to disable
-
+    def __post_init__(self):
+        if self.events_trainer is None:
+            self.events_trainer = []
+        if self.events_evaluators is None:
+            self.events_evaluators = []
 
 @dataclass
 class WandbParameters:

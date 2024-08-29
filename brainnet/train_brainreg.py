@@ -13,63 +13,52 @@ import brainnet.train_utilities
 from brainnet import event_handlers
 import brainnet.initializers
 from brainnet.mesh.surface import TemplateSurfaces
-from brainnet.modules.head import SurfaceModule
 from brainnet.utilities import recursive_dict_sum, recursive_itemize
 
+from brainnet.mesh import topology
 
-# points = np.concatenate((w.vertices[0].cpu().numpy(), p.vertices[0].cpu().numpy()))
-# cells = np.concatenate(
-#     (
-#         np.full((w.topology.n_vertices, 1), 2),
-#         np.ascontiguousarray(np.arange(len(points)).reshape(2, -1).T),
-#     ),
-#     axis=1,
-# )
-# lines = pv.PolyData(points, cells)
-
-
+from brainsynth.transforms import EnsureDevice, IntensityNormalization
 
 class SupervisedStep:
     def __init__(
         self,
         synthesizer: None | brainsynth.Synthesizer,
-        model: brainnet.BrainNet,
+        model: brainnet.BrainReg,
         criterion: brainnet.Criterion,
+        surface_resolution: int,
     ) -> None:
         self.synthesizer = synthesizer
         self.model = model
         self.criterion = criterion
         self.device = self.model.device
 
+        self.intensity_normalization = IntensityNormalization(device=self.device)
+        self.ensure_device = EnsureDevice(self.device)
+
         # Get empty TemplateSurfaces. We update the vertices at each iteration
         self.surface_template = dict(
-            y_pred=self.get_placeholder_surface_templates(),
-            y_true=self.get_placeholder_surface_templates(),
+            y_pred=self.get_placeholder_surface_templates(surface_resolution),
+            y_true=self.get_placeholder_surface_templates(surface_resolution),
         )
 
-    def get_placeholder_surface_templates(self):
+    def get_placeholder_surface_templates(self, surface_resolution):
         """Initialize placeholder objects for the predicted and target
         surfaces. The vertices are updated on each iteration.
         """
         surface_names = ("white", "pial")
 
-        module = [i for i in self.model.heads.values() if isinstance(i, SurfaceModule)]
-        if len(module) == 0:
-            return None
-
-        assert len(module) == 1
-        module = module[0]
-
-        topology = module.get_prediction_topology()
-        topology = dict(lh=topology, rh=copy.deepcopy(topology))
-        topology["rh"].reverse_face_orientation()
+        top = topology.get_recursively_subdivided_topology(
+            surface_resolution, topology.initial_faces.to(self.device)
+        )[-1]
+        top = dict(lh=top, rh=copy.deepcopy(top))
+        top["rh"].reverse_face_orientation()
 
         return {
             h: {
                 s: TemplateSurfaces(torch.zeros(t.n_vertices, 3, device=self.device), t)
                 for s in surface_names
             }
-            for h, t in topology.items()
+            for h, t in top.items()
         }
 
     def update_surface_template(self, template, data):
@@ -85,10 +74,40 @@ class SupervisedStep:
         """Run data augmentation/synthesis on the batch as returned by the
         dataloader.
         """
+        # We don't need the initial vertices
+        images, surfaces, _ = batch
+
+        images = self.ensure_device(images)
+        surfaces = self.ensure_device(surfaces)
+
+        assert len(next(iter(images))) % 2 == 0, "Even number of examples in a batch required."
+
+        # We abuse the batching done by the dataloader and reshape like
+        #
+        #   batch = (N,1,W,H,D) -> (N/2,2,W,H,D)
+        #
+        # such that we can use consecutive subjects are registration pairs.
+        # for k, v in images.items():
+        #     size = v.size()
+        #     images[k] = v.reshape(size[0] // 2, 2, *size[2:])
+
+        # for k, v in surfaces.items():
+        #     for kk, vv in v.items():
+        #         size = vv.size()
+        #         surfaces[k][kk] = vv[None].reshape(size[0] // 2, 2, *size[2:])
+
         if self.synthesizer is None:
             # assume synthesizer was applied when loading the data
-            return batch
+
+            for k,v in images.items():
+                if v.is_floating_point():
+                    images[k] = self.intensity_normalization(v)
+
+            images["surface"] = surfaces
+            return images["t1w_areg_mni"], images
         else:
+            raise NotImplementedError("Synth with BrainReg is not yet implemented!")
+
             images, surfaces, init_verts = batch
 
             # REMOVE BATCH DIMENSION
@@ -136,11 +155,66 @@ class SupervisedStep:
         )
 
 
+    def predict(self, images: torch.Tensor, y_true: dict):
+
+        # batch (N, 1, ...) was reshaped as (N/2, 2, ...) thus
+        # y_pred = (N/2, 3, ...)
+        y_pred = dict(svf=self.model(images))
+
+        # deform 0 to 1
+
+        # we swap 0 and 1 when returning the predicted image(s) and surfaces.
+        # This way, they can be directly compared with y_true
+
+        # y_true has [sub-01, sub-02] in channel dim but y_pred is returned
+        # as [deformed(sub-01), deformed(sub-02)] in channel dim so we need
+        # to swap either y_pred or y_true when we calculate the losses
+        # (such that deformed(sub-01) aligns with sub-02 etc.)
+        deform_fwd, deform_bwd = self.model.integrate_svf(y_pred["svf"])
+
+        # stack predictions inversely:
+        # align the prediction of 0 to image 1 and prediction of 1 to image 1
+        for k0,v0 in y_true.items():
+            if k0 == "surface":
+                y_pred[k0] = {}
+                for k1,v1 in v0.items():  # hemi
+                    y_pred[k0][k1] = {}
+                    for k2,v2 in v1.items():  # surfaces
+                        s0 = v2[0::2] # (N, V, 3) -> (N/2, V, 3)
+                        s1 = v2[1::2]
+
+                        s0 = self.model.deform_surface(s0, deform_bwd)
+                        s1 = self.model.deform_surface(s1, deform_fwd)
+
+                        y_pred[k0][k1][k2] = torch.zeros_like(v2)
+                        y_pred[k0][k1][k2][0::2] = s1
+                        y_pred[k0][k1][k2][1::2] = s0
+
+            else:
+                i0 = v0[0::2] # (N/2, 2, ...) -> (N/2, 1, ...)
+                i1 = v0[1::2]
+
+                i0 = self.model.deform_image(i0, deform_fwd)
+                i1 = self.model.deform_image(i1, deform_bwd)
+
+                y_pred[k0] = torch.zeros_like(v0)
+                y_pred[k0][0::2] = i1
+                y_pred[k0][1::2] = i0
+
+        return y_pred
+
+
 class SupervisedTrainingStep(SupervisedStep):
     def __init__(
-        self, synthesizer, model, criterion, optimizer, enable_amp: bool = False
+        self,
+        synthesizer,
+        model,
+        criterion,
+        optimizer,
+        surface_resolution: int,
+        enable_amp: bool = False,
     ) -> None:
-        super().__init__(synthesizer, model, criterion)
+        super().__init__(synthesizer, model, criterion, surface_resolution)
         self.optimizer = optimizer
         self.enable_amp = enable_amp
 
@@ -150,16 +224,14 @@ class SupervisedTrainingStep(SupervisedStep):
         # called)
         self.optimizer.zero_grad()
 
-        image, y_true, init_verts = self.prepare_batch(batch)
+        images, y_true = self.prepare_batch(batch)
 
-        # Only wrap forward pass and loss computation. Backward uses the same11
+        # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
         self.model.train()
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            y_pred = self.model(
-                image,
-                init_verts,  # head_kwargs=engine.state.head_runtime_kwargs
-            )
+            y_pred = self.predict(images, y_true)
+
             loss = self.compute_loss(y_pred, y_true)
             total_loss = recursive_dict_sum(loss["weighted"])
 
@@ -173,42 +245,35 @@ class SupervisedTrainingStep(SupervisedStep):
         loss = recursive_itemize(loss)
 
         # these are stored in engine.state.output
-        return loss, image, y_pred, y_true
+        return loss, images, y_pred, y_true
 
 
 class EvaluationStep(SupervisedStep):
-    def __init__(self, synthesizer, model, criterion, enable_amp: bool = False):
-        super().__init__(synthesizer, model, criterion)
+    def __init__(
+        self,
+        synthesizer,
+        model,
+        criterion,
+        surface_resolution,
+        enable_amp: bool = False,
+    ):
+        super().__init__(synthesizer, model, criterion, surface_resolution)
         self.enable_amp = enable_amp
 
     def __call__(self, engine, batch):
-        image, y_true, init_verts = self.prepare_batch(batch)
+        images, y_true = self.prepare_batch(batch)
 
         self.model.eval()
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
-                y_pred = self.model(
-                    image, init_verts  # , head_kwargs=engine.state.head_runtime_kwargs
-                )
+                y_pred = self.predict(images, y_true)
                 loss = self.compute_loss(y_pred, y_true)
 
         # we don't need the weighted loss
         del loss["weighted"]
         loss = recursive_itemize(loss)
 
-        return loss, image, y_pred, y_true
-
-
-# def initialize(config):
-
-#     if hasattr(config, "lr_scheduler") and config.lr_scheduler is not None:
-#         lr_scheduler = getattr(torch.optim.lr_scheduler, config.lr_scheduler.model)(
-#             optimizer, **vars(config.lr_scheduler.kwargs)
-#         )
-#     else:
-#         lr_scheduler = None
-
-#     return dataloader, synthesizer, model, optimizer, criterion, lr_scheduler
+        return loss, images, y_pred, y_true
 
 
 def train(args):
@@ -220,7 +285,6 @@ def train(args):
 
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
 
-    sep_line = 79 * "="
 
     # Overwrite args from command line if provided
     if args.load_checkpoint is not None:
@@ -242,11 +306,17 @@ def train(args):
     # TRAINING
     # =============================================================================
 
+    surface_resolution = {
+        k: next(iter(v.dataset_kwargs.values()))["target_surface_resolution"]
+        for k, v in vars(train_setup.dataset).items()
+    }
+
     train_step = SupervisedTrainingStep(
         synth["train"],
         model,
         criterion["train"],
         optimizer,
+        surface_resolution["train"],
         enable_amp=train_setup.train_params.enable_amp,
     )
     trainer = Engine(train_step)
@@ -260,11 +330,10 @@ def train(args):
     # Add evaluation
     kwargs = dict(
         engine=trainer,
-        model=model,
         evaluate_on=train_setup.train_params.evaluate_on,
         epoch_length=train_setup.train_params.epoch_length_val,
-        enable_amp=train_setup.train_params.enable_amp,
     )
+
     evaluators = dict(
         # train = add_evaluation_event(
         #     criterion=criterion["validation"],  # NOTE here we use the validation criterion!
@@ -274,8 +343,13 @@ def train(args):
         #     **kwargs,
         # ),
         validation=brainnet.train_utilities.add_evaluation_event(
-            criterion=criterion["validation"],
-            synth=synth["validation"],
+            EvaluationStep(
+                synth["validation"],
+                model,
+                criterion["validation"],
+                surface_resolution["validation"],
+                train_setup.train_params.enable_amp,
+            ),
             dataloader=dataloader["validation"],
             logger=event_handlers.MetricLogger(key="loss", name="validation"),
             **kwargs,
@@ -285,24 +359,35 @@ def train(args):
     brainnet.train_utilities.add_wandb_logger(trainer, evaluators, train_setup.wandb)
 
     # Should be triggered after metrics has been computed!
-    brainnet.train_utilities.add_custom_events(trainer, train_setup.train_params.events_trainer)
+    brainnet.train_utilities.add_custom_events(
+        trainer, train_setup.train_params.events_trainer
+    )
     for e in evaluators.values():
-        brainnet.train_utilities.add_custom_events(e, train_setup.train_params.events_evaluators)
-
+        brainnet.train_utilities.add_custom_events(
+            e, train_setup.train_params.events_evaluators
+        )
 
     # to_save = dict(model=model, optimizer=optimizer, engine=trainer)
     # load_checkpoint(to_save, train_setup)
 
     # Include this in the checkpoint
-    to_save = dict(model=model, optimizer=optimizer, engine=trainer,
-                   **{f"criterion[{k}]": v for k,v in criterion.items()})
+    to_save = dict(
+        model=model,
+        optimizer=optimizer,
+        engine=trainer,
+        **{f"criterion[{k}]": v for k, v in criterion.items()},
+    )
 
     brainnet.train_utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
-    brainnet.train_utilities.write_example_to_disk(trainer, evaluators, train_setup.results)
+    brainnet.train_utilities.write_example_to_disk(
+        trainer, evaluators, train_setup.results
+    )
 
     brainnet.train_utilities.load_checkpoint(to_save, train_setup)
 
     print("Setup completed. Starting training at epoch ...")
+
+    sep_line = 79 * "="
 
     print(sep_line)
     print(f"Config file     {train_setup_file}")
@@ -319,132 +404,7 @@ def train(args):
         max_epochs=train_setup.train_params.max_epochs,
     )
 
+
 if __name__ == "__main__":
     args = brainnet.train_utilities.parse_args(sys.argv)
     train(args)
-
-# import torch
-# import nibabel as nib
-# from brainnet.mesh import surface
-# import numpy as np
-# import pyvista as pv
-
-
-# device = torch.device("cuda:0")
-# v, f = nib.freesurfer.read_geometry(
-#     "/mnt/scratch/personal/jesperdn/results/BrainNetEdgeNet/PointSample/examples/train_800_lh.white.pred"
-# )
-
-# pred = surface.TemplateSurfaces(
-#     torch.tensor(v.astype(np.float32)).to(device),
-#     torch.tensor(f.astype(np.int32)).to(device),
-# )
-
-# n = pred.compute_vertex_normals()
-# K = pred.compute_laplace_beltrami_operator()
-# H = pred.compute_mean_curvature(K)
-
-
-# v1, f1 = nib.freesurfer.read_geometry(
-#     "/mnt/scratch/personal/jesperdn/results/BrainNetEdgeNet/PointSample/examples/train_800_lh.white.true"
-# )
-# tr = surface.TemplateSurfaces(
-#     torch.tensor(v1.astype(np.float32)).to(device),
-#     torch.tensor(f1.astype(np.int32)).to(device),
-# )
-
-# n1 = pred.compute_vertex_normals()
-# K1 = pred.compute_laplace_beltrami_operator()
-# H1 = pred.compute_mean_curvature(K1)
-
-# ix = pred.nearest_neighbor(tr)
-# ix1 = tr.nearest_neighbor(pred)
-
-
-# m = pv.make_tri_mesh(v, f)
-# m["K"] = K.cpu().numpy()[0]
-# m["H"] = H.cpu().numpy()[0]
-# m["n"] = n.cpu().numpy()[0]
-# m["dK"] = torch.sum((K[0] - K1[0, ix1]) ** 2, dim=-1).cpu().numpy()[0]
-# m.save("/home/jesperdn/nobackup/pred.vtk")
-
-# m = pv.make_tri_mesh(v1, f1)
-# m["K"] = K1.cpu().numpy()[0]
-# m["H"] = H1.cpu().numpy()[0]
-# m["n"] = n1.cpu().numpy()[0]
-# m["dK"] = torch.sum((K[0, ix] - K1[0]) ** 2, dim=-1).cpu().numpy()[0]
-# m.save("/home/jesperdn/nobackup/true.vtk")
-
-
-# with torch.inference_mode():
-#     y_pred = self.model(image, init_verts, head_kwargs=self.head_runtime_kwargs)
-# # convert surface predictions to batched surfaces
-# if (k := "surface") in y_pred:
-#     # insert vertices into template surface
-#     self.set_templatesurface(y_pred[k], self.surface_skeletons["y_pred"])
-#     # self.set_templatesurface(y_true_out[k], self.surface_skeletons["y_true"])
-
-#     # self.criterion.precompute_for_surface_loss(y_pred[k], y_true[k])
-#     self.criterion.prepare_for_surface_loss(y_pred[k], y_true[k])
-
-# from pathlib import Path
-# from brainsynth.dataset import CroppedDataset
-# import torch
-# from brainnet.mesh import surface
-# from brainnet.mesh.topology import get_recursively_subdivided_topology
-
-# base_dir = Path("/mnt/scratch/personal/jesperdn/datasets")
-# datasets = ("HCP", "OASIS3")
-# kwargs = dict(surface_resolution=6, surface_hemi="both", default_images=[])  # norm
-# device = torch.device("cuda:0")
-
-# topology = get_recursively_subdivided_topology(6)
-# faces = topology[-1].faces.to(device)
-# faces = dict(lh=faces, rh=faces[:, (0, 2, 1)])
-
-# # Individual datasets
-# datasets = [
-#     CroppedDataset(
-#         base_dir / ds,
-#         optional_images=None,
-#         dataset_id=ds,
-#         return_dataset_id=False,
-#         **kwargs,
-#     )
-#     for ds in datasets
-# ]
-# dataset = torch.utils.data.ConcatDataset(datasets)
-
-# n_subjects = len(dataset)
-
-# stats = {}
-# for hemi in ("lh", "rh"):
-#     print(hemi)
-#     stats[hemi] = {}
-#     for ss in ("white", "pial"):
-#         print(ss)
-#         stats[hemi][ss] = {}
-#         H = torch.zeros((topology[-1].n_vertices, n_subjects), device=device)
-#         for i in range(n_subjects):
-#             if i % 100 == 0:
-#                 print(i)
-#             _, surf, init, info = dataset[i]
-#             s = surface.TemplateSurfaces(surf[hemi][ss].to(device), faces[hemi])
-#             K = s.compute_laplace_beltrami_operator()
-#             H[:, i] = s.compute_mean_curvature(K).squeeze()
-
-#         stats[hemi][ss]["H_mean"] = H.mean(1).cpu()
-#         stats[hemi][ss]["H_std"] = H.std(1).cpu()
-#         for q in (0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.90, 0.95, 0.99):
-#             stats[hemi][ss][f"H_{q:.2f}"] = H.quantile(q, dim=1).cpu()
-
-# torch.save(stats, "/home/jesperdn/nobackup/prior_curvature_H.pt")
-
-# _, surf, init, info = dataset[0]
-
-# for hemi in ("lh", "rh"):
-#     for ss in ("white", "pial"):
-#         m = pv.make_tri_mesh(surf[hemi][ss].numpy(), faces[hemi].cpu().numpy())
-#         for st in stats[hemi][ss]:
-#             m[st] = stats[hemi][ss][st].numpy()
-#         m.save(f"/home/jesperdn/nobackup/H_prior_{hemi}_{ss}.vtk")
