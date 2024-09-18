@@ -60,7 +60,7 @@ class BrainNetParameters(ModelParameters):
 @dataclass
 class BrainRegParameters(ModelParameters):
     model = "BrainReg"
-    svf: torch.nn.Module
+    svf: list[torch.nn.Module]
 
 @dataclass
 class OptimizerParameters:

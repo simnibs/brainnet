@@ -1,41 +1,4 @@
-# Segmentation
-
-# seg:
-#   DiceCE:
-#     module:
-#       name: SupervisedLoss
-#       kwargs: # initialization kwargs for module
-#         y_pred: segmentation
-#         y_true: segmentation
-#     loss:
-#       name: monai.losses.DiceCELoss
-#       kwargs: # initialization kwargs for loss function
-#         # include_background: false  # default = true
-#         softmax: true     # apply softmax before dice loss
-#         # lambda_dice: 0.5  # default = 1.0
-#         # lambda_ce: 0.5    # default = 1.0
-
-# seg:
-#   DiceCE:
-#     module:
-#       name: MaskedSupervisedLoss
-#       kwargs: # initialization kwargs for module
-#         y_pred: segmentation
-#         y_true: segmentation
-#     loss:
-#       name: monai.losses.DiceCELoss
-#       kwargs: # initialization kwargs for loss function
-#         # include_background: false  # default = true
-#         softmax: true     # apply softmax before dice loss
-#         # lambda_dice: 0.5  # default = 1.0
-#         # lambda_ce: 0.5    # default = 1.0
-
-
-# Surface loss:
-# - loss is averaged across lh and rh (as available)
-
 from brainnet.config.base import LossParameters
-
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
     SurfaceSupervisedLoss,
@@ -49,23 +12,8 @@ from brainnet.modules.losses import (
     SymmetricCurvatureNormLoss,
 )
 
-# brainseg = dict(
-#   dice: SupervisedLoss(DiceLoss(), y_pred="brainseg", y_true="brainseg")
-# )
-
-#   DiceCE:
-#     module:
-#       name: SupervisedLoss
-#       kwargs: # initialization kwargs for module
-#         y_pred: segmentation
-#         y_true: segmentation
-#     loss:
-#       name: monai.losses.DiceCELoss
-#       kwargs: # initialization kwargs for loss function
-#         # include_background: false  # default = true
-#         softmax: true     # apply softmax before dice loss
-#         # lambda_dice: 0.5  # default = 1.0
-#         # lambda_ce: 0.5    # default = 1.0
+# Surface loss:
+# - loss is averaged across lh and rh (as available)
 
 functions = dict(
     white=dict(
@@ -102,14 +50,12 @@ functions = dict(
     ),
 )
 
-# brainseg=1.0
-head_weights = dict(white=1.0, pial=1.0, thickness=0.0)
+head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 
-# brainseg=dict(dice=1.0),
 loss_weights=dict(
         white=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
         pial=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
-        thickness=dict(angle=1.0),
+        thickness=dict(angle = 1.0),
     )
 
 #           1     200     400     600     800     1000    1200    1400    ... 1800

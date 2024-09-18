@@ -1,7 +1,7 @@
 from ignite.engine import Events
 
 from brainnet import config
-from brainnet.event_handlers import set_loss_weight, optimizer_multiply_lr
+from brainnet.event_handlers import set_head_weight, set_loss_weight, optimizer_multiply_lr
 
 loss_events = [
     config.EventAction(
@@ -70,6 +70,13 @@ loss_events = [
             ("pial", "curv"):       2.5, # white / 4
         }),
     ),
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=3001),
+    #     handler=set_head_weight,
+    #     kwargs=dict(weights={
+    #         "thickness":  1.0,
+    #     }),
+    # ),
 ]
 
 optimizer_events = [

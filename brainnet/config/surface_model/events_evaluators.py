@@ -15,7 +15,7 @@ from brainnet.event_handlers import set_loss_weight
 loss_events = [
     # Turn on losses
     config.EventAction(
-        event=Events.EPOCH_COMPLETED(once=1000),
+        event=Events.EPOCH_COMPLETED(once=600),
         handler=set_loss_weight,
         kwargs=dict(weights={
             ("white", "chamfer"):   1.0, # new

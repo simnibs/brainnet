@@ -16,10 +16,10 @@ from .losses import cfg_loss
 # =============================================================================
 
 project: str = "BrainNet"
-run: str = "lh_rand-res_T1w"
+run: str = "lh_1mm-iso_PV_really-1mm"
 run_id: None | str = None # f"{run}-00"
-resume_from_run: None | str = "lh_rand-res" # run
-tags = ["synth", "rand res", "T1w"]
+resume_from_run: None | str = None # run
+tags = ["synth", "1mm res", "rand PV"]
 device: str | torch.device  = torch.device("cuda:0")
 
 target_surface_resolution: int = 5
@@ -40,7 +40,7 @@ cfg_train = config.TrainParameters(
     # evaluate_on=Events.EPOCH_COMPLETED,
     events_trainer=events_trainer.events,
     events_evaluators=events_evaluators.events,
-    enable_amp=False,
+    enable_amp=True,
 )
 
 # =============================================================================
@@ -58,8 +58,8 @@ cfg_dataset = config.DatasetParameters(
         root_dir = root_dir / "training_data",
         subject_dir = root_dir / "training_data_subjects",
         subject_subset = "train",
-        # images = ["generation_labels"],
-        images = ["t1w"],
+        images = ["generation_labels_dist"],
+        # images = ["t1w"],
         target_surface_resolution = target_surface_resolution,
         target_surface_hemispheres = target_surface_hemisphere,
         initial_surface_resolution = initial_surface_resolution,
@@ -190,8 +190,8 @@ out_center_str = "lh"
 
 cfg_synth = config.SynthesizerParameters(
     train=brainsynth.config.SynthesizerConfig(
-        # builder = "OnlySynth",
-        builder = "OnlySelect",
+        builder = "OnlySynthIso",
+        # builder = "OnlySelect",
         # in_res = [1.0, 1.0, 1.0]
         out_size = out_size,
         out_center_str = out_center_str,
@@ -203,7 +203,7 @@ cfg_synth = config.SynthesizerParameters(
         device = device,
     ),
     validation=brainsynth.config.SynthesizerConfig(
-        builder = "OnlySelect",
+        builder = "OnlySelectIso",
         out_size = out_size,
         out_center_str = out_center_str,
         # segmentation_labels = "brainseg"

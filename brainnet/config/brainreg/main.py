@@ -6,22 +6,25 @@ import brainsynth.config
 
 from brainnet import config
 from brainnet.modules import body, head
+from brainsynth.constants import SURFACE
+
 # Parameters defined in other files
-#from brainnet.config.brainreg import events_trainer, events_evaluators
+from brainnet.config.brainreg import events_trainer
 from brainnet.config.brainreg.losses import cfg_loss
+
 
 # =============================================================================
 # GENERAL VARIABLES
 # =============================================================================
 
 project: str = "BrainReg"
-run: str = "run-01"
-run_id: None | str = None # f"{run}-00"
-resume_from_run: None | str = None # run
-tags = ["t1w", "both hemi"]
-device: str | torch.device  = torch.device("cuda")
+run: str = "run-image-01"
+run_id: None | str = None  # f"{run}-00"
+resume_from_run: None | str = None  # run
+tags = ["t1w", "multiscale", "deep features"]
+device: str | torch.device = torch.device("cuda")
 
-target_surface_resolution: int = 5
+target_surface_resolution: int | None = 5 # None
 target_surface_hemisphere: str = "both"
 initial_surface_resolution = None
 
@@ -33,7 +36,7 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 # =============================================================================
 
 cfg_train = config.TrainParameters(
-    max_epochs = 3000,
+    max_epochs=3000,
     epoch_length_train=100,
     epoch_length_val=25,
     # evaluate_on=Events.EPOCH_COMPLETED,
@@ -54,23 +57,27 @@ cfg_dataloader = config.DataloaderParameters(batch_size=2)
 # =============================================================================
 
 cfg_dataset = config.DatasetParameters(
-    train = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "training_data_brainreg",
-        subject_dir = root_dir / "training_data_subjects",
-        subject_subset = "train",
-        images = ["t1w_areg_mni"],
-        target_surface_resolution = target_surface_resolution,
-        target_surface_hemispheres = target_surface_hemisphere,
-        initial_surface_resolution = initial_surface_resolution,
+    train=brainsynth.config.DatasetConfig(
+        root_dir=root_dir / "training_data_brainreg",
+        subject_dir=root_dir / "training_data_subjects",
+        subject_subset="train",
+        images=["t1w_areg_mni"],
+        load_mask = "force",
+        target_surface_resolution=target_surface_resolution,
+        target_surface_hemispheres=target_surface_hemisphere,
+        target_surface_files = SURFACE.files.target,
+        initial_surface_resolution=initial_surface_resolution,
     ),
-    validation = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "training_data_brainreg",
-        subject_dir = root_dir / "training_data_subjects",
-        subject_subset = "validation",
-        images = ["t1w_areg_mni"],
-        target_surface_resolution = target_surface_resolution,
-        target_surface_hemispheres = target_surface_hemisphere,
-        initial_surface_resolution = initial_surface_resolution,
+    validation=brainsynth.config.DatasetConfig(
+        root_dir=root_dir / "training_data_brainreg",
+        subject_dir=root_dir / "training_data_subjects",
+        subject_subset="validation",
+        images=["t1w_areg_mni"],
+        load_mask = "force",
+        target_surface_resolution=target_surface_resolution,
+        target_surface_hemispheres=target_surface_hemisphere,
+        target_surface_files = SURFACE.files.target,
+        initial_surface_resolution=initial_surface_resolution,
     ),
 )
 
@@ -80,7 +87,7 @@ cfg_dataset = config.DatasetParameters(
 
 cfg_criterion = config.CriterionParameters(
     train=cfg_loss,
-    validation=cfg_loss, # could/should be different...
+    validation=cfg_loss,  # could/should be different...
 )
 
 # =============================================================================
@@ -89,15 +96,23 @@ cfg_criterion = config.CriterionParameters(
 
 spatial_dims = 3
 in_channels = 2
-unet_enc_ch = [[32], [64], [96], [128], [160]]
-unet_dec_ch = [[128], [96], [64], [64]]
-unet_out_ch = unet_dec_ch[-1][-1]
-svf_ch = [unet_out_ch, 3]
+unet_enc_ch = [[8], [16], [32], [64], [128]]
+unet_dec_ch = [[64], [32], [16], [8]]
+unet_decoder_features = [False, True, True, True]
+# svf_modules = [
+#     head.SVFModule([unet_dec_ch[-3][-1], 32, 32, 3]),
+#     head.SVFModule([unet_dec_ch[-2][-1], 32, 32, 3]),
+#     head.SVFModule([unet_dec_ch[-1][-1], 32, 32, 3]),
+# ]
+svf_modules = torch.nn.ModuleList([
+    head.SVFModule(3 * [ch[-1]] + [3]) for i, ch in zip(unet_decoder_features, unet_dec_ch) if i
+])
 
 cfg_model = config.BrainRegParameters(
-    device = device,
-    body = body.UNet(spatial_dims, in_channels, unet_enc_ch, unet_dec_ch),
-    svf = head.SVFModule(svf_ch),
+    device=device,
+    body=body.UNet(
+        spatial_dims, in_channels, unet_enc_ch, unet_dec_ch, return_decoder_features=unet_decoder_features),
+    svf=svf_modules,
 )
 
 # =============================================================================
@@ -112,7 +127,9 @@ cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=1.0e-4))
 
 cfg_results = config.ResultsParameters(
     out_dir=out_dir / project / run,
-    load_from_dir = out_dir / project / resume_from_run if resume_from_run is not None else None,
+    load_from_dir=(
+        out_dir / project / resume_from_run if resume_from_run is not None else None
+    ),
 )
 
 # =============================================================================
@@ -131,8 +148,8 @@ cfg_wandb = config.WandbParameters(
     project=project,
     name=run,
     wandb_dir=out_dir / "wandb",
-    log_on = cfg_train.evaluate_on,
-    run_id = run_id,
+    log_on=cfg_train.evaluate_on,
+    run_id=run_id,
     tags=tags,
 )
 
