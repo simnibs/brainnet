@@ -44,7 +44,14 @@ class RegularizationLoss(torch.nn.Module):
 
 
 class SupervisedLoss(torch.nn.Module):
-    def __init__(self, loss_fn, y_pred: str | None, y_true: str | None) -> None:
+    def __init__(
+        self,
+        loss_fn,
+        y_pred: str | None,
+        y_true: str | None,
+        y_pred_valid: str | None = None,
+        y_true_valid: str | None = None,
+    ) -> None:
         """_summary_
 
         Parameters
@@ -62,13 +69,25 @@ class SupervisedLoss(torch.nn.Module):
         self.loss_fn = loss_fn
         self.y_pred = y_pred
         self.y_true = y_true
+        self.y_pred_valid = y_pred_valid
+        self.y_true_valid = y_true_valid
+        self.use_valid = y_pred_valid is not None and y_true_valid is not None
 
     def forward(self, y_pred, y_true, **kwargs):
-        return self.loss_fn(
-            y_pred if self.y_pred is None else y_pred[self.y_pred],
-            y_true if self.y_true is None else y_true[self.y_true],
-            **kwargs,
-        )
+        if self.use_valid:
+            return self.loss_fn(
+                y_pred if self.y_pred is None else y_pred[self.y_pred],
+                y_true if self.y_true is None else y_true[self.y_true],
+                y_pred[self.y_pred_valid],
+                y_true[self.y_true_valid],
+                **kwargs,
+            )
+        else:
+            return self.loss_fn(
+                y_pred if self.y_pred is None else y_pred[self.y_pred],
+                y_true if self.y_true is None else y_true[self.y_true],
+                **kwargs,
+            )
 
 
 # class ModelSupervisedLoss(SupervisedLoss):

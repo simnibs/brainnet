@@ -1,11 +1,11 @@
-import functools
-
 import torch
 
+from brainsynth.transforms import IntensityNormalization
 from brainnet.mesh.surface import TemplateSurfaces
 
 
 # SURFACE LOSS FUNCTIONS
+
 
 class MSELoss(torch.nn.Module):
     def __init__(self) -> None:
@@ -516,9 +516,13 @@ class EdgeLengthVarianceLoss(torch.nn.Module):
 
 class GradientLoss(torch.nn.Module):
     def __init__(
-        self, spacing: float = 1.0, dim: list[int] | tuple = (2, 3, 4)
+        self,
+        # spacing: float = 1.0, dim: list[int] | tuple = (2, 3, 4)
+        n_spatial_dims: int = 3,
+        device: str | torch.device = "cpu",
     ) -> None:
-        """Gradient loss over entire image.
+        """Gradient loss over entire image (the average gradient
+        norm across the image).
 
         Parameters
         ----------
@@ -528,14 +532,35 @@ class GradientLoss(torch.nn.Module):
             Dimensions of input image over which to calculate the gradient.
         """
         super().__init__()
-        self.spacing = spacing
-        self.dim = dim
+        device = torch.device(device) if isinstance(device, str) else device
+        # self.spacing = spacing
+        # self.dim = dim
+        assert n_spatial_dims == 3
+        self.n_spatial_dims = n_spatial_dims
+        self.conv = getattr(torch.nn.functional, f"conv{n_spatial_dims}d")
+
+        # filters to compute gradients along each dimension
+        diff_op = torch.tensor([-1.0, 1.0], device=device)
+        self.filters = tuple(
+            diff_op.reshape(1, 1, *shape) for shape in ((2, 1, 1), (1, 2, 1), (1, 1, 2))
+        )
+
+    # def forward(self, image):
+    #     # assume size is (N,C,W,H,D). When `image` is an SVF in 3D C=3.
+    #     grad = torch.stack(torch.gradient(image, spacing=self.spacing, dim=self.dim))
+    #     # stack to (3,N,C,W,H,D)
+    #     return grad.norm(dim=0).mean()
 
     def forward(self, image):
-        # assume size is (N,C,W,H,D). When `image` is an SVF in 3D C=3.
-        grad = torch.gradient(image, spacing=self.spacing, dim=self.dim)
-        # stack to (3,N,C,W,H,D)
-        return torch.stack(grad).norm(dim=0).mean()
+        # compute grad along each dimension (x, y, z) for all channels
+        n_channels = image.size()[1]
+        loss = 0.0
+        for f in self.filters:
+            for c in range(n_channels):
+                loss += self.conv(image[:, [c]], f).pow(2).mean()
+        loss /= self.n_spatial_dims  # we one filter per spatial dim
+
+        return loss
 
 
 class MaskedGradientLoss(torch.nn.Module):
@@ -608,7 +633,8 @@ class MaskedGradientLoss(torch.nn.Module):
         return (f_xh - f_x) / self.spacing  # (3, N, C, m)
 
     def _gradient_loss(self, grad):
-        return grad.abs().mean()
+        # return grad.abs().mean()
+        return torch.mean(grad**2)
 
     def forward(self, image, indices):
         # N=2
@@ -637,53 +663,137 @@ class NormalizedCrossCorrelationLoss(torch.nn.Module):
         self,
         n_channels: int = 1,
         n_spatial_dims: int = 3,
-        kernel_size: int | list[int] | tuple = 5,
+        kernel_size: int | list[int] | tuple = 11,
+        stride: int = 1,
+        use_patch: bool = False,
+        patch_size: None | list[int] | tuple = None,
+        spatial_size: None | list[int] | tuple | torch.Size = None,
         ignore_ncc_sign: bool = False,
         device: str | torch.device = "cpu",
     ) -> None:
+        """
+
+        Use a random patch because 7x7x7 convolutions are very slow on the
+        full volume (e.g., 192x224x192)
+
+                |-----------------------|
+                ||-----------------|    |
+                ||                 |    |
+                ||        x        |    |
+                ||                 |    |
+                ||-----------------|    |
+                |                       |
+                |-----------------------|
+        """
         super().__init__()
         self.ignore_ncc_sign = ignore_ncc_sign
         device = torch.device(device) if isinstance(device, str) else device
         if isinstance(kernel_size, int):
             kernel_size = n_spatial_dims * [kernel_size]
-        kernel = torch.ones((n_channels, n_channels, *kernel_size), device=device)
-        self.nw = kernel.sum()
-        self.conv = functools.partial(
-            getattr(torch.nn.functional, f"conv{n_spatial_dims}d"),
-            weight=kernel,
-            #padding="same", # tuple(i // 2 for i in kernel_size),
+        assert all(k % 2 == 1 for k in kernel_size), "Only odd-sized kernels supported"
+        self.kernel_offset = [int((k - 1) / 2) for k in kernel_size]
+        self.kernel = torch.ones((n_channels, n_channels, *kernel_size), device=device)
+        self.nw = self.kernel.sum()
+        self.conv = getattr(torch.nn.functional, f"conv{n_spatial_dims}d")
+        self.intensity_normalization = IntensityNormalization(high=0.5)  # 0.75
+        self.stride = stride
+
+        self.use_patch = use_patch
+        if self.use_patch:
+            assert patch_size is not None and spatial_size is not None
+            assert all(
+                i % 2 == 0 for i in patch_size
+            )  # for now we only accept even sized sub-volumes
+            self.patch_halfsize = tuple(int(i / 2) for i in patch_size)
+            self.patch_limits = [
+                (j, i - j) for i, j in zip(spatial_size, self.patch_halfsize)
+            ]
+        else:
+            self.patch_halfsize = []
+            self.patch_limits = []
+
+    def sample_patch_slices(self):
+        patch_center = tuple(torch.randint(i[0], i[1], (1,)) for i in self.patch_limits)
+        return tuple(
+            slice(c - h, c + h) for c, h in zip(patch_center, self.patch_halfsize)
         )
 
-    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor):
+    def forward(
+        self,
+        y_pred: torch.Tensor,
+        y_true: torch.Tensor,
+        y_pred_valid: torch.Tensor | None = None,
+        y_true_valid: torch.Tensor | None = None,
+    ):
+        """
+        Returns
+        -------
+        _type_
+            _description_
+        """
+        if self.use_patch:
+            slicer = self.sample_patch_slices()
+            x = y_pred[..., *slicer]
+            y = y_true[..., *slicer]
+        else:
+            x = y_pred
+            y = y_true
 
-        # rename to simplify notation
-        f = y_pred
-        g = y_true
+        # we don't need to form the fully expanded array, however, this can be
+        # numerically unstable
+        sum_x = self.conv(x, self.kernel, stride=self.stride)
+        sum_y = self.conv(y, self.kernel, stride=self.stride)
+        sum_x2 = self.conv(x**2, self.kernel, stride=self.stride)
+        sum_y2 = self.conv(y**2, self.kernel, stride=self.stride)
+        sum_xy = self.conv(x * y, self.kernel, stride=self.stride)
 
-        # we don't need to form the fully expanded array, however, this tends
-        # to be numerically unstable when the variance in an area is very
-        # small.
-        sum_f = self.conv(f)
-        sum_g = self.conv(g)
-        sum_f2 = self.conv(f**2)
-        sum_g2 = self.conv(g**2)
-        sum_fg = self.conv(f * g)
+        if y_pred_valid is not None and y_true_valid is not None:
+            if self.use_patch:
+                valid = y_pred_valid[..., *slicer] & y_true_valid[..., *slicer]
+            else:
+                valid = y_pred_valid & y_true_valid
 
-        # mean_f = sum_f / self.nw
-        # mean_g = sum_g / self.nw
+            # Compensate for kernel size and stride
+            valid = valid[
+                ...,
+                self.kernel_offset[0]:-self.kernel_offset[0]:self.stride,
+                self.kernel_offset[1]:-self.kernel_offset[1]:self.stride,
+                self.kernel_offset[2]:-self.kernel_offset[2]:self.stride,
+            ]
 
-        var_fg = self.nw * sum_fg - sum_f * sum_g
-        var_f = self.nw * sum_f2 - sum_f**2
-        var_g = self.nw * sum_g2 - sum_g**2
+            sum_x = sum_x[valid]
+            sum_y = sum_y[valid]
+            sum_x2 = sum_x2[valid]
+            sum_y2 = sum_y2[valid]
+            sum_xy = sum_xy[valid]
 
-        valid = (var_f > 0) & (var_g > 0)
+        # This results in large numbers that need to be subtracted resulting in
+        # overflows if using AMP (float16)
+        # num = self.nw * sum_xy - sum_x * sum_y
+        # denom_0 = self.nw * sum_x2 - sum_x**2
+        # denom_1 = self.nw * sum_y2 - sum_y**2
 
-        ncc = torch.zeros_like(var_f)
-        ncc[valid] = var_fg[valid] / (var_f[valid].sqrt() * var_g[valid].sqrt())
+        mean_x = sum_x / self.nw
+        mean_y = sum_y / self.nw
 
-        # ncc = torch.nan_to_num(var_fg / (std_f * std_g))
+        num = sum_xy + mean_x * mean_y * self.nw - mean_x * sum_y - mean_y * sum_x
+        denom_0 = mean_x**2 * self.nw + sum_x2 - 2 * mean_x * sum_x
+        denom_1 = mean_y**2 * self.nw + sum_y2 - 2 * mean_y * sum_y
 
-        invalid = (ncc < -1.0) | (ncc > 1.0)
+        denom = denom_0 * denom_1
+        valid = denom > 1e-5
+        ncc = torch.zeros_like(denom)  # if num then we get a cast error when using AMP
+        ncc[valid] = num[valid] / denom[valid].sqrt()
+
+        invalid = (ncc < -1.0 - 1e-5) | (ncc > 1.0 + 1e-5)
+
+        # q = valid.sum()/valid.numel() * 100.0
+        # print(f"# VALID:        {q:10.2f}")
+        # if q < 60.0:
+        #     raise RuntimeError
+
+        # print(f"# invalid: {invalid.sum()/invalid.numel():10.4f}")
+        # print(ncc[invalid])
 
         # For now, just
         ncc[invalid] = 0
@@ -699,7 +809,69 @@ class NormalizedCrossCorrelationLoss(torch.nn.Module):
         # -1.0 <= ncc.mean() <= 1.0 or 0 <= ncc.abs.mean() <= 1.0 where 1.0 is
         # perfect
         ncc = ncc.abs() if self.ignore_ncc_sign else ncc
-        return 1 - ncc.mean()
+
+        all_valid = valid & ~invalid
+
+        # weigh areas with actual image gradients more
+        w = self.intensity_normalization(
+            0.5 * (denom_0[all_valid] + denom_1[all_valid])
+        )
+        w = w / w.sum()
+        return 1.0 - torch.sum(ncc[all_valid] * w)
+
+
+def ScaledLoss(Loss):
+    """Decorator to scaled input images before calculating the given loss."""
+
+    class ScaledLoss(Loss):
+        def __init__(
+            self,
+            interp_factor: float,
+            interp_mode: str = "nearest",
+            *args,
+            **kwargs,
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self.interp_factor = float(interp_factor)
+            self.interp_mode = interp_mode
+            self.align_corners = (
+                True
+                if self.interp_mode in {"linear", "bilinear", "bicubic", "trilinear"}
+                else None
+            )
+
+        def resample(self, image: torch.Tensor | None):
+            if self.interp_factor == 1.0 or image is None:
+                return image
+
+            is_bool = image.dtype == torch.bool
+            out = torch.nn.functional.interpolate(
+                image.to(torch.uint8) if is_bool else image,
+                scale_factor=self.interp_factor,
+                mode=self.interp_mode,
+                align_corners=self.align_corners,
+            )
+            return out.bool() if is_bool else out
+
+        def forward(
+            self,
+            y_pred: torch.Tensor,
+            y_true: torch.Tensor,
+            y_pred_valid: torch.Tensor | None = None,
+            y_true_valid: torch.Tensor | None = None,
+        ):
+            return super().forward(
+                self.resample(y_pred),
+                self.resample(y_true),
+                self.resample(y_pred_valid),
+                self.resample(y_true_valid),
+            )
+
+    return ScaledLoss
+
+
+ScaledNormalizedCrossCorrelationLoss = ScaledLoss(NormalizedCrossCorrelationLoss)
+
 
 # torch.corrcoef(torch.stack((f[win].ravel(), g[win].ravel())))
 
@@ -720,18 +892,29 @@ class NormalizedCrossCorrelationLoss(torch.nn.Module):
 # win = (1,0,slice(idx1[2]-2,idx1[2]+3), slice(idx1[3]-2, idx1[3]+3), slice(idx1[4]-2, idx1[4]+3))
 # win1 = (1,0,slice(idx[2]-2,idx[2]+3), slice(idx[3]-2, idx[3]+3), slice(idx[4]-2, idx[4]+3))
 
-# for i in zip(torch.randint(10,180,(10,)),torch.randint(10,180,(10,)),torch.randint(10,180,(10,))):
+# mean_diff = []
+# n = 10000
+# for i in zip(torch.randint(10,180,(n,)),torch.randint(10,180,(n,)),torch.randint(10,180,(n,))):
 #     idx = (1,0,i[0], i[1], i[2])
 #     idx1 = (1,0,i[0]+2, i[1]+2, i[2]+2)
 
 #     win = (1,0,slice(idx1[2]-2,idx1[2]+3), slice(idx1[3]-2, idx1[3]+3), slice(idx1[4]-2, idx1[4]+3))
 
-#     print(torch.cov(torch.stack((f[win].ravel(), g[win].ravel()))))
+#     q = torch.corrcoef(torch.stack((x[win].ravel(), y[win].ravel())))
+#     # print(q)
+#     # print(ncc[idx])
+#     # print()
+#     if torch.isnan(q).any():
+#         continue
+#     else:
+#         mean_diff.append(torch.abs(ncc[idx] - q[0,1]))
+#         if mean_diff[-1] > 0.1:
+#             print(torch.cov(torch.stack((x[win].ravel(), y[win].ravel()))))
 
-#     print(torch.corrcoef(torch.stack((f[win].ravel(), g[win].ravel()))))
-#     print(ncc[idx])
-#     print()
-
+# mean_diff = torch.tensor(mean_diff)
+# print(mean_diff.min())
+# print(mean_diff.mean())
+# print(mean_diff.max())
 
 # idx = (1,0,106,181,30)
 # idx1 = (1,0,106+2,181+2,30+2)
