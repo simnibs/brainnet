@@ -36,10 +36,11 @@ class SupervisedStep:
         self.ensure_device = EnsureDevice(self.device)
 
         # Get empty TemplateSurfaces. We update the vertices at each iteration
-        self.surface_template = dict(
-            y_pred=self.get_placeholder_surface_templates(surface_resolution),
-            y_true=self.get_placeholder_surface_templates(surface_resolution),
-        )
+        if surface_resolution is not None:
+            self.surface_template = dict(
+                y_pred=self.get_placeholder_surface_templates(surface_resolution),
+                y_true=self.get_placeholder_surface_templates(surface_resolution),
+            )
 
     def get_placeholder_surface_templates(self, surface_resolution):
         """Initialize placeholder objects for the predicted and target
@@ -102,8 +103,8 @@ class SupervisedStep:
             for k,v in images.items():
                 if v.is_floating_point():
                     images[k] = self.intensity_normalization(v)
-
-            images["surface"] = surfaces
+            if len(surfaces) > 0:
+                images["surface"] = surfaces
             return images["t1w_areg_mni"], images
         else:
             raise NotImplementedError("Synth with BrainReg is not yet implemented!")
@@ -149,10 +150,7 @@ class SupervisedStep:
     def compute_loss(self, y_pred, y_true):
         self.prepare_loss(y_pred, y_true)
         raw = self.criterion(y_pred, y_true)
-        return dict(
-            raw=self.criterion(y_pred, y_true),
-            weighted=self.criterion.apply_weights(raw),
-        )
+        return dict(raw=raw, weighted=self.criterion.apply_weights(raw))
 
 
     def predict(self, images: torch.Tensor, y_true: dict):
@@ -217,6 +215,9 @@ class SupervisedTrainingStep(SupervisedStep):
         super().__init__(synthesizer, model, criterion, surface_resolution)
         self.optimizer = optimizer
         self.enable_amp = enable_amp
+        if self.enable_amp:
+            self.grad_scaler = torch.cuda.amp.GradScaler()
+
 
     def __call__(self, engine, batch) -> tuple:
         # Reset gradients in optimizer. Otherwise gradients would
@@ -229,18 +230,23 @@ class SupervisedTrainingStep(SupervisedStep):
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
         self.model.train()
+
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             y_pred = self.predict(images, y_true)
-
             loss = self.compute_loss(y_pred, y_true)
             total_loss = recursive_dict_sum(loss["weighted"])
 
         # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
-            raise RuntimeError(f"Loss diverged (loss = {total_loss})")
+            raise RuntimeError(f"Loss diverged:\n\n{recursive_itemize(loss)})")
 
-        total_loss.backward()  # backpropagate loss
-        self.optimizer.step()  # update parameters
+        if self.enable_amp:
+            self.grad_scaler.scale(total_loss).backward()
+            self.grad_scaler.step(self.optimizer)
+            self.grad_scaler.update()
+        else:
+            total_loss.backward()  # backpropagate loss
+            self.optimizer.step()  # update parameters
 
         loss = recursive_itemize(loss)
 
