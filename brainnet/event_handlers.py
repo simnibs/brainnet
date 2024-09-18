@@ -7,7 +7,8 @@ import torch
 from ignite.engine import Engine
 
 import brainnet.config
-
+from brainsynth.transforms.utilities import channel_last
+from brainsynth.transforms import IntensityNormalization
 
 def synchronize_state(engine, other, attrs):
     """Synchronize `iteration` and `epoch` from other to engine (self)."""
@@ -249,41 +250,48 @@ def wandb_log_engine(engine, logger, name):
 
 
 def write_surface(
-    v: dict, vol_info: dict, out_dir: Path, prefix: str, tag: str, label: str
+    surfaces: dict, vol_info: dict, out_dir: Path, prefix: str, tag: str, label: str
 ):
-    for hemi, s in v.items():
-        for surface, ss in s.items():
-            name = ".".join([prefix, tag, hemi, surface, label])
-
-            v = ss.vertices[0].detach().to(torch.float).cpu().numpy()
+    for hemi, s in surfaces.items():
+        for surf, ss in s.items():
             f = ss.faces.detach().to(torch.int).cpu().numpy()
+            for i,v in enumerate(ss.vertices):
+                name = ".".join([prefix, tag, hemi, surf, label, f"{i:02d}"])
 
-            nib.freesurfer.write_geometry(
-                out_dir / name,
-                v,
-                f,
-                volume_info=vol_info,
-            )
+                nib.freesurfer.write_geometry(
+                    out_dir / name,
+                    v.detach().to(torch.float).cpu().numpy(),
+                    f,
+                    volume_info=vol_info,
+                )
 
 
 def write_volume(
-    v: torch.Tensor, affine, out_dir: Path, prefix: str, tag: str, label: None | str
+    vol: torch.Tensor, affine, out_dir: Path, prefix: str, tag: str, label: None | str
 ):
     ext = "nii.gz"
+    # intensity_norm = IntensityNormalization()
 
-    if label is None:
-        name = ".".join((prefix, tag, ext))
-    else:
-        name = ".".join((prefix, tag, label, ext))
+    for i,v in enumerate(vol.detach()): # loop over batch
+        if label is None:
+            name = ".".join((prefix, tag, f"{i:02d}", ext))
+        else:
+            name = ".".join((prefix, tag, label, f"{i:02d}", ext))
 
-    v = v[0].detach()  # first example from batch
-    if v.is_floating_point():
-        v = (255 * v[0]).to(torch.uint8)
-    else:
-        # assume a one-hot encoded image
-        v = v.argmax(0).to(torch.uint8)
+        if v.is_floating_point():
 
-    nib.Nifti1Image(v.cpu().numpy(), affine).to_filename(out_dir / name)
+            # v = v.float()
+            # ql = v.amin()
+            # qu = v.amax()
+            # v = torch.clip((v - ql) / (qu - ql), 0.0, 1.0)
+
+            # v = (255 * channel_last(v)).to(torch.uint8)
+            v = channel_last(v).float()
+        else:
+            # assume a one-hot encoded image
+            v = v.argmax(0).to(torch.uint8)
+
+        nib.Nifti1Image(v.cpu().numpy(), affine).to_filename(out_dir / name)
 
 
 def write_example(
