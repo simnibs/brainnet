@@ -17,7 +17,7 @@ and returns a prediction.
 
 
 class HeadModule(torch.nn.Module):
-    def __init__(self, channels: tuple | list[int], init_zeros: bool = True) -> None:
+    def __init__(self, channels: tuple | list[int], init_zeros: bool = False) -> None:
         """_summary_
 
         Parameters
@@ -40,11 +40,23 @@ class HeadModule(torch.nn.Module):
         return self.convs(features)
 
 
-class SVFModule(HeadModule):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+class SVFModule(torch.nn.Module):
+    def __init__(self, channels: tuple | list[int], init_zeros: bool = True) -> None:
+        super().__init__()
+
+        izs = [False] * (len(channels) - 1)
+        izs[-1] = True if init_zeros else False
+
+        self.convs = torch.nn.Sequential(
+            *[
+                ConvBlock(3, in_ch, out_ch, init_zeros=iz)
+                for in_ch, out_ch, iz in zip(channels[:-1], channels[1:], izs)
+            ]
+        )
 
 
+    def forward(self, features):
+        return self.convs(features)
 
 class SegmentationModule(HeadModule):
     def __init__(self, *args, dim=1, **kwargs) -> None:

@@ -10,14 +10,46 @@ class BrainReg(torch.nn.Module):
     def __init__(
         self,
         body: torch.nn.Module,
-        svf: torch.nn.Module,
+        svf: list[torch.nn.Module],
         device: str | torch.device,
     ):
         super().__init__()
         self.device = torch.device(device)
+        assert len(svf) == len(body.feature_scales)
         self.body = body  # image feature extractor, e.g., unet
         self.svf = svf  # translates features to a stationary velocity field (SVF).
         self.SAS: None | ScaleAndSquare = None
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """
+
+        images = torch.cat((img_0, img_1), dim=1)
+
+        Parameters
+        ----------
+        images : torch.Tensor
+            Either (N,1,W,H,D) or (N,2,W,H,D). Subsequent images are
+            registered, e.g., when C=1, register images[0] and images[1]. When
+            C=2, register images[0,0] and images[0,1], etc.
+
+        Returns
+        -------
+        SVF : torch.Tensor
+            Batch of predicted SVF, i.e., (N/2*C,3,W,H,D), such that an SVF
+            aligns the first image to the second (and vice versa for -SVF).
+
+        """
+        # Estimate SVF for subsequent images.
+        size = images.size()
+        assert size[1] in {1,2}
+        spatial_size = size[-3:]
+        # Reshape from N,1,W,H,D to N/2,2,W,H,D
+        images = images.reshape(-1, 2, *spatial_size)
+        # assert images.size()[1] == 2, f"Exactly two images are required (got {images.size()[1]})"
+        features = self.body(images)
+        # predict an SVF for each feature map and sum them
+        svf = self.body.sum_features([svf(f) for f,svf in zip(features, self.svf)])
+        return svf
 
     def integrate_svf(self, svf):
         spatial_size = svf.size()[-3:]
@@ -80,36 +112,6 @@ class BrainReg(torch.nn.Module):
         return surface
 
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        """
-
-        images = torch.cat((img_0, img_1), dim=1)
-
-        Parameters
-        ----------
-        images : torch.Tensor
-            Either (N,1,W,H,D) or (N,2,W,H,D). Subsequent images are
-            registered, e.g., when C=1, register images[0] and images[1]. When
-            C=2, register images[0,0] and images[0,1], etc.
-
-        Returns
-        -------
-        SVF : torch.Tensor
-            Batch of predicted SVF, i.e., (N/2*C,3,W,H,D), such that an SVF
-            aligns the first image to the second (and vice versa for -SVF).
-
-        """
-        # Estimate SVF for subsequent images.
-        size = images.size()
-        assert size[1] in {1,2}
-        spatial_size = size[-3:]
-        # Reshape from N,1,W,H,D to N/2,2,W,H,D
-        images = images.reshape(-1, 2, *spatial_size)
-        # assert images.size()[1] == 2, f"Exactly two images are required (got {images.size()[1]})"
-        features = self.body(images)
-        return self.svf(features)
-
-
 class BrainNet(torch.nn.Module):
     def __init__(
         self,
@@ -160,7 +162,6 @@ class BrainNet(torch.nn.Module):
         self,
         image: torch.Tensor,
         initial_vertices: None | dict = None,
-        head_kwargs=None,
     ) -> dict:
         """
 
@@ -177,11 +178,15 @@ class BrainNet(torch.nn.Module):
             Dictionary containing the output of each task using the task name
             as the key.
         """
+        features = self.body(image)
+        return self.forward_heads(features, initial_vertices)
+
+    def forward_heads(self, features, initial_vertices, head_kwargs: dict | None = None):
+        assert len(features) == 1
+        features = features[0]
+
         pred = {}
         head_kwargs = head_kwargs or {}
-
-        features = self.body(image)
-
         for name, head in self.heads.items():
             kwargs = head_kwargs[name] if name in head_kwargs else {}
             if isinstance(head, brainnet.modules.head.HeadModule):
