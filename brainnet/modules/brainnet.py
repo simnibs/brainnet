@@ -182,8 +182,8 @@ class BrainNet(torch.nn.Module):
         return self.forward_heads(features, initial_vertices)
 
     def forward_heads(self, features, initial_vertices, head_kwargs: dict | None = None):
-        assert len(features) == 1
-        features = features[0]
+        # assert len(features) == 1
+        # features = features[0]
 
         pred = {}
         head_kwargs = head_kwargs or {}

@@ -18,6 +18,9 @@ class MSELoss(torch.nn.Module):
             return torch.sum(w * (a - b) ** 2) / w.sum()
 
 
+# Norm loss = 3 * MSE loss
+
+
 class MeanSquaredNormLoss(torch.nn.Module):
     def __init__(self, dim=-1) -> None:
         super().__init__()
@@ -68,88 +71,139 @@ class MatchedDistanceLoss(MeanSquaredNormLoss):
         return super().forward(y_pred.vertices, y_true.vertices, weights)
 
 
-class MatchedCurvatureLoss(MeanSquaredNormLoss):
-    def __init__(self, *args, **kwargs) -> None:
+class MatchedCurvatureMSELoss(MSELoss):
+    def __init__(self, curv_key="H", *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.curv_key = curv_key
+
+    def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
+        return super().forward(
+            y_pred.vertex_data[self.curv_key], y_true.vertex_data[self.curv_key]
+        )
+
+
+class MatchedCurvatureNormLoss(MeanSquaredNormLoss):
+    def __init__(self, curv_key="H", *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
     def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
         return super().forward(y_pred.vertex_data["H"], y_true.vertex_data["H"])
 
 
-# SymmetricChamferLoss and SymmetricCurvatureVectorLoss are the same except for
-# the variable they grab in the surface class. This was done to keep the
-# face consistent across losses...
+def SymmetricLoss(Loss):
+    """Decorator to scaled input images before calculating the given loss."""
+
+    class SymmetricLoss(Loss):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+
+        def forward(
+            self,
+            y_pred: torch.Tensor,
+            y_true: torch.Tensor,
+            i_pred: torch.IntTensor,
+            i_true: torch.IntTensor,
+            w_pred: None | torch.Tensor = None,
+            w_true: None | torch.Tensor = None,
+        ):
+            """
+
+            i_pred contains indices into i_true and vice versa!
+
+            """
+
+            if (batch_size := y_pred.shape[0]) > 1:
+                batch_index = torch.arange(batch_size)[:, None]
+                return 0.5 * (
+                    super().forward(y_pred, y_true[batch_index, i_pred], w_pred)
+                    + super().forward(y_pred[batch_index, i_true], y_true, w_true)
+                )
+            else:
+                p = y_pred.squeeze(0)
+                t = y_true.squeeze(0)
+                w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
+                w_true = w_true.squeeze(0) if w_true is not None else w_true
+                return 0.5 * (
+                    super().forward(p, t[i_pred.squeeze(0)], w_pred)
+                    + super().forward(p[i_true.squeeze(0)], t, w_true)
+                )
+
+    return SymmetricLoss
 
 
-class SymmetricMeanSquaredNormLoss(MeanSquaredNormLoss):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
-    def forward(
-        self,
-        y_pred: torch.Tensor,
-        y_true: torch.Tensor,
-        i_pred: torch.IntTensor,
-        i_true: torch.IntTensor,
-        w_pred: None | torch.Tensor = None,
-        w_true: None | torch.Tensor = None,
-    ):
-        """
-
-        i_pred contains indices into i_true and vice versa!
-
-        """
-
-        if (batch_size := y_pred.shape[0]) > 1:
-            batch_index = torch.arange(batch_size)[:, None]
-            return 0.5 * (
-                super().forward(y_pred, y_true[batch_index, i_pred], w_pred)
-                + super().forward(y_pred[batch_index, i_true], y_true, w_true)
-            )
-        else:
-            p = y_pred.squeeze(0)
-            t = y_true.squeeze(0)
-            w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
-            w_true = w_true.squeeze(0) if w_true is not None else w_true
-            return 0.5 * (
-                super().forward(p, t[i_pred.squeeze(0)], w_pred)
-                + super().forward(p[i_true.squeeze(0)], t, w_true)
-            )
+SymmetricMeanSquaredNormLoss = SymmetricLoss(MeanSquaredNormLoss)
+SymmetricMSELoss = SymmetricLoss(MSELoss)
 
 
-class SymmetricMSELoss(MSELoss):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+# class SymmetricMeanSquaredNormLoss(MeanSquaredNormLoss):
+#     def __init__(self, *args, **kwargs) -> None:
+#         super().__init__(*args, **kwargs)
 
-    def forward(
-        self,
-        y_pred: torch.Tensor,
-        y_true: torch.Tensor,
-        i_pred: torch.IntTensor,
-        i_true: torch.IntTensor,
-        w_pred: None | torch.Tensor = None,
-        w_true: None | torch.Tensor = None,
-    ):
-        """
+#     def forward(
+#         self,
+#         y_pred: torch.Tensor,
+#         y_true: torch.Tensor,
+#         i_pred: torch.IntTensor,
+#         i_true: torch.IntTensor,
+#         w_pred: None | torch.Tensor = None,
+#         w_true: None | torch.Tensor = None,
+#     ):
+#         """
 
-        i_pred contains indices into i_true and vice versa!
+#         i_pred contains indices into i_true and vice versa!
 
-        """
-        if (batch_size := y_pred.shape[0]) > 1:
-            batch_index = torch.arange(batch_size)[:, None]
-            return 0.5 * (
-                super().forward(y_pred, y_true[batch_index, i_pred], w_pred)
-                + super().forward(y_pred[batch_index, i_true], y_true, w_true)
-            )
-        else:
-            p = y_pred.squeeze(0)
-            t = y_true.squeeze(0)
-            w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
-            w_true = w_true.squeeze(0) if w_true is not None else w_true
-            return 0.5 * (
-                super().forward(p, t[i_pred.squeeze(0)], w_pred)
-                + super().forward(p[i_true.squeeze(0)], t, w_true)
-            )
+#         """
+
+#         if (batch_size := y_pred.shape[0]) > 1:
+#             batch_index = torch.arange(batch_size)[:, None]
+#             return 0.5 * (
+#                 super().forward(y_pred, y_true[batch_index, i_pred], w_pred)
+#                 + super().forward(y_pred[batch_index, i_true], y_true, w_true)
+#             )
+#         else:
+#             p = y_pred.squeeze(0)
+#             t = y_true.squeeze(0)
+#             w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
+#             w_true = w_true.squeeze(0) if w_true is not None else w_true
+#             return 0.5 * (
+#                 super().forward(p, t[i_pred.squeeze(0)], w_pred)
+#                 + super().forward(p[i_true.squeeze(0)], t, w_true)
+#             )
+
+
+# class SymmetricMSELoss(MSELoss):
+#     def __init__(self, *args, **kwargs) -> None:
+#         super().__init__(*args, **kwargs)
+
+#     def forward(
+#         self,
+#         y_pred: torch.Tensor,
+#         y_true: torch.Tensor,
+#         i_pred: torch.IntTensor,
+#         i_true: torch.IntTensor,
+#         w_pred: None | torch.Tensor = None,
+#         w_true: None | torch.Tensor = None,
+#     ):
+#         """
+
+#         i_pred contains indices into i_true and vice versa!
+
+#         """
+#         if (batch_size := y_pred.shape[0]) > 1:
+#             batch_index = torch.arange(batch_size)[:, None]
+#             return 0.5 * (
+#                 super().forward(y_pred, y_true[batch_index, i_pred], w_pred)
+#                 + super().forward(y_pred[batch_index, i_true], y_true, w_true)
+#             )
+#         else:
+#             p = y_pred.squeeze(0)
+#             t = y_true.squeeze(0)
+#             w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
+#             w_true = w_true.squeeze(0) if w_true is not None else w_true
+#             return 0.5 * (
+#                 super().forward(p, t[i_pred.squeeze(0)], w_pred)
+#                 + super().forward(p[i_true.squeeze(0)], t, w_true)
+#             )
 
 
 # class SymmetricNormalLoss(SymmetricMeanSquaredNormLoss):
@@ -167,6 +221,33 @@ class SymmetricMSELoss(MSELoss):
 #             y_pred.vertex_data["index_sampled"],
 #             y_true.vertex_data["index_sampled"],
 #         )
+
+
+# SymmetricChamferLoss and SymmetricCurvatureVectorLoss are the same except for
+# the variable they grab in the surface class. This was done to keep the
+# face consistent across losses...
+
+
+class AsymmetricChamferLoss(MeanSquaredNormLoss):
+    """Compute the mean squared distance between the sampled points in y_true
+    and the corresponding (i.e., closest) sampled points in y_pred.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+    def forward(
+        self,
+        y_pred: TemplateSurfaces,
+        y_true: TemplateSurfaces,
+    ):
+        ix = y_pred.batch_ix[:, None]
+        return super().forward(
+            y_pred.vertex_data["points_sampled"][
+                ix, y_true.vertex_data["index_sampled"]
+            ],
+            y_true.vertex_data["points_sampled"],
+        )
 
 
 class SymmetricChamferLoss(SymmetricMeanSquaredNormLoss):
@@ -201,48 +282,6 @@ class SymmetricChamferLoss(SymmetricMeanSquaredNormLoss):
         )
 
 
-class AsymmetricChamferLoss(MeanSquaredNormLoss):
-    """Compute the mean squared distance between the sampled points in y_true
-    and the corresponding (i.e., closest) sampled points in y_pred.
-    """
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
-    def forward(
-        self,
-        y_pred: TemplateSurfaces,
-        y_true: TemplateSurfaces,
-    ):
-        ix = y_pred.batch_ix[:, None]
-        return super().forward(
-            y_pred.vertex_data["points_sampled"][
-                ix, y_true.vertex_data["index_sampled"]
-            ],
-            y_true.vertex_data["points_sampled"],
-        )
-
-
-# class AsymmetricCurvatureLoss(MeanSquaredNormLoss):
-#     """Compute the mean squared distance between the sampled points in y_true
-#     and the corresponding (i.e., closest) sampled points in y_pred.
-#     """
-
-#     def __init__(self, *args, **kwargs) -> None:
-#         super().__init__(*args, **kwargs)
-
-#     def forward(
-#         self,
-#         y_pred: TemplateSurfaces,
-#         y_true: TemplateSurfaces,
-#     ):
-#         ix = y_pred.batch_ix[:, None]
-#         return super().forward(
-#             y_pred.vertex_data["K_sampled"][ix, y_true.vertex_data["index_sampled"]],
-#             y_true.vertex_data["K_sampled"],
-#         )
-
-
 class AsymmetricCurvatureNormLoss(torch.nn.MSELoss):
     """Compute the mean squared distance between the sampled points in y_true
     and the corresponding (i.e., closest) sampled points in y_pred.
@@ -266,9 +305,13 @@ class AsymmetricCurvatureNormLoss(torch.nn.MSELoss):
         )
 
 
-class SymmetricCurvatureNormLoss(SymmetricMSELoss):
-    def __init__(self, *args, **kwargs) -> None:
+class SymmetricCurvatureNormLoss(SymmetricMeanSquaredNormLoss):
+    def __init__(
+        self, curv_key="H_sampled", index_key="index_sampled", *args, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
+        self.curv_key = curv_key
+        self.index_key = index_key
 
     def forward(
         self,
@@ -276,19 +319,33 @@ class SymmetricCurvatureNormLoss(SymmetricMSELoss):
         y_true: TemplateSurfaces,
     ):
         return super().forward(
-            y_pred.vertex_data["H_sampled"],
-            y_true.vertex_data["H_sampled"],
-            y_pred.vertex_data["index_sampled"],
-            y_true.vertex_data["index_sampled"],
+            y_pred.vertex_data[self.curv_key],
+            y_true.vertex_data[self.curv_key],
+            y_pred.vertex_data[self.index_key],
+            y_true.vertex_data[self.index_key],
         )
 
 
-class MatchedCurvatureNormLoss(MeanSquaredNormLoss):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
 
-    def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
-        return super().forward(y_pred.vertex_data["H"], y_true.vertex_data["H"])
+class SymmetricCurvatureMSELoss(SymmetricMSELoss):
+    def __init__(
+        self, curv_key="H_sampled", index_key="index_sampled", *args, **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.curv_key = curv_key
+        self.index_key = index_key
+
+    def forward(
+        self,
+        y_pred: TemplateSurfaces,
+        y_true: TemplateSurfaces,
+    ):
+        return super().forward(
+            y_pred.vertex_data[self.curv_key],
+            y_true.vertex_data[self.curv_key],
+            y_pred.vertex_data[self.index_key],
+            y_true.vertex_data[self.index_key],
+        )
 
 
 class AsymmetricCurvatureAngleLoss(CosineSimilarityLoss):
@@ -312,23 +369,6 @@ class AsymmetricCurvatureAngleLoss(CosineSimilarityLoss):
             y_pred.vertex_data["K_sampled"][ix, y_true.vertex_data["index_sampled"]],
             y_true.vertex_data["K_sampled"],
         )
-
-
-# class SymmetricCurvatureLoss(SymmetricMeanSquaredNormLoss):
-#     def __init__(self, *args, **kwargs) -> None:
-#         super().__init__(*args, **kwargs)
-
-#     def forward(
-#         self,
-#         y_pred: TemplateSurfaces,
-#         y_true: TemplateSurfaces,
-#     ):
-#         return super().forward(
-#             y_pred.vertex_data["curv"],
-#             y_true.vertex_data["curv"],
-#             y_pred.vertex_data["index"],
-#             y_true.vertex_data["index"],
-#         )
 
 
 class HingeLoss(MeanSquaredNormLoss):
@@ -756,9 +796,9 @@ class NormalizedCrossCorrelationLoss(torch.nn.Module):
             # Compensate for kernel size and stride
             valid = valid[
                 ...,
-                self.kernel_offset[0]:-self.kernel_offset[0]:self.stride,
-                self.kernel_offset[1]:-self.kernel_offset[1]:self.stride,
-                self.kernel_offset[2]:-self.kernel_offset[2]:self.stride,
+                self.kernel_offset[0] : -self.kernel_offset[0] : self.stride,
+                self.kernel_offset[1] : -self.kernel_offset[1] : self.stride,
+                self.kernel_offset[2] : -self.kernel_offset[2] : self.stride,
             ]
 
             sum_x = sum_x[valid]
@@ -921,6 +961,96 @@ ScaledNormalizedCrossCorrelationLoss = ScaledLoss(NormalizedCrossCorrelationLoss
 
 # win = (1,0,slice(106-2,106+3), slice(181-2, 181+3), slice(30-2, 30+3))
 # win1 = (1,0,slice(106,106+3+2), slice(181, 181+3+2), slice(30, 30+3+2))
+
+
+class DiceFromOneHotLoss(torch.nn.Module):
+    def __init__(self, weigh_by_class_size: bool = True, ignore_background: bool = True) -> None:
+        super().__init__()
+        self.weigh_by_class_size = weigh_by_class_size
+        self.ignore_background = ignore_background
+
+    def forward(
+        self,
+        y_pred: torch.Tensor,
+        y_true: torch.Tensor,
+        # y_pred_valid: torch.Tensor | None = None,
+        # y_true_valid: torch.Tensor | None = None,
+    ):
+        n, c = y_true.shape[:2]
+        if self.ignore_background:
+            y_pred = y_pred[:, 1:]
+            y_true = y_true[:, 1:]
+            c = c-1
+        y_pred = y_pred.reshape(n, c, -1)
+        y_true = y_true.reshape(n, c, -1)
+
+        # if y_pred_valid is not None and y_true_valid is not None:
+        #     valid = y_pred_valid.reshape(n, 1, -1) & y_true_valid.reshape(n, 1, -1)
+        #     y_pred = y_pred[valid.expand(y_pred.shape)]
+        #     y_true = y_true[valid.expand(y_true.shape)]
+
+        intersection = torch.sum(y_pred & y_true, dim=-1)
+        union = torch.sum(y_pred | y_true, dim=-1)
+        nonzero = union > 0
+        intersection = intersection[nonzero]
+        union = union[nonzero]
+
+        if self.weigh_by_class_size:
+            class_size = y_true.sum(-1)
+            # divide by batch size so that weights sum to 1
+            weight = class_size / class_size.sum(-1, keepdim=True) / n
+            weight = weight[nonzero]
+            return 1.0 - torch.sum(weight * 2 * intersection / (union + intersection))
+        else:
+            return 1.0 - torch.mean(2 * intersection / (union + intersection))
+
+
+class DiceFromLabelsLoss(torch.nn.Module):
+    def __init__(self, num_classes: int, weigh_by_class_size: bool = True, ignore_background: bool = True) -> None:
+        """Dice loss from label image (*not* one-hot encoded!).
+        """
+        super().__init__()
+        self.num_classes = num_classes
+        self.weigh_by_class_size = weigh_by_class_size
+        self.ignore_background = ignore_background
+
+    def forward(
+        self,
+        y_pred: torch.Tensor,
+        y_true: torch.Tensor,
+        # y_pred_valid: torch.Tensor | None = None,
+        # y_true_valid: torch.Tensor | None = None,
+    ):
+        n, c = y_true.shape[:2]
+        assert c == 1
+        y_pred = y_pred.reshape(n, -1)
+        y_true = y_true.reshape(n, -1)
+
+        # Counts per class
+        c_pred = torch.stack([i.bincount(minlength=self.num_classes) for i in y_pred])
+        c_true = torch.stack([i.bincount(minlength=self.num_classes) for i in y_true])
+
+        # It does not matter it we "bincount" y_pred or y_true as we only count
+        # when there are equal
+        intersection = torch.stack([i.bincount(weights=(i == j), minlength=self.num_classes) for i,j in zip(y_pred, y_true)])
+        denom = c_pred + c_true
+        if self.ignore_background:
+            intersection = intersection[:, 1:]
+            denom = denom[:, 1:]
+            c_pred = c_pred[:, 1:]
+            c_true = c_true[:, 1:]
+
+        nonzero = denom > 0
+        intersection = intersection[nonzero]
+        denom = denom[nonzero]
+
+        if self.weigh_by_class_size:
+            # divide by batch size so that weights sum to 1
+            weight = c_true / c_true.sum(-1, keepdim=True) / n
+            weight = weight[nonzero]
+            return 1.0 - torch.sum(weight * 2 * intersection / denom).float()
+        else:
+            return 1.0 - torch.mean(2 * intersection / denom).float()
 
 # def compute_per_channel_dice(y_pred, y_true, epsilon=1e-6, weight=None):
 #     """

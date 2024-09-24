@@ -26,6 +26,9 @@ class Criterion(torch.nn.Module):
         self._loss_weights = config.loss_weights
         self._set_active_heads() # sets everything
 
+        self.chamfer_weights = None
+        self._state_attrs = ("_head_weights", "_loss_weights", "_active_heads", "_active_losses", "_needs_sampling")
+
         # across_task_normalizer is computed on every forward pass depending on
         # which task losses are feasible
         # self.within_task_normalizer = {
@@ -54,11 +57,8 @@ class Criterion(torch.nn.Module):
 
     def state_dict(self):
         state_dict = super().state_dict()
-        state_dict["_head_weights"] = self._head_weights
-        state_dict["_loss_weights"] = self._loss_weights
-        state_dict["_active_heads"] = self._active_heads
-        state_dict["_active_losses"] = self._active_losses
-        state_dict["_needs_sampling"] = self._needs_sampling
+        for attr in self._state_attrs:
+            state_dict[attr] = getattr(self, attr)
         return state_dict
 
     def load_state_dict(
@@ -67,13 +67,16 @@ class Criterion(torch.nn.Module):
             strict: bool = True,
             assign: bool = False
         ):
-        self._head_weights = state_dict.pop("_head_weights")
-        self._loss_weights = state_dict.pop("_loss_weights")
-        self._active_heads = state_dict.pop("_active_heads")
-        self._active_losses = state_dict.pop("_active_losses")
-        self._needs_sampling = state_dict.pop("_needs_sampling")
-        super().load_state_dict(state_dict, strict, assign)
+        for attr in self._state_attrs:
+            if isinstance(getattr(self, attr), dict):
+                brainnet.utilities.recursive_dict_update_(
+                    getattr(self, attr), state_dict.pop(attr)
+                )
+            else:
+                setattr(self, attr, state_dict.pop(attr))
+        self._set_active_heads()
 
+        super().load_state_dict(state_dict, strict, assign)
 
     def _set_active_heads(self):
         self._active_heads = [h for h,v in self._head_weights.items() if v > 0.0]
@@ -158,6 +161,9 @@ class Criterion(torch.nn.Module):
             for head, losses in loss_dict.items()
         }
 
+    def set_chamfer_weights(self, weights):
+        self.chamfer_weights = weights
+
     def prepare_for_surface_loss(
         self,
         y_pred: dict,
@@ -185,7 +191,6 @@ class Criterion(torch.nn.Module):
         sample_name = "points_sampled"
         K_name = "K_sampled"
         H_name = "H_sampled"
-
         W_name = "weights_sampled"
 
         for h, surfaces in y_pred.items():
@@ -203,7 +208,9 @@ class Criterion(torch.nn.Module):
                     y_true[h][s],
                     n_samples,
                     smooth_y_true,
-                    H_clip_to_percentile=H_clip_to_percentile[s]
+                    H_clip_to_percentile = H_clip_to_percentile[s],
+                    calculate_chamfer_weights = True,
+                    surface_name = s,
                 )
 
                 y_true[h][s].vertex_data[sample_name] = sampled_points
@@ -228,7 +235,9 @@ class Criterion(torch.nn.Module):
                 # add sampled weights
                 if sampled_weights is not None:
                     y_true[h][s].vertex_data[W_name] = sampled_weights
-                    y_pred[h][s].vertex_data[W_name] = sampled_weights[y_pred[h][s].batch_ix, y_pred[h][s].vertex_data[index_name]]
+                    y_pred[h][s].vertex_data[W_name] = sampled_weights[
+                        y_pred[h][s].batch_ix, y_pred[h][s].vertex_data[index_name]
+                    ]
 
     def _sample_points_and_curv(
         self,
@@ -236,6 +245,8 @@ class Criterion(torch.nn.Module):
         n_samples: int,
         taubin_smoothing: bool = False,
         H_clip_to_percentile: None | tuple[float, float] = None,
+        calculate_chamfer_weights: bool = False,
+        surface_name: str = None,
     ):
         if taubin_smoothing:
             vo = torch.empty_like(surface.vertices)
@@ -254,30 +265,21 @@ class Criterion(torch.nn.Module):
         if taubin_smoothing:
             surface.vertices = vo
 
-        # weigh sampling probability by (abs) mean curvature
-        # if curv_weight > 0:
-        #     face_absH = surface.vertex_feature_to_face_feature(H.abs())
-        #     weight = 1 + curv_weight * face_absH.clamp(
-        #         face_absH.quantile(0.01), face_absH.quantile(0.99)
-        #     )
-        # else:
-        #     weight = None
-
-        weight = None
-
         points, samp_face, samp_coo = surface.sample_points(
             n_samples,
-            weights=weight,
             return_sampled_faces_and_bc=True,
         )
         sampled_K = surface.interpolate_vertex_features(K, samp_face, samp_coo)
         sampled_H = surface.interpolate_vertex_features(H, samp_face, samp_coo)
-        if "weights" in surface.vertex_data:
+
+        if calculate_chamfer_weights and self.chamfer_weights is not None:
+            weights = self.chamfer_weights.get_weights(H, surface_name)
             sampled_weights = surface.interpolate_vertex_features(
-                surface.vertex_data["weights"], samp_face, samp_coo
+                weights, samp_face, samp_coo
             )
         else:
             sampled_weights = None
+
         return points, sampled_K, sampled_H, sampled_weights
 
     def forward(self, y_pred, y_true):
@@ -300,7 +302,7 @@ class Criterion(torch.nn.Module):
                             raise ValueError
                     loss_dict[head][loss] = value
                 except KeyError:
-                    # Required data does not exist in y_pred and/or y_true
+                    # warnings.warn(f"Required data for {head}/{loss} does not exist in y_pred and/or y_true. Skipping.")
                     pass
 
         return loss_dict

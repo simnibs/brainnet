@@ -84,6 +84,9 @@ class ResultsParameters:
     checkpoint_prefix: str = "state"
     checkpoint_subdir: str = "checkpoint"
     examples_subdir: str = "examples"
+    # Which images/surfaces to write when writing examples
+    # The image used for prediction is called "x". None -> write everything
+    examples_keys: list[str] | None = None
     save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
     save_example_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
     checkpoint_filename_pattern: str = "{filename_prefix}_{name}_{global_step:05d}.pt"
@@ -112,6 +115,7 @@ class TrainParameters:
     max_epochs: int
     load_checkpoint: int = 0 # do not load
     epoch_length_train: int = 100
+    gradient_accumulation_steps: int = 1
     epoch_length_val: int = 50
     evaluate_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=10)
     events_trainer: list[EventAction] | None = None

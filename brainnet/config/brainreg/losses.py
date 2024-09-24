@@ -7,6 +7,7 @@ from brainnet.modules.loss_wrappers import (
     SurfaceSupervisedLoss,
 )
 from brainnet.modules.losses import (
+    DiceFromLabelsLoss,
     EdgeLengthVarianceLoss,
     HingeLoss,
     MatchedDistanceLoss,
@@ -61,10 +62,19 @@ functions = dict(
         ),
         # mse=SupervisedLoss(MSELoss(), y_pred="t1w_areg_mni", y_true="t1w_areg_mni")
     ),
+    seg=dict(
+        dice=SupervisedLoss(
+            DiceFromLabelsLoss(num_classes=56 + 1),
+            y_pred="brainseg_with_extracerebral",
+            y_true="brainseg_with_extracerebral",
+            # y_pred_valid="t1w_areg_mni_mask",
+            # y_true_valid="t1w_areg_mni_mask",
+        ),
+    ),
     white=dict(
-        # chamfer=SurfaceSupervisedLoss(
-        #     SymmetricChamferLoss(), y_pred="white", y_true="white"
-        # ),
+        chamfer=SurfaceSupervisedLoss(
+            SymmetricChamferLoss(), y_pred="white", y_true="white"
+        ),
         # curv=SurfaceSupervisedLoss(
         #     SymmetricCurvatureNormLoss(),
         #     y_pred="white",
@@ -72,16 +82,16 @@ functions = dict(
         # ),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         hinge=SurfaceRegularizationLoss(HingeLoss(), y_pred="white"),
-        matched=SurfaceSupervisedLoss(
-            MatchedDistanceLoss(), y_pred="white", y_true="white",
-        ),
+        # matched=SurfaceSupervisedLoss(
+        #     MatchedDistanceLoss(), y_pred="white", y_true="white",
+        # ),
     ),
     pial=dict(
-        # chamfer=SurfaceSupervisedLoss(
-        #     SymmetricChamferLoss(),
-        #     y_pred="pial",
-        #     y_true="pial",
-        # ),
+        chamfer=SurfaceSupervisedLoss(
+            SymmetricChamferLoss(),
+            y_pred="pial",
+            y_true="pial",
+        ),
         # curv=SurfaceSupervisedLoss(
         #     SymmetricCurvatureNormLoss(),
         #     y_pred="pial",
@@ -89,27 +99,29 @@ functions = dict(
         # ),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
         hinge=SurfaceRegularizationLoss(HingeLoss(), y_pred="pial"),
-        matched=SurfaceSupervisedLoss(
-            MatchedDistanceLoss(), y_pred="pial", y_true="pial",
-        ),
+        # matched=SurfaceSupervisedLoss(
+        #     MatchedDistanceLoss(), y_pred="pial", y_true="pial",
+        # ),
     ),
 )
 
 head_weights = dict(
     svf=1.0,
     image=1.0,
-    white=1.0,
-    pial=1.0,
+    seg=1.0,
+    # white=0.1,
+    # pial=0.1,
 )
 
 loss_weights = dict(
-    svf=dict(gradient=1.0),
-    image=dict(ncc_1=1.0, ncc_2=1.0, ncc_4=1.0),
+    svf=dict(gradient=1.0), # 2.5 -> 5
+    image=dict(ncc_1=1.0/3.0, ncc_2=1.0/3.0, ncc_4=1.0/3.0),
+    seg = dict(dice=1.0),
     # image = dict(mse=1.0),
-    # white=dict(chamfer=1.0, curv=1.0),
-    # pial=dict(chamfer=1.0, curv=1.0),
-    white=dict(edge=1.0, hinge=1.0, matched=0.1),
-    pial=dict(edge=1.0, hinge=1.0, matched=0.1),
+    # white=dict(chamfer=1.0, edge=1.0, hinge=1.0),
+    # pial=dict(chamfer=1.0, edge=1.0, hinge=1.0),
+    # white=dict(edge=1.0, hinge=1.0, matched=0.1),
+    # pial=dict(edge=1.0, hinge=1.0, matched=0.1),
 
 )
 

@@ -5,9 +5,9 @@ from brainnet.event_handlers import set_loss_weight, optimizer_multiply_lr
 
 loss_events = [
     # config.EventAction(
-    #     event=Events.EPOCH_STARTED(once=401), # EPOCH_COMPLETED(once=400)
+    #     event=Events.EPOCH_STARTED(once=701), # EPOCH_COMPLETED(once=400)
     #     handler=set_loss_weight,
-    #     kwargs=dict(weights={("svf", "gradient"): 0.1}), # / 10
+    #     kwargs=dict(weights={("svf", "gradient"): 1.0}), # / 10
     # ),
 ]
 

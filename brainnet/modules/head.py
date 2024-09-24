@@ -2,6 +2,8 @@ import torch
 
 from brainnet.modules.blocks import ConvBlock
 from brainnet.modules.topofit.models import TopoFitGraph, TopoFitGraphAdjust
+from brainnet.modules.cortexnet import CortexThing
+
 
 """
 image -> feature extractor -> task nets -> prediction
@@ -41,11 +43,11 @@ class HeadModule(torch.nn.Module):
 
 
 class SVFModule(torch.nn.Module):
-    def __init__(self, channels: tuple | list[int], init_zeros: bool = True) -> None:
+    def __init__(self, channels: tuple | list[int], init_zeros: bool = False) -> None:
         super().__init__()
 
         izs = [False] * (len(channels) - 1)
-        izs[-1] = True if init_zeros else False
+        izs[-1] = init_zeros
 
         self.convs = torch.nn.Sequential(
             *[
@@ -148,5 +150,7 @@ class ContrastiveModule(torch.nn.Module):
 
 SurfaceModule = TopoFitGraph
 SurfaceAdjustModule = TopoFitGraphAdjust
+
+SurfaceModule = CortexThing
 
 surface_modules = (SurfaceModule, SurfaceAdjustModule)

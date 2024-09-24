@@ -159,13 +159,6 @@ cfg_model = config.BrainNetParameters(
     ),
 )
 
-# BrainReg
-# cfg_model = config.ModelParameters(
-#     device = device,
-#     body = body.UNet(spatial_dims, in_channels, unet_enc_ch, unet_dec_ch),
-#     svf = head.SVFModule([unet_out_ch, 3]),
-# )
-
 # =============================================================================
 # OPTIMIZER
 # =============================================================================

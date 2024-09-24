@@ -26,7 +26,7 @@ functions = dict(
             SymmetricChamferLoss(), y_pred="white", y_true="white",
         ),
         curv=SurfaceSupervisedLoss(
-            SymmetricCurvatureNormLoss(), y_pred="white", y_true="white",
+            SymmetricCurvatureMSELoss(), y_pred="white", y_true="white",
         ),
     ),
     pial=dict(
@@ -39,7 +39,7 @@ functions = dict(
             SymmetricChamferLoss(), y_pred="pial", y_true="pial",
         ),
         curv=SurfaceSupervisedLoss(
-            SymmetricCurvatureNormLoss(), y_pred="pial", y_true="pial",
+            SymmetricCurvatureMSELoss(), y_pred="pial", y_true="pial",
         ),
     ),
     thickness=dict(

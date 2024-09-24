@@ -18,13 +18,13 @@ from brainnet.config.brainreg.losses import cfg_loss
 # =============================================================================
 
 project: str = "BrainReg"
-run: str = "run-image-01"
-run_id: None | str = None  # f"{run}-00"
-resume_from_run: None | str = None  # run
+run: str = "run-image-13"
+run_id: None | str = None # f"{run}-00"
+resume_from_run: None | str = None # "run-image-11"  # run
 tags = ["t1w", "multiscale", "deep features"]
 device: str | torch.device = torch.device("cuda")
 
-target_surface_resolution: int | None = 5 # None
+target_surface_resolution: int | None = None # None
 target_surface_hemisphere: str = "both"
 initial_surface_resolution = None
 
@@ -38,9 +38,10 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 cfg_train = config.TrainParameters(
     max_epochs=3000,
     epoch_length_train=100,
+    gradient_accumulation_steps=10,
     epoch_length_val=25,
     # evaluate_on=Events.EPOCH_COMPLETED,
-    # events_trainer=events_trainer.events,
+    events_trainer=events_trainer.events,
     # events_evaluators=events_evaluators.events,
     enable_amp=True,
 )
@@ -61,7 +62,7 @@ cfg_dataset = config.DatasetParameters(
         root_dir=root_dir / "training_data_brainreg",
         subject_dir=root_dir / "training_data_subjects",
         subject_subset="train",
-        images=["t1w_areg_mni"],
+        images=["t1w_areg_mni", "brainseg_with_extracerebral"],
         load_mask = "force",
         target_surface_resolution=target_surface_resolution,
         target_surface_hemispheres=target_surface_hemisphere,
@@ -72,7 +73,7 @@ cfg_dataset = config.DatasetParameters(
         root_dir=root_dir / "training_data_brainreg",
         subject_dir=root_dir / "training_data_subjects",
         subject_subset="validation",
-        images=["t1w_areg_mni"],
+        images=["t1w_areg_mni", "brainseg_with_extracerebral"],
         load_mask = "force",
         target_surface_resolution=target_surface_resolution,
         target_surface_hemispheres=target_surface_hemisphere,
@@ -96,14 +97,9 @@ cfg_criterion = config.CriterionParameters(
 
 spatial_dims = 3
 in_channels = 2
-unet_enc_ch = [[8], [16], [32], [64], [128]]
-unet_dec_ch = [[64], [32], [16], [8]]
+unet_enc_ch = [[16], [32], [32], [64], [128]]
+unet_dec_ch = [[64], [32], [32], [16]]
 unet_decoder_features = [False, True, True, True]
-# svf_modules = [
-#     head.SVFModule([unet_dec_ch[-3][-1], 32, 32, 3]),
-#     head.SVFModule([unet_dec_ch[-2][-1], 32, 32, 3]),
-#     head.SVFModule([unet_dec_ch[-1][-1], 32, 32, 3]),
-# ]
 svf_modules = torch.nn.ModuleList([
     head.SVFModule(3 * [ch[-1]] + [3]) for i, ch in zip(unet_decoder_features, unet_dec_ch) if i
 ])
@@ -130,6 +126,7 @@ cfg_results = config.ResultsParameters(
     load_from_dir=(
         out_dir / project / resume_from_run if resume_from_run is not None else None
     ),
+    examples_keys = ["t1w_areg_mni", "brainseg_with_extracerebral", "surface", "svf"],
 )
 
 # =============================================================================

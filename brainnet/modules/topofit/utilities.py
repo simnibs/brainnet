@@ -23,15 +23,18 @@ def grid_sample(image: torch.Tensor, vertices: torch.Tensor):
     # Transform vertices from (0, shape) to (-half_shape, half_shape), then
     # normalize to [-1, 1]
 
-    half_shape = (torch.as_tensor(image.shape[-3:], device=image.device) - 1) / 2
-    points = (vertices.mT - half_shape) / half_shape # N,3,M -> N,M,3
+    half_shape = (
+        torch.as_tensor(image.shape[-3:], dtype=vertices.dtype, device=vertices.device)
+        - 1
+    ) / 2
+    points = (vertices.mT - half_shape) / half_shape  # N,3,M -> N,M,3
 
     # points = vertices.mT
 
     # samples is N,C,D,H,W where C is from `image` and D,H,W are from `points`
     samples = torch.nn.functional.grid_sample(
-        image.swapaxes(2,4),        # N,C,W,H,D -> N,C,D,H,W
-        points[:, :, None, None],   # N,M,3     -> N,D,H,W,3 where D=M; H=W=1
-        align_corners=True
+        image.swapaxes(2, 4),  # N,C,W,H,D -> N,C,D,H,W
+        points[:, :, None, None],  # N,M,3     -> N,D,H,W,3 where D=M; H=W=1
+        align_corners=True,
     )
-    return samples[..., 0, 0] # squeeze out H, W
+    return samples[..., 0, 0]  # squeeze out H, W

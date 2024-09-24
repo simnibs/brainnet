@@ -25,7 +25,7 @@ class GraphUNet(torch.nn.Module):
         self,
         in_channels: int,
         topologies: list[topology.Topology],
-        conv_module: layers.GraphConv | layers.EdgeConv,
+        conv_module: layers.EdgeConv,
         reduce: str = "amax",
         channels: int | dict = 32,
         n_levels: int = 4,
@@ -164,7 +164,7 @@ class GraphUNetDeform(torch.nn.Module):
         self,
         in_channels: int,
         topologies: list[topology.Topology],
-        conv_module: layers.GraphConv | layers.EdgeConv,
+        conv_module: layers.EdgeConv,
         # euler_step_size: float, # unused
         euler_iterations: int,
         config_unet: UnetParameters,
@@ -209,7 +209,6 @@ class GraphUNetDeform(torch.nn.Module):
         are applied to the vertices. This process is repeat
         `self.euler_iterations` number of times.
         """
-
         for _ in torch.arange(self.euler_iterations):
             sampled_features = grid_sample(features, vertices)  # image features
             sampled_features = self.unet(sampled_features)  # graph features
