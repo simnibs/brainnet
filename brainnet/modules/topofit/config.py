@@ -8,6 +8,21 @@ Differences from the original TopoFit implementation
 
 """
 
+# image_unet_channels=[
+# [16, 32, 32, 64, 64],
+# [64, 64, 64, 64]],
+# image_in_channels=1,
+# graph_block_resolutions=[0, 1, 2, 3, 4, 5, 6],
+# graph_block_channels=64,
+# graph_block_convs_per_level=2,
+# graph_block_levels=3,
+# graph_block_scale=10,
+# graph_block_steps=1,
+# quad_block_channels=[16],
+# quad_block_iterations=10,
+# in_voxsize=1,
+# include_positions=False,
+
 class UnetParameters:
     # manual specification
     channels: int | dict = dict(

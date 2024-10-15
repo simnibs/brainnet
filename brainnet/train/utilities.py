@@ -6,6 +6,7 @@ import torch
 from ignite.engine import Engine, Events
 from ignite.engine.events import CallableEventWithFilter
 from ignite.handlers import ModelCheckpoint
+from ignite.metrics.metric import Metric
 
 import brainnet.config
 from brainnet.config.base import EventAction
@@ -190,10 +191,12 @@ def write_example_to_disk(
         config=config,
     )
 
-
-def add_metric_to_engine(engine):
-    metric = CriterionAggregator()
-    metric.attach(engine, "loss")
+def add_metric_to_engine(
+        engine,
+        metric: Metric = CriterionAggregator(),
+        name: str = "loss"
+    ):
+    metric.attach(engine, name)
 
 
 def add_evaluation_event(
@@ -202,7 +205,7 @@ def add_evaluation_event(
     dataloader,
     evaluate_on: CallableEventWithFilter,
     logger: Callable,
-    epoch_length: int,
+    epoch_length: int | None,
 ) -> Engine:
 
     metric = CriterionAggregator()
@@ -226,7 +229,7 @@ def add_evaluation_event(
         event_handlers.evaluate_model,
         evaluator=evaluator,
         dataloader=dataloader,
-        epoch_length=epoch_length,
+        epoch_length=epoch_length or len(iter(dataloader)),
         logger=logger,
     )
 

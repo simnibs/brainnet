@@ -6,6 +6,7 @@ import brainsynth.transforms
 from brainsynth.transforms.utilities import channel_last
 from brainsynth.transforms.spatial import ScaleAndSquare
 
+
 class BrainReg(torch.nn.Module):
     def __init__(
         self,
@@ -15,9 +16,9 @@ class BrainReg(torch.nn.Module):
     ):
         super().__init__()
         self.device = torch.device(device)
-        assert len(svf) == len(body.feature_scales)
         self.body = body  # image feature extractor, e.g., unet
         self.svf = svf  # translates features to a stationary velocity field (SVF).
+        self.svf_scales = body.decoder_scale[-len(svf) :]
         self.SAS: None | ScaleAndSquare = None
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
@@ -41,21 +42,28 @@ class BrainReg(torch.nn.Module):
         """
         # Estimate SVF for subsequent images.
         size = images.size()
-        assert size[1] in {1,2}
+        assert size[1] in {1, 2}
         spatial_size = size[-3:]
         # Reshape from N,1,W,H,D to N/2,2,W,H,D
         images = images.reshape(-1, 2, *spatial_size)
         # assert images.size()[1] == 2, f"Exactly two images are required (got {images.size()[1]})"
         features = self.body(images)
         # predict an SVF for each feature map and sum them
-        svf = self.body.sum_features([svf(f) for f,svf in zip(features, self.svf)])
+        svf = torch.zeros(
+            (images.shape[0], 3, *spatial_size),
+            device=images.device
+        )
+        for svf_module, scale in zip(self.svf, self.svf_scales):
+            svf = svf + self.body.upsample_feature(svf_module(features), scale)
         return svf
 
     def integrate_svf(self, svf):
         spatial_size = svf.size()[-3:]
-        if not isinstance(self.SAS, ScaleAndSquare) or (self.SAS.grid.size() != spatial_size):
+        if not isinstance(self.SAS, ScaleAndSquare) or (
+            self.SAS.grid.size() != spatial_size
+        ):
             grid = brainsynth.transforms.Grid(spatial_size, self.device)()
-            self.SAS = ScaleAndSquare(grid, spatial_size, device=self.device)
+            self.SAS = ScaleAndSquare(grid, spatial_size, n_steps=4, device=self.device)
 
         deform_fwd = self.SAS(svf)
         deform_bwd = self.SAS(-svf)
@@ -64,8 +72,7 @@ class BrainReg(torch.nn.Module):
 
     @staticmethod
     def apply_affine(affine, grid):
-        return grid @ affine[:3,:3].T + affine[:3, 3]
-
+        return grid @ affine[:3, :3].T + affine[:3, 3]
 
     def deform_image(self, image, deform):
         assert (spatial_size := deform.size()[-3:]) == image.size()[-3:]
@@ -181,7 +188,9 @@ class BrainNet(torch.nn.Module):
         features = self.body(image)
         return self.forward_heads(features, initial_vertices)
 
-    def forward_heads(self, features, initial_vertices, head_kwargs: dict | None = None):
+    def forward_heads(
+        self, features, initial_vertices, head_kwargs: dict | None = None
+    ):
         # assert len(features) == 1
         # features = features[0]
 

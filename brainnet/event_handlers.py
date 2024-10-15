@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 from typing import Callable
 
@@ -8,7 +9,19 @@ from ignite.engine import Engine
 
 import brainnet.config
 from brainsynth.transforms.utilities import channel_last
-from brainsynth.transforms import IntensityNormalization
+
+FREESURFER_VOLUME_INFO = dict(
+    head=[2, 0, 20],
+    valid="1  # volume info valid",
+    filename="vol.nii",
+    voxelsize=[1, 1, 1],
+    volume=(0, 0, 0),
+    xras=[-1, 0, 0],
+    yras=[0, 0, -1],
+    zras=[0, 1, 0],
+    cras=[0, 0, 0],
+)
+
 
 def synchronize_state(engine, other, attrs):
     """Synchronize `iteration` and `epoch` from other to engine (self)."""
@@ -101,9 +114,8 @@ def log_epoch(engine):
 
 
 class TerminalLogger:
-    def __init__(self, key):
+    def __init__(self):
         """https://stackabuse.com/how-to-print-colored-text-in-python/"""
-        self.key = key
 
         self._colors = dict(
             zip(
@@ -128,14 +140,22 @@ class TerminalLogger:
 
     def _repr_format(self, loss):
         s = ""
-        for k, v in loss.items():
-            s += self._fmt_title.format(k.upper())  # : {total[k]:.2f}
+
+        # when loss includes "raw"/"weighted" as top level key
+        # for k, v in loss.items():
+        #     s += self._fmt_title.format(k.upper())  # : {total[k]:.2f}
+        #     s += "\n"
+        # for kk, vv in v.items():
+        #     s += f"  {self._fmt_name.format(kk)}"
+        #     s += " : "
+        #     s += " | ".join([self._fmt_loss.format(x, y) for x, y in vv.items()])
+        #     s += "\n"
+        # return s
+        for kk,vv in loss.items():
+            s += f"{self._fmt_name.format(kk)}"
+            s += " : "
+            s += " | ".join([self._fmt_loss.format(x, y) for x, y in vv.items()])
             s += "\n"
-            for kk, vv in v.items():
-                s += f"  {self._fmt_name.format(kk)}"
-                s += " : "
-                s += " | ".join([self._fmt_loss.format(x, y) for x, y in vv.items()])
-                s += "\n"
         return s
 
     def __call__(self, engine):
@@ -157,7 +177,8 @@ class TerminalLogger:
 
 class MetricLogger(TerminalLogger):
     def __init__(self, key, name: None | str = None):
-        super().__init__(key)
+        super().__init__()
+        self.key = key
         self.name = name
         if self.name is not None:
             i = f"{self._start}{self._styles['bold']}m {self.name.upper():15s}{self._end}"
@@ -249,6 +270,10 @@ def wandb_log_engine(engine, logger, name):
     logger.log(data, step=engine.state.epoch)
 
 
+def write_metric(engine, name, out_dir: Path):
+    metric = engine.state.metrics[name]
+    metric.to_pickle(out_dir / (name + ".pickle"))
+
 def write_surface(
     surfaces: dict, vol_info: dict, out_dir: Path, prefix: str, tag: str, label: str
 ):
@@ -286,30 +311,22 @@ def write_volume(
             # v = torch.clip((v - ql) / (qu - ql), 0.0, 1.0)
 
             # v = (255 * channel_last(v)).to(torch.uint8)
-            v = channel_last(v).float()
+            v = v.float()
         else:
-            # assume a one-hot encoded image
-            v = v.argmax(0).to(torch.uint8)
+            # assume a one-hot encoded image if n_channels > 1
+            v = v.to(torch.uint8).argmax(0)[None] if v.shape[0] > 1 else v
+            v = v.to(torch.uint8)
+
+        v = channel_last(v)
 
         nib.Nifti1Image(v.cpu().numpy(), affine).to_filename(out_dir / name)
-
 
 def write_example(
     engine: Engine,
     evaluators: dict[str, Engine],
     config: brainnet.config.ResultsParameters,
 ):
-    vol_info = dict(
-        head=[2, 0, 20],
-        valid="1  # volume info valid",
-        filename="vol.nii",
-        voxelsize=[1, 1, 1],
-        volume=(0, 0, 0),
-        xras=[-1, 0, 0],
-        yras=[0, 0, -1],
-        zras=[0, 1, 0],
-        cras=[0, 0, 0],
-    )
+    vol_info = copy.deepcopy(FREESURFER_VOLUME_INFO)
 
     for prefix, e in (dict(trainer=engine) | evaluators).items():
         _, x, y_pred, y_true = e.state.output
@@ -321,7 +338,8 @@ def write_example(
 
         for label, y in zip((None, "pred", "true"), (dict(x=x), y_pred, y_true)):
             for k, v in y.items():
-                if k == "surface":
-                    write_surface(v, vol_info, config.examples_dir, st, k, label)
-                else:
-                    write_volume(v, affine, config.examples_dir, st, k, label)
+                if config.examples_keys is None or k in config.examples_keys:
+                    if k == "surface":
+                        write_surface(v, vol_info, config.examples_dir, st, k, label)
+                    else:
+                        write_volume(v, affine, config.examples_dir, st, k, label)

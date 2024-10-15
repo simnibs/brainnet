@@ -8,26 +8,15 @@ from ignite.engine import Engine
 import brainsynth
 
 import brainnet.config
-import brainnet.train_utilities
-
+import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
 from brainnet.mesh.surface import TemplateSurfaces
-from brainnet.modules.head import SurfaceModule
+from brainnet.modules.head import surface_modules
 from brainnet.utilities import recursive_dict_sum, recursive_itemize
 
-
-# points = np.concatenate((w.vertices[0].cpu().numpy(), p.vertices[0].cpu().numpy()))
-# cells = np.concatenate(
-#     (
-#         np.full((w.topology.n_vertices, 1), 2),
-#         np.ascontiguousarray(np.arange(len(points)).reshape(2, -1).T),
-#     ),
-#     axis=1,
-# )
-# lines = pv.PolyData(points, cells)
-
-
+# from brainnet.resources.loss_weights import WeightsFromCurvatureProb
+# from brainnet.loss_weights import WeightsMedialWall
 
 class SupervisedStep:
     def __init__(
@@ -53,14 +42,16 @@ class SupervisedStep:
         """
         surface_names = ("white", "pial")
 
-        module = [i for i in self.model.heads.values() if isinstance(i, SurfaceModule)]
+        module = [i for i in self.model.heads.values() if isinstance(i, surface_modules)]
+
         if len(module) == 0:
             return None
 
         assert len(module) == 1
         module = module[0]
 
-        topology = module.get_prediction_topology()
+        # topology = module.get_prediction_topology()
+        topology = module.out_topology
         topology = dict(lh=topology, rh=copy.deepcopy(topology))
         topology["rh"].reverse_face_orientation()
 
@@ -130,51 +121,68 @@ class SupervisedStep:
     def compute_loss(self, y_pred, y_true):
         self.prepare_loss(y_pred, y_true)
         raw = self.criterion(y_pred, y_true)
-        return dict(
-            raw=self.criterion(y_pred, y_true),
-            weighted=self.criterion.apply_weights(raw),
-        )
+        return dict(raw=raw, weighted=self.criterion.apply_weights(raw))
 
 
 class SupervisedTrainingStep(SupervisedStep):
     def __init__(
-        self, synthesizer, model, criterion, optimizer, enable_amp: bool = False
+        self, synthesizer, model, criterion, optimizer,
+        gradient_accumulation_steps: int = 1,
+        enable_amp: bool = False
     ) -> None:
         super().__init__(synthesizer, model, criterion)
         self.optimizer = optimizer
         self.enable_amp = enable_amp
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        if self.enable_amp:
+            self.grad_scaler = torch.cuda.amp.GradScaler()
 
     def __call__(self, engine, batch) -> tuple:
-        # Reset gradients in optimizer. Otherwise gradients would
-        # accumulate across multiple passes (whenever .backward is
-        # called)
-        self.optimizer.zero_grad()
+        self.model.train()
 
         image, y_true, init_verts = self.prepare_batch(batch)
 
         # Only wrap forward pass and loss computation. Backward uses the same11
         # types as inferred during forward
-        self.model.train()
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            y_pred = self.model(
-                image,
-                init_verts,  # head_kwargs=engine.state.head_runtime_kwargs
-            )
+            y_pred = self.model(image, init_verts)
+
+            # features = self.model.body(image)
+            # we need this as we go back to float32 for the rest...
+            # features = [f.float() for f in features]
+
+            # {k:v.half() for k,v in init_verts.items()}
+            # y_pred = self.model.forward_heads(features, init_verts)
+
+        # with torch.autocast(self.device.type, enabled=self.enable_amp):
+
             loss = self.compute_loss(y_pred, y_true)
             total_loss = recursive_dict_sum(loss["weighted"])
+            total_loss /= self.gradient_accumulation_steps
 
         # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
             raise RuntimeError(f"Loss diverged (loss = {total_loss})")
 
-        total_loss.backward()  # backpropagate loss
-        self.optimizer.step()  # update parameters
+        if self.enable_amp:
+            self.grad_scaler.scale(total_loss).backward()
+            if engine.state.iteration % self.gradient_accumulation_steps == 0:
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.optimizer.zero_grad()
+        else:
+            total_loss.backward()  # backpropagate loss
+            if engine.state.iteration % self.gradient_accumulation_steps == 0:
+                self.optimizer.step()  # update parameters
+                # Reset gradients in optimizer. Otherwise gradients would
+                # accumulate across multiple passes (whenever .backward is
+                # called)
+                self.optimizer.zero_grad()
 
         loss = recursive_itemize(loss)
 
         # these are stored in engine.state.output
         return loss, image, y_pred, y_true
-
 
 class EvaluationStep(SupervisedStep):
     def __init__(self, synthesizer, model, criterion, enable_amp: bool = False):
@@ -182,39 +190,32 @@ class EvaluationStep(SupervisedStep):
         self.enable_amp = enable_amp
 
     def __call__(self, engine, batch):
+        self.model.eval()
+
         image, y_true, init_verts = self.prepare_batch(batch)
 
-        self.model.eval()
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
-                y_pred = self.model(
-                    image, init_verts  # , head_kwargs=engine.state.head_runtime_kwargs
-                )
+                y_pred = self.model(image, init_verts)
                 loss = self.compute_loss(y_pred, y_true)
 
         # we don't need the weighted loss
-        del loss["weighted"]
-        loss = recursive_itemize(loss)
+        loss = recursive_itemize(loss["raw"])
 
         return loss, image, y_pred, y_true
 
 
-# def initialize(config):
-
-#     if hasattr(config, "lr_scheduler") and config.lr_scheduler is not None:
-#         lr_scheduler = getattr(torch.optim.lr_scheduler, config.lr_scheduler.model)(
-#             optimizer, **vars(config.lr_scheduler.kwargs)
-#         )
-#     else:
-#         lr_scheduler = None
-
-#     return dataloader, synthesizer, model, optimizer, criterion, lr_scheduler
-
-
 def train(args):
-    # args.config
 
-    train_setup_file = args.config  # "brainnet.config.surface_model.main"
+    """
+
+    train_setup_file = "brainnet.config.topofit.synth.main"
+    train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
+    train_setup.wandb.enable = False
+
+    """
+
+    train_setup_file = args.config  # "brainnet.config.cortex.main"
 
     print("Setting up training...")
 
@@ -247,60 +248,84 @@ def train(args):
         model,
         criterion["train"],
         optimizer,
+        train_setup.train_params.gradient_accumulation_steps,
         enable_amp=train_setup.train_params.enable_amp,
     )
     trainer = Engine(train_step)
 
+    # Set medial wall weights
+    # False = 0 = non-MD
+    # True = 1 = MD
+    # weights = torch.tensor([1.0, 0.25], device=model.device)
+    # medial_wall_weights = WeightsMedialWall(weights).get_weights()
+    # medial_wall_weights = medial_wall_weights[
+    #     :train_step.surface_template["y_true"]["lh"]["white"].topology.n_vertices
+    # ][None]
+    # criterion["train"].set_weights_medial_wall(medial_wall_weights)
+    # criterion["validation"].set_weights_medial_wall(medial_wall_weights)
+
     # The order in which the events are added to the engine is important!
 
     # Aggregate average loss over epoch
-    brainnet.train_utilities.add_metric_to_engine(trainer)
-    brainnet.train_utilities.add_terminal_logger(trainer)
+    brainnet.train.utilities.add_metric_to_engine(trainer)
+    brainnet.train.utilities.add_terminal_logger(trainer)
 
     # Add evaluation
     kwargs = dict(
         engine=trainer,
-        model=model,
         evaluate_on=train_setup.train_params.evaluate_on,
         epoch_length=train_setup.train_params.epoch_length_val,
-        enable_amp=train_setup.train_params.enable_amp,
     )
+
     evaluators = dict(
-        # train = add_evaluation_event(
-        #     criterion=criterion["validation"],  # NOTE here we use the validation criterion!
-        #     synth=synth["train"],
+        # train = brainnet.train.utilities.add_evaluation_event(
+        #     EvaluationStep(
+        #         synth["train"],
+        #         model,
+        #         criterion["validation"], # NOTE here we use the validation criterion!
+        #         train_setup.train_params.enable_amp,
+        #     ),
         #     dataloader=dataloader["train"],
         #     logger=event_handlers.MetricLogger(key="loss", name="train"),
         #     **kwargs,
         # ),
-        validation=brainnet.train_utilities.add_evaluation_event(
-            criterion=criterion["validation"],
-            synth=synth["validation"],
+        validation=brainnet.train.utilities.add_evaluation_event(
+            EvaluationStep(
+                synth["validation"],
+                model,
+                criterion["validation"],
+                train_setup.train_params.enable_amp,
+            ),
             dataloader=dataloader["validation"],
             logger=event_handlers.MetricLogger(key="loss", name="validation"),
             **kwargs,
         ),
     )
 
-    brainnet.train_utilities.add_wandb_logger(trainer, evaluators, train_setup.wandb)
+    brainnet.train.utilities.add_wandb_logger(trainer, evaluators, train_setup.wandb)
 
     # Should be triggered after metrics has been computed!
-    brainnet.train_utilities.add_custom_events(trainer, train_setup.train_params.events_trainer)
+    brainnet.train.utilities.add_custom_events(
+        trainer, train_setup.train_params.events_trainer
+    )
     for e in evaluators.values():
-        brainnet.train_utilities.add_custom_events(e, train_setup.train_params.events_evaluators)
-
-
-    # to_save = dict(model=model, optimizer=optimizer, engine=trainer)
-    # load_checkpoint(to_save, train_setup)
+        brainnet.train.utilities.add_custom_events(
+            e, train_setup.train_params.events_evaluators
+        )
 
     # Include this in the checkpoint
-    to_save = dict(model=model, optimizer=optimizer, engine=trainer,
-                   **{f"criterion[{k}]": v for k,v in criterion.items()})
+    to_save = dict(
+        model=model,
+        optimizer=optimizer,
+        engine=trainer,
+        **{f"criterion[{k}]": v for k, v in criterion.items()},
+    )
+    if train_setup.train_params.enable_amp:
+        to_save["grad_scaler"] = train_step.grad_scaler
 
-    brainnet.train_utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
-    brainnet.train_utilities.write_example_to_disk(trainer, evaluators, train_setup.results)
-
-    brainnet.train_utilities.load_checkpoint(to_save, train_setup)
+    brainnet.train.utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
+    brainnet.train.utilities.write_example_to_disk(trainer, evaluators, train_setup.results)
+    brainnet.train.utilities.load_checkpoint(to_save, train_setup)
 
     print("Setup completed. Starting training at epoch ...")
 
@@ -313,14 +338,16 @@ def train(args):
     print(sep_line)
 
     # Start the training
+    epoch_length = train_setup.train_params.epoch_length_train or len(iter(dataloader["train"]))
     trainer.run(
         dataloader["train"],
-        epoch_length=train_setup.train_params.epoch_length_train,
+        epoch_length=epoch_length,
         max_epochs=train_setup.train_params.max_epochs,
     )
 
+
 if __name__ == "__main__":
-    args = brainnet.train_utilities.parse_args(sys.argv)
+    args = brainnet.train.utilities.parse_args(sys.argv)
     train(args)
 
 # import torch

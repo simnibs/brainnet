@@ -528,10 +528,10 @@ class TemplateSurfaces:
         faces = self.faces.detach()
 
         # the extension returns (intersecting triangles, # intersecting triangles)
-        if vertices.shape[0] == 1:
+        if self.n_batch == 1:
             return cuda_extensions.compute_self_intersections(vertices[0], faces)
         else:
             return [
-                cuda_extensions.compute_self_intersections(v, faces)[0]
+                cuda_extensions.compute_self_intersections(v, faces)
                 for v in vertices
             ]

@@ -136,6 +136,12 @@ class UNet(torch.nn.Module):
             )
             if i
         ]
+        self._fm_name = dict(encoder=lambda i: f"encoder:{i}", decoder=lambda i: f"decoder:{i}")
+        self.num_features = {f"{self._fm_name['encoder'](i)}": n[-1] for i,n in enumerate(encoder_channels)}
+        self.num_features |= {f"{self._fm_name['decoder'](i)}": n[-1] for i,n in enumerate(decoder_channels)}
+
+        # self.feature_scales = {f"{self._fm_name['encoder'](i)}": n for i,n in enumerate(self.encoder_scale)}
+        # self.feature_scales |= {f"{self._fm_name['decoder'](i)}": n for i,n in enumerate(self.decoder_scale)}
 
     def upsample_feature(self, feature, scale):
         return torch.nn.functional.interpolate(
@@ -145,36 +151,37 @@ class UNet(torch.nn.Module):
             align_corners=True,
         )
 
-    def sum_features(self, features):
-        """Upsample and concatenate all features.
+    # def sum_features(self, features: dict[str, torch.Tensor]):
 
-        NOTE This can take up a *lot* of memory depending on the spatial size
-        of the output layer!
+    #     if len(features) == 1:
+    #         return features["decoder:3"]
+    #     else:
+    #         out = torch.zeros_like(features[-1])
+    #         for f,s in zip(features, self.feature_scales):
+    #             out = out + self.upsample_feature(f, s)
+    #         return out
 
-        """
-        if len(features) == 1:
-            return features[0]
-        else:
-            out = torch.zeros_like(features[-1])
-            for f,s in zip(features, self.feature_scales):
-                out = out + self.upsample_feature(f, s)
-            return out
+    # def cat_features(self, features):
+    #     """Upsample and concatenate all features.
 
-    def cat_features(self, features):
-        if len(features) == 1:
-            return features[0]
-        else:
-            return torch.cat(
-                [
-                    self.upsample_feature(f, s)
-                    for f, s in zip(features, self.feature_scales)
-                ],
-                dim=1,
-            )
+    #     NOTE This can take up a *lot* of memory depending on the spatial size
+    #     of the output layer!
+
+    #     """
+    #     if len(features) == 1:
+    #         return features[0]
+    #     else:
+    #         return torch.cat(
+    #             [
+    #                 self.upsample_feature(f, s)
+    #                 for f, s in zip(features, self.feature_scales)
+    #             ],
+    #             dim=1,
+    #         )
 
     def forward(self, features):
 
-        unet_features = []
+        unet_features = dict()
 
         # Encoder
         skip_connections = []
@@ -182,7 +189,7 @@ class UNet(torch.nn.Module):
             for block in conv_blocks:
                 features = block(features)
             if self.return_encoder_features[i]:
-                unet_features.append(features)
+                unet_features[self._fm_name['encoder'](i)] = features
             if self.do_pooling(i):
                 skip_connections.append(features)
                 features = self.pooling(features)
@@ -195,6 +202,6 @@ class UNet(torch.nn.Module):
                 features = block(features)
             # the last features are returned anyway
             if self.return_decoder_features[i] and not i == (self.num_levels - 1):
-                unet_features.append(features)
+                unet_features[self._fm_name['decoder'](i)] = features
 
         return unet_features

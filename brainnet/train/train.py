@@ -15,7 +15,7 @@ from brainsynth.dataset import get_dataloader_concatenated_and_split, setup_data
 import brainnet
 from brainnet.mesh.surface import TemplateSurfaces
 from brainnet.modules.brainnet import BrainNet
-from brainnet.modules.heads import surface_modules
+from brainnet.modules.head import surface_modules
 from brainnet.modules.criterion import Criterion
 from brainnet.utilities import recursive_dict_sum
 
@@ -313,7 +313,7 @@ class BrainNetTrainer:
             if hasattr(self.config.reinitialize_loss, str(n-1)):
                 self.reinitialize_criterion(n-1)
 
-            epoch = Epoch(n, self.criterion.active_losses)
+            epoch = Epoch(n, self.criterion._active_losses)
 
 
             hyper_params = self.get_hyper_params()
@@ -510,7 +510,7 @@ class BrainNetTrainer:
         self.criterion = Criterion(config)
 
         print(f"Currently active losses")
-        pprint.pprint(self.criterion.active_losses)
+        pprint.pprint(self.criterion._active_losses)
         print()
 
         print(f"Current loss weights")
@@ -770,7 +770,7 @@ class BrainNetTrainer:
         if not self._do_validation(epoch):
             return {}
 
-        val_epoch = Epoch(epoch, self.criterion.active_losses)
+        val_epoch = Epoch(epoch, self.criterion._active_losses)
 
         self.model.eval()
         with torch.inference_mode():

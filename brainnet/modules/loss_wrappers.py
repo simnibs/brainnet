@@ -27,8 +27,6 @@ class RegularizationLoss(torch.nn.Module):
             E.g., DiceLoss, CrossEntropyLoss, L1Loss
         y_pred : str
             _description_
-        y_true : str
-            _description_
         """
         super().__init__()
 

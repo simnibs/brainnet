@@ -3,13 +3,13 @@ from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
     SurfaceSupervisedLoss,
 )
-from brainnet.modules.losses import (
+from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
     HingeLoss,
     MatchedAngleLoss,
     MatchedDistanceLoss,
     SymmetricChamferLoss,
-    SymmetricCurvatureNormLoss,
+    # SymmetricCurvatureNormLoss,
 )
 
 # Surface loss:
@@ -25,9 +25,9 @@ functions = dict(
         chamfer=SurfaceSupervisedLoss(
             SymmetricChamferLoss(), y_pred="white", y_true="white",
         ),
-        curv=SurfaceSupervisedLoss(
-            SymmetricCurvatureMSELoss(), y_pred="white", y_true="white",
-        ),
+        # curv=SurfaceSupervisedLoss(
+        #     SymmetricCurvatureMSELoss(), y_pred="white", y_true="white",
+        # ),
     ),
     pial=dict(
         matched=SurfaceSupervisedLoss(
@@ -38,9 +38,9 @@ functions = dict(
         chamfer=SurfaceSupervisedLoss(
             SymmetricChamferLoss(), y_pred="pial", y_true="pial",
         ),
-        curv=SurfaceSupervisedLoss(
-            SymmetricCurvatureMSELoss(), y_pred="pial", y_true="pial",
-        ),
+        # curv=SurfaceSupervisedLoss(
+        #     SymmetricCurvatureMSELoss(), y_pred="pial", y_true="pial",
+        # ),
     ),
     thickness=dict(
         angle=SurfaceRegularizationLoss(
@@ -53,8 +53,8 @@ functions = dict(
 head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 
 loss_weights=dict(
-        white=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
-        pial=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
+        white=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0),
+        pial=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0,),
         thickness=dict(angle = 1.0),
     )
 

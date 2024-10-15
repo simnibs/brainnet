@@ -28,10 +28,10 @@ repo=/home/jesperdn/repositories/brainnet
 
 find $repo -name __pycache__ -exec rm -r {} +
 
-SCRIPT="${repo}/brainnet/train2.py"
-CONFIG="brainnet.config.surface_model.main"
-ARGS="--load-checkpoint 3000 --max-epochs 4000"
-# ARGS="--max-epochs 1000"
+SCRIPT="${repo}/brainnet/train/brainnet_train.py"
+CONFIG="brainnet.config.cortex.synth.main"
+# ARGS="--load-checkpoint 500 --max-epochs 1000"
+ARGS="--max-epochs 800"
 
 cmd="python $SCRIPT $CONFIG $ARGS"
 

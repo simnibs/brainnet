@@ -28,6 +28,7 @@ class DataloaderParameters:
     batch_size: int = 1
     num_workers: int = 4
     prefetch_factor: int = 2
+    drop_last: bool = False
     # kwargs: dict | None = None
 
     # def __post_init__(self):
@@ -84,6 +85,7 @@ class ResultsParameters:
     checkpoint_prefix: str = "state"
     checkpoint_subdir: str = "checkpoint"
     examples_subdir: str = "examples"
+    evaluation_subdir: str = "evaluation"
     # Which images/surfaces to write when writing examples
     # The image used for prediction is called "x". None -> write everything
     examples_keys: list[str] | None = None
@@ -98,11 +100,14 @@ class ResultsParameters:
         self._from_checkpoint_dir = self.load_from_dir / self.checkpoint_subdir
         self.checkpoint_dir = self.out_dir / self.checkpoint_subdir
         self.examples_dir = self.out_dir / self.examples_subdir
+        self.evaluation_dir = self.out_dir / self.evaluation_subdir
 
         if not self.checkpoint_dir.exists():
             self.checkpoint_dir.mkdir(parents=True)
         if not self.examples_dir.exists():
             self.examples_dir.mkdir(parents=True)
+        if not self.evaluation_dir.exists():
+            self.evaluation_dir.mkdir(parents=True)
 
 @dataclass
 class SynthesizerParameters:
@@ -114,9 +119,9 @@ class SynthesizerParameters:
 class TrainParameters:
     max_epochs: int
     load_checkpoint: int = 0 # do not load
-    epoch_length_train: int = 100
+    epoch_length_train: int | None = 100
+    epoch_length_val: int | None = 50
     gradient_accumulation_steps: int = 1
-    epoch_length_val: int = 50
     evaluate_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=10)
     events_trainer: list[EventAction] | None = None
     events_evaluators: list[EventAction] | None = None

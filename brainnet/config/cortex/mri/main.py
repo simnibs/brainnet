@@ -8,26 +8,80 @@ import brainsynth.config
 from brainnet import config
 from brainnet.modules import body, head
 # Parameters defined in other files
-from brainnet.config.cortex import events_trainer, events_evaluators
+from . import events_evaluator, events_trainer
 from .losses import cfg_loss
 
 # =============================================================================
 # GENERAL VARIABLES
 # =============================================================================
 
+mode_contrast = "t1w"     # synth, t1w, t2w, flair
+mode_resolution = "1mm"     # 1mm, random
+
 project: str = "Cortex"
-run: str = "01_lh_1mm"
-run_id: None | str = "flyilanm" # f"{run}-00"
+run: str = f"12_lh_{mode_contrast}_{mode_resolution}"
+
+run: str = f"12_lh_T1w_{mode_resolution}"
+
+run_id: None | str = None # f"{run}-00"
 resume_from_run: None | str = None # run
-tags = ["synth", "1mm res", "rand PV"]
+tags = [mode_contrast, mode_resolution]
 device: str | torch.device  = torch.device("cuda:0")
 
 target_surface_resolution: int = 4
 target_surface_hemisphere: str = "lh"
 initial_surface_resolution: int = 0
 
-root_dir: Path = Path("/mnt/projects/CORTECH/nobackup/")
+out_size = [128, 224, 160]
+out_center_str = "lh"
+
+root_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
 out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
+
+# =============================================================================
+# TRAINING MODE
+# =============================================================================
+
+match mode_contrast:
+    case "synth":
+        images_train = ["generation_labels_dist"]
+        images_val = ["t1w"]
+        subject_subset_train = "train"
+        subject_subset_val = "validation"
+        datasets = None
+    case "t1w":
+        images_train = ["t1w"]
+        images_val = ["t1w"]
+        subject_subset_train = "train"
+        subject_subset_val = "validation"
+        datasets = None
+    case "t2w":
+        images_train = ["t2w"]
+        images_val = ["t2w"]
+        # HCP sub-059 excluded: T2w is just zeros!
+        subject_subset_train = "train.t2"
+        subject_subset_val = "validation.t2"
+        datasets = ["HCP", "OASIS3"]
+    case "flair":
+        images_train = ["flair"]
+        images_val = ["flair"]
+        subject_subset_train = "train.flair"
+        subject_subset_val = "validation.flair"
+        datasets = ["ADNI3", "AIBL"]
+    case _:
+        raise ValueError
+
+match mode_resolution:
+    case "1mm":
+        builder_res = "Iso"
+    case "random":
+        builder_res = ""
+    case _:
+        raise ValueError
+
+builder_contrast = "Synth" if mode_contrast == "synth" else "Select"
+builder_train = f"Only{builder_contrast}{builder_res}"
+builder_validation = f"OnlySelect{builder_res}"
 
 # =============================================================================
 # TRAINING PARAMETERS
@@ -35,13 +89,13 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 
 cfg_train = config.TrainParameters(
     max_epochs = 5000,
-    epoch_length_train=100,
-    gradient_accumulation_steps=10,
-    epoch_length_val=25,
+    epoch_length_train = 100, # None
+    epoch_length_val = 25, # None
+    gradient_accumulation_steps = 1,
     # evaluate_on=Events.EPOCH_COMPLETED,
-    events_trainer=events_trainer.events,
-    events_evaluators=events_evaluators.events,
-    enable_amp=True,
+    events_trainer = events_trainer.events,
+    events_evaluators = events_evaluator.events,
+    enable_amp = True,
 )
 
 # =============================================================================
@@ -56,74 +110,26 @@ cfg_dataloader = config.DataloaderParameters()
 
 cfg_dataset = config.DatasetParameters(
     train = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "training_data",
-        subject_dir = root_dir / "training_data_subjects",
-        subject_subset = "train",
-        images = ["generation_labels_dist"],
-        # images = ["t1w"],
+        root_dir = root_dir / "full",
+        subject_dir = root_dir / "subject_splits",
+        subject_subset = subject_subset_train,
+        datasets = datasets,
+        images = images_train,
         target_surface_resolution = target_surface_resolution,
         target_surface_hemispheres = target_surface_hemisphere,
         initial_surface_resolution = initial_surface_resolution,
     ),
     validation = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "training_data",
-        subject_dir = root_dir / "training_data_subjects",
-        subject_subset = "validation",
-        images = ["t1w"],
+        root_dir = root_dir / "full",
+        subject_dir = root_dir / "subject_splits",
+        subject_subset = subject_subset_val,
+        datasets = datasets,
+        images = images_val,
         target_surface_resolution = target_surface_resolution,
         target_surface_hemispheres = target_surface_hemisphere,
         initial_surface_resolution = initial_surface_resolution,
     ),
 )
-
-# # T2w
-# # HCP sub-059 excluded: T2w is just zeros!
-# cfg_dataset = config.DatasetParameters(
-#     train = brainsynth.config.DatasetConfig(
-#         root_dir = root_dir / "training_data",
-#         subject_dir = root_dir / "training_data_subjects",
-#         subject_subset = "train.t2",
-#         datasets = ["HCP", "OASIS3"],
-#         images = ["t2w"],
-#         target_surface_resolution = target_surface_resolution,
-#         target_surface_hemispheres = target_surface_hemisphere,
-#         initial_surface_resolution = initial_surface_resolution,
-#     ),
-#     validation = brainsynth.config.DatasetConfig(
-#         root_dir = root_dir / "training_data",
-#         subject_dir = root_dir / "training_data_subjects",
-#         subject_subset = "validation.t2",
-#         datasets = ["HCP", "OASIS3"],
-#         images = ["t2w"],
-#         target_surface_resolution = target_surface_resolution,
-#         target_surface_hemispheres = target_surface_hemisphere,
-#         initial_surface_resolution = initial_surface_resolution,
-#     ),
-# )
-
-# # FLAIR
-# cfg_dataset = config.DatasetParameters(
-#     train = brainsynth.config.DatasetConfig(
-#         root_dir = root_dir / "training_data",
-#         subject_dir = root_dir / "training_data_subjects",
-#         subject_subset = "train.flair",
-#         datasets = ["ADNI3", "AIBL"],
-#         images = ["flair"],
-#         target_surface_resolution = target_surface_resolution,
-#         target_surface_hemispheres = target_surface_hemisphere,
-#         initial_surface_resolution = initial_surface_resolution,
-#     ),
-#     validation = brainsynth.config.DatasetConfig(
-#         root_dir = root_dir / "training_data",
-#         subject_dir = root_dir / "training_data_subjects",
-#         subject_subset = "validation.flair",
-#         datasets = ["ADNI3", "AIBL"],
-#         images = ["flair"],
-#         target_surface_resolution = target_surface_resolution,
-#         target_surface_hemispheres = target_surface_hemisphere,
-#         initial_surface_resolution = initial_surface_resolution,
-#     ),
-# )
 
 
 # =============================================================================
@@ -141,37 +147,52 @@ cfg_criterion = config.CriterionParameters(
 
 spatial_dims = 3
 in_channels = 1
-unet_enc_ch = [[16], [32], [64], [128], [192]]
-unet_dec_ch = [[128], [64], [32], [16]]
+# unet_enc_ch = [[8], [16], [32], [64], [128]]
+# unet_dec_ch = [[64], [32], [16], [8]] # [[256, 128, 64, 32]]
+# unet_encoder_features = [False, False, False, False, False] # [True, True, True, True, True]
+# unet_decoder_features = [True, True, True, True]
+
+unet_enc_ch = [[16], [32], [64], [128], [256]]
+unet_dec_ch = [[128], [64], [32], [32]] # ! 32 32
+unet_encoder_features = [False, False, False, False, False] # [True, True, True, True, True]
+# unet_decoder_features = [True, True, True, True]
 unet_decoder_features = [True, True, True, True]
-unet_out_ch = sum(i[0] for i,j in zip(unet_dec_ch, unet_decoder_features) if j)
+
+
+# unet_enc_ch = [[32], [64], [96], [128], [160]]
+# unet_dec_ch = [[128], [96], [64], [32]]
+# unet_encoder_features = [False, False, False, False, False] # [True, True, True, True, True]
+# unet_decoder_features = [False, False, False, True]
+
+# unet_out_ch = sum(i[0] for i,j in zip(
+#     unet_enc_ch + unet_dec_ch, unet_encoder_features + unet_decoder_features
+# ) if j)
+
+unet_out_ch = [i[0] for i,j in zip(
+    unet_enc_ch + unet_dec_ch, unet_encoder_features + unet_decoder_features
+) if j]
+
+unet = body.UNet(
+    spatial_dims,
+    in_channels,
+    unet_enc_ch,
+    unet_dec_ch,
+    return_encoder_features=unet_encoder_features,
+    return_decoder_features=unet_decoder_features,
+)
 
 cfg_model = config.BrainNetParameters(
     device=device,
-    body = body.UNet(
-        spatial_dims,
-        in_channels,
-        unet_enc_ch,
-        unet_dec_ch,
-        return_decoder_features=unet_decoder_features
-    ),
+    body = unet,
     heads = dict(
         surface = head.CortexThing(
-            in_channels=unet_out_ch,
+            # in_channels=unet_out_ch,
+            in_channels=unet.num_features,
             out_res=target_surface_resolution,
             device=device,
         ),
     ),
 )
-
-spatial_dims = 3
-in_channels = 2
-unet_enc_ch = [[16], [32], [32], [64], [128]]
-unet_dec_ch = [[64], [32], [32], [16]]
-svf_modules = torch.nn.ModuleList([
-    head.SVFModule(3 * [ch[-1]] + [3]) for i, ch in zip(unet_decoder_features, unet_dec_ch) if i
-])
-
 
 # =============================================================================
 # OPTIMIZER
@@ -192,32 +213,27 @@ cfg_results = config.ResultsParameters(
 # SYNTHESIZER
 # =============================================================================
 
-out_size = [128, 224, 160]
-out_center_str = "lh"
-
 cfg_synth = config.SynthesizerParameters(
     train=brainsynth.config.SynthesizerConfig(
-        builder = "OnlySynthIso",
-        # builder = "OnlySelect",
-        # in_res = [1.0, 1.0, 1.0]
+        builder = builder_train,
         out_size = out_size,
         out_center_str = out_center_str,
         # segmentation_labels = "brainseg"
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        alternative_images = ["t1w"], # ["t1w", "t2w", "flair"],
+        alternative_images = images_train, # ["t1w", "t2w", "flair"],
         device = device,
     ),
     validation=brainsynth.config.SynthesizerConfig(
-        builder = "OnlySelectIso",
+        builder = builder_validation,
         out_size = out_size,
         out_center_str = out_center_str,
         # segmentation_labels = "brainseg"
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        alternative_images = ["t1w"], # ["t1w", "t2w", "flair"],
+        alternative_images = images_val, # ["t1w", "t2w", "flair"],
         device = device,
     ),
 )

@@ -15,10 +15,17 @@ def init_model(config: brainnet.config.BrainNetParameters):
 
 def init_optimizer(config, model):
 
+    np_body = sum(p.numel() for p in model.body.parameters() if p.requires_grad)
+    print("Number of trainable parameters")
+    print(f"  body           {np_body:10d}")
+    # print(f"  heads")
+    # for h,v in model.heads.items():
+    #     np_h = sum(p.numel() for p in v.parameters() if p.requires_grad)
+    #     print(f"    {h:10s}   {np_h:10d}")
     n_parameters = sum(
         p.numel() for p in model.parameters() if p.requires_grad
     )
-    print(f"Number of trainable parameters: {n_parameters}")
+    print(f"Total            {n_parameters:10d}")
 
     if config.lr_parameter_groups is not None:
         lr_pg = config.lr_parameter_groups
@@ -49,11 +56,14 @@ def init_dataloader(
         ds_config: brainnet.config.DatasetParameters,
         dl_config: brainnet.config.DataloaderParameters,
     ):
-    return {
+    dataloader = {
         subset: brainsynth.dataset.setup_dataloader(config, vars(dl_config))
         for subset,config in vars(ds_config).items()
     }
-
+    print("Dataloaders")
+    for k,v in dataloader.items():
+        print(f"  {k:10s} : {len(v):6d}")
+    return dataloader
 
 def init_criterion(config: brainnet.config.CriterionParameters):
     return {subset: brainnet.Criterion(v) for subset,v in vars(config).items()}

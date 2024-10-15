@@ -4,7 +4,7 @@
 #SBATCH --output=/mnt/scratch/personal/jesperdn/slurm_logs/%x_%A_%a.log          # A = master job id, a = task job id
 #SBATCH --nodes=1                   # Relevant when program implements MPI (multi system/distributed parallelism)
 #SBATCH --ntasks=1                  # Relevant when program implements MPI (multi system/distributed parallelism)
-#SBATCH --cpus-per-task=8          # Relevant when program implements MP (single system parallelism, e.g., OpenMP, TBB)
+#SBATCH --cpus-per-task=8           # Relevant when program implements MP (single system parallelism, e.g., OpenMP, TBB)
 #SBATCH --mem=24G                   # Job memory request
 #SBATCH --gres=gpu:nvidia_geforce_rtx_3090:1
 
@@ -28,10 +28,10 @@ repo=/home/jesperdn/repositories/brainnet
 
 find $repo -name __pycache__ -exec rm -r {} +
 
-SCRIPT="${repo}/brainnet/train_brainreg.py"
+SCRIPT="${repo}/brainnet/train/brainreg_train.py"
 CONFIG="brainnet.config.brainreg.main"
-# ARGS="--load-checkpoint 400 --max-epochs 800"
-ARGS="--max-epochs 800"
+# ARGS="--load-checkpoint 1300 --max-epochs 1400"
+ARGS="--max-epochs 500"
 
 cmd="python $SCRIPT $CONFIG $ARGS"
 

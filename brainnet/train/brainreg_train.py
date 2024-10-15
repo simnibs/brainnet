@@ -1,5 +1,6 @@
 import copy
 import importlib
+from pathlib import Path
 import sys
 import torch
 
@@ -8,7 +9,7 @@ from ignite.engine import Engine
 import brainsynth
 
 import brainnet.config
-import brainnet.train_utilities
+import brainnet.train.utilities
 
 from brainnet import event_handlers
 import brainnet.initializers
@@ -17,7 +18,11 @@ from brainnet.utilities import recursive_dict_sum, recursive_itemize
 
 from brainnet.mesh import topology
 
-from brainsynth.transforms import EnsureDevice, IntensityNormalization
+from brainsynth.transforms import (
+    EnsureDevice,
+    IntensityNormalization,
+)  # , OneHotEncoding
+
 
 class SupervisedStep:
     def __init__(
@@ -34,6 +39,7 @@ class SupervisedStep:
 
         self.intensity_normalization = IntensityNormalization(device=self.device)
         self.ensure_device = EnsureDevice(self.device)
+        # self.onehot_enc = OneHotEncoding(57) # 0-56 in brainseg_with_extracerebral
 
         # Get empty TemplateSurfaces. We update the vertices at each iteration
         if surface_resolution is not None:
@@ -81,7 +87,9 @@ class SupervisedStep:
         images = self.ensure_device(images)
         surfaces = self.ensure_device(surfaces)
 
-        assert len(next(iter(images))) % 2 == 0, "Even number of examples in a batch required."
+        assert (
+            len(next(iter(images))) % 2 == 0
+        ), "Even number of examples in a batch required."
 
         # We abuse the batching done by the dataloader and reshape like
         #
@@ -100,9 +108,11 @@ class SupervisedStep:
         if self.synthesizer is None:
             # assume synthesizer was applied when loading the data
 
-            for k,v in images.items():
+            for k, v in images.items():
                 if v.is_floating_point():
                     images[k] = self.intensity_normalization(v)
+                # elif k == "brainseg_with_extracerebral":
+                #     images[k] = torch.stack([self.onehot_enc(vv) for vv in v])
             if len(surfaces) > 0:
                 images["surface"] = surfaces
             return images["t1w_areg_mni"], images
@@ -147,11 +157,13 @@ class SupervisedStep:
 
             self.criterion.prepare_for_surface_loss(y_pred[k], y_true[k])
 
-    def compute_loss(self, y_pred, y_true):
+    def compute_loss(self, y_pred, y_true, compute_weighted_loss=True):
         self.prepare_loss(y_pred, y_true)
         raw = self.criterion(y_pred, y_true)
-        return dict(raw=raw, weighted=self.criterion.apply_weights(raw))
-
+        loss = dict(raw=raw)
+        if compute_weighted_loss:
+            loss["weighted"] = self.criterion.apply_weights(raw)
+        return loss
 
     def predict(self, images: torch.Tensor, y_true: dict):
 
@@ -168,17 +180,18 @@ class SupervisedStep:
         # as [deformed(sub-01), deformed(sub-02)] in channel dim so we need
         # to swap either y_pred or y_true when we calculate the losses
         # (such that deformed(sub-01) aligns with sub-02 etc.)
+
         deform_fwd, deform_bwd = self.model.integrate_svf(y_pred["svf"])
 
         # stack predictions inversely:
         # align the prediction of 0 to image 1 and prediction of 1 to image 1
-        for k0,v0 in y_true.items():
+        for k0, v0 in y_true.items():
             if k0 == "surface":
                 y_pred[k0] = {}
-                for k1,v1 in v0.items():  # hemi
+                for k1, v1 in v0.items():  # hemi
                     y_pred[k0][k1] = {}
-                    for k2,v2 in v1.items():  # surfaces
-                        s0 = v2[0::2] # (N, V, 3) -> (N/2, V, 3)
+                    for k2, v2 in v1.items():  # surfaces
+                        s0 = v2[0::2]  # (N, V, 3) -> (N/2, V, 3)
                         s1 = v2[1::2]
 
                         s0 = self.model.deform_surface(s0, deform_bwd)
@@ -189,7 +202,7 @@ class SupervisedStep:
                         y_pred[k0][k1][k2][1::2] = s0
 
             else:
-                i0 = v0[0::2] # (N/2, 2, ...) -> (N/2, 1, ...)
+                i0 = v0[0::2]  # (N/2, 2, ...) -> (N/2, 1, ...)
                 i1 = v0[1::2]
 
                 i0 = self.model.deform_image(i0, deform_fwd)
@@ -201,7 +214,6 @@ class SupervisedStep:
 
         return y_pred
 
-
 class SupervisedTrainingStep(SupervisedStep):
     def __init__(
         self,
@@ -210,48 +222,53 @@ class SupervisedTrainingStep(SupervisedStep):
         criterion,
         optimizer,
         surface_resolution: int,
+        gradient_accumulation_steps: int = 1,
         enable_amp: bool = False,
     ) -> None:
         super().__init__(synthesizer, model, criterion, surface_resolution)
         self.optimizer = optimizer
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.enable_amp = enable_amp
         if self.enable_amp:
             self.grad_scaler = torch.cuda.amp.GradScaler()
 
-
     def __call__(self, engine, batch) -> tuple:
-        # Reset gradients in optimizer. Otherwise gradients would
-        # accumulate across multiple passes (whenever .backward is
-        # called)
-        self.optimizer.zero_grad()
-
         images, y_true = self.prepare_batch(batch)
 
-        # Only wrap forward pass and loss computation. Backward uses the same
-        # types as inferred during forward
         self.model.train()
 
+        # Only wrap forward pass and loss computation. Backward uses the same
+        # types as was used during forward
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             y_pred = self.predict(images, y_true)
             loss = self.compute_loss(y_pred, y_true)
-            total_loss = recursive_dict_sum(loss["weighted"])
+
+        total_loss = recursive_dict_sum(loss["weighted"])
+        total_loss /= self.gradient_accumulation_steps
+        loss_item = recursive_itemize(loss)
 
         # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
-            raise RuntimeError(f"Loss diverged:\n\n{recursive_itemize(loss)})")
+            raise RuntimeError(f"Loss diverged:\n\n{loss_item})")
 
         if self.enable_amp:
             self.grad_scaler.scale(total_loss).backward()
-            self.grad_scaler.step(self.optimizer)
-            self.grad_scaler.update()
+            if engine.state.iteration % self.gradient_accumulation_steps == 0:
+                self.grad_scaler.step(self.optimizer)
+                self.grad_scaler.update()
+                self.optimizer.zero_grad()
+
         else:
             total_loss.backward()  # backpropagate loss
-            self.optimizer.step()  # update parameters
-
-        loss = recursive_itemize(loss)
+            if engine.state.iteration % self.gradient_accumulation_steps == 0:
+                self.optimizer.step()  # update parameters
+                # Reset gradients in optimizer. Otherwise gradients would
+                # accumulate across multiple passes (whenever .backward is
+                # called)
+                self.optimizer.zero_grad()
 
         # these are stored in engine.state.output
-        return loss, images, y_pred, y_true
+        return loss_item, images, y_pred, y_true
 
 
 class EvaluationStep(SupervisedStep):
@@ -273,11 +290,10 @@ class EvaluationStep(SupervisedStep):
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.predict(images, y_true)
-                loss = self.compute_loss(y_pred, y_true)
+                loss = self.compute_loss(y_pred, y_true, compute_weighted_loss=False)
 
-        # we don't need the weighted loss
-        del loss["weighted"]
-        loss = recursive_itemize(loss)
+
+        loss = recursive_itemize(loss["raw"])
 
         return loss, images, y_pred, y_true
 
@@ -290,7 +306,6 @@ def train(args):
     print("Setting up training...")
 
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
-
 
     # Overwrite args from command line if provided
     if args.load_checkpoint is not None:
@@ -323,6 +338,7 @@ def train(args):
         criterion["train"],
         optimizer,
         surface_resolution["train"],
+        train_setup.train_params.gradient_accumulation_steps,
         enable_amp=train_setup.train_params.enable_amp,
     )
     trainer = Engine(train_step)
@@ -330,8 +346,8 @@ def train(args):
     # The order in which the events are added to the engine is important!
 
     # Aggregate average loss over epoch
-    brainnet.train_utilities.add_metric_to_engine(trainer)
-    brainnet.train_utilities.add_terminal_logger(trainer)
+    brainnet.train.utilities.add_metric_to_engine(trainer)
+    brainnet.train.utilities.add_terminal_logger(trainer)
 
     # Add evaluation
     kwargs = dict(
@@ -348,7 +364,7 @@ def train(args):
         #     logger=event_handlers.MetricLogger(key="loss", name="train"),
         #     **kwargs,
         # ),
-        validation=brainnet.train_utilities.add_evaluation_event(
+        validation=brainnet.train.utilities.add_evaluation_event(
             EvaluationStep(
                 synth["validation"],
                 model,
@@ -362,14 +378,14 @@ def train(args):
         ),
     )
 
-    brainnet.train_utilities.add_wandb_logger(trainer, evaluators, train_setup.wandb)
+    brainnet.train.utilities.add_wandb_logger(trainer, evaluators, train_setup.wandb)
 
     # Should be triggered after metrics has been computed!
-    brainnet.train_utilities.add_custom_events(
+    brainnet.train.utilities.add_custom_events(
         trainer, train_setup.train_params.events_trainer
     )
     for e in evaluators.values():
-        brainnet.train_utilities.add_custom_events(
+        brainnet.train.utilities.add_custom_events(
             e, train_setup.train_params.events_evaluators
         )
 
@@ -384,12 +400,12 @@ def train(args):
         **{f"criterion[{k}]": v for k, v in criterion.items()},
     )
 
-    brainnet.train_utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
-    brainnet.train_utilities.write_example_to_disk(
+    brainnet.train.utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
+    brainnet.train.utilities.write_example_to_disk(
         trainer, evaluators, train_setup.results
     )
 
-    brainnet.train_utilities.load_checkpoint(to_save, train_setup)
+    brainnet.train.utilities.load_checkpoint(to_save, train_setup)
 
     print("Setup completed. Starting training at epoch ...")
 
@@ -412,5 +428,5 @@ def train(args):
 
 
 if __name__ == "__main__":
-    args = brainnet.train_utilities.parse_args(sys.argv)
+    args = brainnet.train.utilities.parse_args(sys.argv)
     train(args)

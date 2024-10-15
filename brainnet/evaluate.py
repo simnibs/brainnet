@@ -121,7 +121,7 @@ unet_enc_ch = [[32], [64], [96], [128], [160]]
 unet_dec_ch = [[128], [96], [64], [64]]
 unet_out_ch = unet_dec_ch[-1][-1]
 
-model_config = config.ModelParameters(
+model_config = config.BrainNetParameters(
     device=device,
     body = body.UNet(spatial_dims, in_channels, unet_enc_ch, unet_dec_ch),
     heads = dict(

@@ -3,44 +3,64 @@ from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
     SurfaceSupervisedLoss,
 )
-from brainnet.modules.losses import (
+from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
     HingeLoss,
     MatchedAngleLoss,
     MatchedDistanceLoss,
     SymmetricChamferLoss,
-    SymmetricCurvatureMSELoss,
+    # SymmetricCurvatureMSELoss,
+    SymmetricSampledMSELoss,
+    SymmetricSampledNormLoss,
 )
 
 # Surface loss:
 # - loss is averaged across lh and rh (as available)
 
+
+kw_white = dict(y_pred="white", y_true="white")
+kw_pial = dict(y_pred="pial", y_true="pial")
+
 functions = dict(
     white=dict(
         matched=SurfaceSupervisedLoss(
-            MatchedDistanceLoss(), y_pred="white", y_true="white",
+            MatchedDistanceLoss(),
+            **kw_white,
         ),
         hinge=SurfaceRegularizationLoss(HingeLoss(), y_pred="white"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         chamfer=SurfaceSupervisedLoss(
-            SymmetricChamferLoss(), y_pred="white", y_true="white",
+            SymmetricSampledNormLoss("sampled_P"),
+            **kw_white,
         ),
         curv=SurfaceSupervisedLoss(
-            SymmetricCurvatureMSELoss(), y_pred="white", y_true="white",
+            SymmetricSampledMSELoss("sampled_H"),
+            **kw_white,
         ),
+        # normals=SurfaceSupervisedLoss(
+        #     SymmetricSampledMSELoss("normals_sampled"),
+        #     **kw_white,
+        # ),
     ),
     pial=dict(
         matched=SurfaceSupervisedLoss(
-            MatchedDistanceLoss(), y_pred="pial", y_true="pial",
+            MatchedDistanceLoss(),
+            **kw_pial,
         ),
         hinge=SurfaceRegularizationLoss(HingeLoss(), y_pred="pial"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
         chamfer=SurfaceSupervisedLoss(
-            SymmetricChamferLoss(), y_pred="pial", y_true="pial",
+            SymmetricSampledNormLoss("sampled_P"),
+            **kw_pial,
         ),
         curv=SurfaceSupervisedLoss(
-            SymmetricCurvatureMSELoss(), y_pred="pial", y_true="pial",
+            SymmetricSampledMSELoss("sampled_H"),
+            **kw_pial,
         ),
+        # normals=SurfaceSupervisedLoss(
+        #     SymmetricSampledMSELoss("normals_sampled"),
+        #     **kw_pial,
+        # ),
     ),
     # thickness=dict(
     #     angle=SurfaceRegularizationLoss(
@@ -54,11 +74,11 @@ head_weights = dict(white=1.0, pial=1.0)
 # head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 
 
-loss_weights=dict(
-        white=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
-        pial=dict(matched = 1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),
-        # thickness=dict(angle = 1.0),
-    )
+loss_weights = dict(
+    white=dict(matched=1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),#, normals=0.0),
+    pial=dict(matched=1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0),#, normals=0.0),
+    # thickness=dict(angle = 1.0),
+)
 
 #           1     200     400     600     800     1000    1200    1400    ... 1800
 # pred res  4     4       4       4       4       5       5       5       5

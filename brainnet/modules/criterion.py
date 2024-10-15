@@ -1,3 +1,4 @@
+import copy
 from typing import Any, Callable, Mapping
 
 import torch
@@ -5,7 +6,7 @@ from ignite.exceptions import NotComputableError
 from ignite.metrics.metric import Metric, reinit__is_reduced, sync_all_reduce
 
 from brainnet.config import LossParameters
-import brainnet.modules
+import brainnet.modules.losses_surface
 import brainnet.utilities
 
 
@@ -22,12 +23,15 @@ class Criterion(torch.nn.Module):
 
         self.loss_functions = config.functions
 
-        self._head_weights = config.head_weights
-        self._loss_weights = config.loss_weights
+        self._head_weights = copy.deepcopy(config.head_weights)
+        self._loss_weights = copy.deepcopy(config.loss_weights)
         self._set_active_heads() # sets everything
 
-        self.chamfer_weights = None
+        # self.weights_medial_wall = None
+        # self.chamfer_weights = None
         self._state_attrs = ("_head_weights", "_loss_weights", "_active_heads", "_active_losses", "_needs_sampling")
+
+
 
         # across_task_normalizer is computed on every forward pass depending on
         # which task losses are feasible
@@ -62,11 +66,11 @@ class Criterion(torch.nn.Module):
         return state_dict
 
     def load_state_dict(
-            self,
-            state_dict: Mapping[str, Any],
-            strict: bool = True,
-            assign: bool = False
-        ):
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False
+    ):
         for attr in self._state_attrs:
             if isinstance(getattr(self, attr), dict):
                 brainnet.utilities.recursive_dict_update_(
@@ -100,12 +104,20 @@ class Criterion(torch.nn.Module):
             isinstance(
                 self.loss_functions[head][loss].loss_fn,
                 (
-                    brainnet.modules.losses.AsymmetricChamferLoss,
-                    brainnet.modules.losses.AsymmetricCurvatureNormLoss,
-                    brainnet.modules.losses.SymmetricChamferLoss,
-                    brainnet.modules.losses.SymmetricCurvatureNormLoss,
+                    brainnet.modules.losses_surface.SymmetricSampledMSELoss,
+                    brainnet.modules.losses_surface.SymmetricSampledNormLoss,
                 ),
             )
+            for head, v in self._active_losses.items() for loss in v
+        )
+        self._needs_curvature = self._needs_sampling and any(
+            isinstance(
+                self.loss_functions[head][loss].loss_fn,
+                (
+                    brainnet.modules.losses_surface.SymmetricSampledMSELoss,
+                    brainnet.modules.losses_surface.SymmetricSampledNormLoss,
+                ),
+            ) and self.loss_functions[head][loss].loss_fn.value_key == "sampled_H"
             for head, v in self._active_losses.items() for loss in v
         )
 
@@ -161,8 +173,11 @@ class Criterion(torch.nn.Module):
             for head, losses in loss_dict.items()
         }
 
-    def set_chamfer_weights(self, weights):
-        self.chamfer_weights = weights
+    # def set_chamfer_weights(self, weights):
+    #     self.chamfer_weights = weights
+
+    # def set_weights_medial_wall(self, weights):
+    #     self.weights_medial_wall = weights
 
     def prepare_for_surface_loss(
         self,
@@ -187,57 +202,61 @@ class Criterion(torch.nn.Module):
             pial = (0.01, 0.99),
         )
 
-        index_name = "index_sampled"
-        sample_name = "points_sampled"
-        K_name = "K_sampled"
-        H_name = "H_sampled"
-        W_name = "weights_sampled"
+        sampled_index = "sampled_index"
+        sampled_points = "sampled_P"
+        # K_name = "sampled_K"
+        # H_name = "sampled_H"
+        # N_name = "normals_sampled"
+        # W_name = "weights_sampled"
 
         for h, surfaces in y_pred.items():
             for s in surfaces:
 
-                sampled_points, sampled_K, sampled_H, _ = self._sample_points_and_curv(
+                sampled = self._sample_points_and_curv(
                     y_pred[h][s],
                     n_samples,
                 )
-                y_pred[h][s].vertex_data[sample_name] = sampled_points
-                y_pred[h][s].vertex_data[K_name] = sampled_K
-                y_pred[h][s].vertex_data[H_name] = sampled_H
+                y_pred[h][s].vertex_data |= sampled
 
-                sampled_points, sampled_K, sampled_H, sampled_weights  = self._sample_points_and_curv(
+                sampled = self._sample_points_and_curv(
                     y_true[h][s],
                     n_samples,
                     smooth_y_true,
                     H_clip_to_percentile = H_clip_to_percentile[s],
-                    calculate_chamfer_weights = True,
-                    surface_name = s,
+                    # set_medial_wall_weights = True,
                 )
-
-                y_true[h][s].vertex_data[sample_name] = sampled_points
-                y_true[h][s].vertex_data[K_name] = sampled_K
-                y_true[h][s].vertex_data[H_name] = sampled_H
+                y_true[h][s].vertex_data |= sampled
 
                 # these are indices into y_true!
                 index = y_pred[h][s].nearest_neighbor_tensors(
-                    y_pred[h][s].vertex_data[sample_name],
-                    y_true[h][s].vertex_data[sample_name],
+                    y_pred[h][s].vertex_data[sampled_points],
+                    y_true[h][s].vertex_data[sampled_points],
                 )
-                y_pred[h][s].vertex_data[index_name] = index
+                y_pred[h][s].vertex_data[sampled_index] = index
+
+                # Since we do not know where a face/vertex is located exactly
+                # on y_pred:
+                # set the medial wall weights of the sampled points on y_pred
+                # to the value of the corresponding (closest) point on y_true
+                # y_pred[h][s].vertex_data["sampled_W_medial_wall"] = y_true[h][s].vertex_data[
+                #     "sampled_W_medial_wall"
+                # ][:, index]
 
                 # these are indices into y_pred!
                 index = y_true[h][s].nearest_neighbor_tensors(
-                    y_true[h][s].vertex_data[sample_name],
-                    y_pred[h][s].vertex_data[sample_name],
+                    y_true[h][s].vertex_data[sampled_points],
+                    y_pred[h][s].vertex_data[sampled_points],
                 )
-                y_true[h][s].vertex_data[index_name] = index
+                y_true[h][s].vertex_data[sampled_index] = index
+
 
                 # NOTE
                 # add sampled weights
-                if sampled_weights is not None:
-                    y_true[h][s].vertex_data[W_name] = sampled_weights
-                    y_pred[h][s].vertex_data[W_name] = sampled_weights[
-                        y_pred[h][s].batch_ix, y_pred[h][s].vertex_data[index_name]
-                    ]
+                # if sampled_weights is not None:
+                #     y_true[h][s].vertex_data[W_name] = sampled_weights
+                #     y_pred[h][s].vertex_data[W_name] = sampled_weights[
+                #         y_pred[h][s].batch_ix, y_pred[h][s].vertex_data[index_name]
+                #     ]
 
     def _sample_points_and_curv(
         self,
@@ -245,42 +264,58 @@ class Criterion(torch.nn.Module):
         n_samples: int,
         taubin_smoothing: bool = False,
         H_clip_to_percentile: None | tuple[float, float] = None,
-        calculate_chamfer_weights: bool = False,
-        surface_name: str = None,
+        # set_medial_wall_weights: bool = False,
     ):
-        if taubin_smoothing:
-            vo = torch.empty_like(surface.vertices)
-            vo = vo.copy_(surface.vertices)
+        if self._needs_curvature:
+            if taubin_smoothing:
+                vo = torch.empty_like(surface.vertices)
+                vo = vo.copy_(surface.vertices)
 
-            surface.smooth_taubin(a=0.9, b=-0.95, inplace=True)
+                surface.smooth_taubin(a=0.9, b=-0.95, inplace=True)
 
-        K = surface.compute_laplace_beltrami_operator()
-        H = surface.compute_mean_curvature(K)
+            K = surface.compute_laplace_beltrami_operator()
+            H = surface.compute_mean_curvature(K)
 
-        if H_clip_to_percentile:
-            H.clamp_(
-                *H.quantile(torch.tensor(H_clip_to_percentile, device=H.device))
-            )
+            # do it explicitly here as compute_mean_curvature also calculates
+            # vertex normals
+            # N = surface.compute_vertex_normals()
+            # H = 0.5 * torch.sum(N * K, -1)
 
-        if taubin_smoothing:
-            surface.vertices = vo
+            if H_clip_to_percentile:
+                H.clamp_(
+                    *H.quantile(torch.tensor(H_clip_to_percentile, device=H.device))
+                )
+
+            if taubin_smoothing:
+                surface.vertices = vo
 
         points, samp_face, samp_coo = surface.sample_points(
             n_samples,
             return_sampled_faces_and_bc=True,
         )
-        sampled_K = surface.interpolate_vertex_features(K, samp_face, samp_coo)
-        sampled_H = surface.interpolate_vertex_features(H, samp_face, samp_coo)
 
-        if calculate_chamfer_weights and self.chamfer_weights is not None:
-            weights = self.chamfer_weights.get_weights(H, surface_name)
-            sampled_weights = surface.interpolate_vertex_features(
-                weights, samp_face, samp_coo
-            )
-        else:
-            sampled_weights = None
+        sampled = dict(sampled_P=points)
+        if self._needs_curvature:
+            sampled["sampled_K"] = surface.interpolate_vertex_features(K, samp_face, samp_coo)
+            sampled["sampled_H"] = surface.interpolate_vertex_features(H, samp_face, samp_coo)
 
-        return points, sampled_K, sampled_H, sampled_weights
+        # sampled_N = surface.interpolate_vertex_features(N, samp_face, samp_coo)
+
+        # if set_medial_wall_weights and self.weights_medial_wall is not None:
+        #     sampled["sampled_W_medial_wall"] = surface.interpolate_vertex_features(
+        #         self.weights_medial_wall, samp_face, samp_coo
+        #     )
+
+
+        # if calculate_chamfer_weights and self.chamfer_weights is not None:
+        #     weights = self.chamfer_weights.get_weights(H, surface_name)
+        #     sampled_weights = surface.interpolate_vertex_features(
+        #         weights, samp_face, samp_coo
+        #     )
+        # else:
+        #     sampled_weights = None
+
+        return sampled
 
     def forward(self, y_pred, y_true):
         """Compute all losses that is possible given the entries in `y_pred`"""
@@ -292,18 +327,18 @@ class Criterion(torch.nn.Module):
             for loss in losses:
                 loss_fn = self.loss_functions[head][loss]
                 # we try as this will usually be okay
-                try:
-                    match loss_fn:
-                        case brainnet.modules.loss_wrappers.SupervisedLoss():
-                            value = loss_fn(y_pred, y_true)
-                        case brainnet.modules.loss_wrappers.RegularizationLoss():
-                            value = loss_fn(y_pred)
-                        case _:
-                            raise ValueError
-                    loss_dict[head][loss] = value
-                except KeyError:
-                    # warnings.warn(f"Required data for {head}/{loss} does not exist in y_pred and/or y_true. Skipping.")
-                    pass
+                # try:
+                match loss_fn:
+                    case brainnet.modules.loss_wrappers.SupervisedLoss():
+                        value = loss_fn(y_pred, y_true)
+                    case brainnet.modules.loss_wrappers.RegularizationLoss():
+                        value = loss_fn(y_pred)
+                    case _:
+                        raise ValueError
+                loss_dict[head][loss] = value
+                # except KeyError:
+                #     # warnings.warn(f"Required data for {head}/{loss} does not exist in y_pred and/or y_true. Skipping.")
+                #     pass
 
         return loss_dict
 
@@ -348,7 +383,6 @@ class CriterionAggregator(Metric):
             brainnet.utilities.recursive_dict_multiply(loss, batch_size)
         brainnet.utilities.add_dict(self._sum, loss)
         brainnet.utilities.increment_dict_count(self._num_examples, loss, batch_size)
-
 
     @sync_all_reduce("_sum", "_num_examples")
     def compute(self) -> dict:
