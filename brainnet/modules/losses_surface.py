@@ -70,22 +70,30 @@ class MatchedDistanceLoss(MeanSquaredNormLoss):
 
 
 class MatchedCurvatureMSELoss(MSELoss):
-    def __init__(self, curv_key="H", *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.curv_key = curv_key
 
     def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
-        return super().forward(
-            y_pred.vertex_data[self.curv_key], y_true.vertex_data[self.curv_key]
-        )
+        K = y_pred.compute_laplace_beltrami_operator()
+        cp = y_pred.compute_mean_curvature(K)
 
+        K = y_true.compute_laplace_beltrami_operator()
+        ct = y_true.compute_mean_curvature(K)
+
+        return super().forward(cp, ct)
 
 class MatchedCurvatureNormLoss(MeanSquaredNormLoss):
-    def __init__(self, curv_key="H", *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
     def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
-        return super().forward(y_pred.vertex_data["H"], y_true.vertex_data["H"])
+        K = y_pred.compute_laplace_beltrami_operator()
+        cp = y_pred.compute_mean_curvature(K)
+
+        K = y_true.compute_laplace_beltrami_operator()
+        ct = y_true.compute_mean_curvature(K)
+
+        return super().forward(cp, ct)
 
 
 def SymmetricLoss(Loss):
@@ -419,4 +427,4 @@ class SelfIntersectionCount(torch.nn.Module):
             _, n = surface.compute_self_intersections()
         else:
             n = torch.mean(torch.stack([i for _,i in surface.compute_self_intersections()]).float())
-        return n / surface.topology.n_vertices if self.normalize else n
+        return 100.0 * n / surface.topology.n_vertices if self.normalize else n

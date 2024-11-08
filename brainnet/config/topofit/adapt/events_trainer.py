@@ -35,7 +35,7 @@ loss_events = [
         ),
     ),
     # Switch to resolution level 5
-    # This causes curvature loss to increase approximately by a factor of 4 so
+    # This causes curvature loss to increase approximately by a factor 2-3 so
     # compensate for this in the weight
     config.EventAction(
         event=Events.EPOCH_STARTED(once=801),
@@ -72,30 +72,21 @@ loss_events = [
             }
         ),
     ),
-    # Switch to resolution level 6
-    # This causes curvature loss to increase approximately by a factor of 4 so
-    # compensate for this in the weight
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=1401),
-        handler=set_loss_weight,
-        kwargs=dict(
-            weights={
-                # Compensate for increased resolution
-                ("white", "curv"):      2.5,     # / 4
-                ("pial", "curv"):       1.25,    # / 4
-            }
-        ),
-    ),
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=1401),
+    #     handler=set_loss_weight,
+    #     kwargs=dict(
+    #         weights={
+    #             ("white", "curv"):     5.0,     # / 4
+    #             ("pial", "curv"):      2.5,    # / 4
+    #         }
+    #     ),
+    # ),
 ]
 
 optimizer_events = [
     config.EventAction(
-        event=Events.EPOCH_STARTED(once=801),
-        handler=optimizer_multiply_lr,
-        kwargs=dict(factor=0.5),
-    ),
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=1401),
+        event=Events.EPOCH_STARTED(once=1101),
         handler=optimizer_multiply_lr,
         kwargs=dict(factor=0.5),
     ),

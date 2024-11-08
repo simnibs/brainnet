@@ -13,16 +13,16 @@ from . import events_evaluator, events_trainer, losses
 
 # Stage 1:
 # - add chamfer at 500
-python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --max-epochs 800
+python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main_lowres --max-epochs 800
 
 # Stage 2:
 # - increase target surface resolution to 5
 # - decrease LR by factor 0.5
-python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --load-checkpoint 800 --max-epochs 1400
+python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main_lowres --load-checkpoint 800 --max-epochs 1400
 
 # Stage 3:
 # - increase target surface resolution to 6
-python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --load-checkpoint 1400 --max-epochs 1600
+python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main_lowres --load-checkpoint 1400 --max-epochs 1600
 
 
 """
@@ -33,7 +33,7 @@ python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --loa
 # =============================================================================
 
 mode_contrast = "synth"     # synth, t1w, t2w, flair
-mode_resolution = "1mm"     # 1mm, random
+mode_resolution = "random"     # 1mm, random
 
 project: str = "TopoFit"
 run: str = f"01_{mode_contrast}_{mode_resolution}"

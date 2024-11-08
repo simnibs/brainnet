@@ -8,7 +8,6 @@ class IdentityModule(torch.nn.Module):
     def forward(self, x):
         return x
 
-
 class GraphConvolution(torch.nn.Module):
     """Graph convolution block from Morris et al. (2018) as presented in eq. 5.
 
@@ -322,7 +321,7 @@ class nConv(torch.nn.Sequential):
 #             in_channels = out_channels
 
 
-class GraphPool(torch.nn.Module):
+class Pool(torch.nn.Module):
     def __init__(self, topology, reduce: str) -> None:
         super().__init__()
         self.topology = topology
@@ -332,7 +331,7 @@ class GraphPool(torch.nn.Module):
         return self.topology.pool(features, self.reduce)
 
 
-class GraphUnpool(torch.nn.Module):
+class Unpool(torch.nn.Module):
     def __init__(self, topology, reduce: str) -> None:
         super().__init__()
         self.topology = topology

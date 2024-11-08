@@ -39,14 +39,13 @@ class DataloaderParameters:
 class DatasetParameters:
     train: DatasetConfig
     validation: DatasetConfig
-
+    # test: DatasetConfig | None = None
 
 @dataclass
 class EventAction:
     event: CallableEventWithFilter
     handler: Callable
     kwargs: dict | None # kwargs passed to handler (besides engine)
-
 
 @dataclass
 class ModelParameters:
@@ -113,6 +112,7 @@ class ResultsParameters:
 class SynthesizerParameters:
     train: None | SynthesizerConfig = None
     validation: None | SynthesizerConfig = None
+    test: None | SynthesizerConfig = None
 
 
 @dataclass
@@ -172,9 +172,9 @@ class TrainSetup:
     criterion: CriterionParameters
     dataloader: DataloaderParameters
     dataset: DatasetParameters
-    model: ModelParameters
+    model: ModelParameters | torch.nn.Module
     optimizer: OptimizerParameters
     results: ResultsParameters
-    synthesizer: SynthesizerParameters
+    synthesizer: SynthesizerParameters | None
     train_params: TrainParameters
     wandb: WandbParameters

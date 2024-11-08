@@ -4,62 +4,48 @@ import torch
 
 import brainsynth.config
 
+from ignite.engine import Events
+
 from brainnet import config
 from brainnet.modules import body, head
 # Parameters defined in other files
 from . import events_evaluator, events_trainer, losses
 
-"""
-
-# Stage 1:
-# - add chamfer at 500
-python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --max-epochs 800
-
-# Stage 2:
-# - increase target surface resolution to 5
-# - decrease LR by factor 0.5
-python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --load-checkpoint 800 --max-epochs 1400
-
-# Stage 3:
-# - increase target surface resolution to 6
-python brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --load-checkpoint 1400 --max-epochs 1600
-
-
-"""
-
-
 # =============================================================================
 # GENERAL VARIABLES
 # =============================================================================
 
-mode_contrast = "synth"     # synth, t1w, t2w, flair
+mode_contrast = "t1w"     # synth, t1w, t2w, flair
 mode_resolution = "1mm"     # 1mm, random
 
 project: str = "TopoFit"
-run: str = f"01_{mode_contrast}_{mode_resolution}"
+run: str = f"01_lh_{mode_contrast}-adapt-sourceonly_{mode_resolution}"
 
-run_id: None | str = None # f"{run}-00"
-resume_from_run: None | str = None #f"15_lh_{mode_contrast}_{mode_resolution}"
-tags = [mode_contrast, mode_resolution]
+run_id: None | str = None
+# NOTE Resume from SYNTH run!
+resume_from_run: None | str = f"01_lh_synth_{mode_resolution}"
+resume_from_run = None
+tags = [mode_contrast, mode_resolution, "adapt:t1w"]
 device: str | torch.device  = torch.device("cuda:0")
 
 gradient_accumulation_steps = 1
 
+target_surface_resolution: int = 5
+target_surface_hemisphere: str = "lh"
 initial_surface_resolution: int = 0
-target_surface_resolution: int = 6
 
-# Single hemisphere
-# target_surface_hemisphere: str = "lh"
-# out_size = [128, 224, 160]
-# out_center_str = "lh"
+out_size = [128, 224, 160]
+out_center_str = "lh"
 
-# Full brain
-target_surface_hemisphere: str = "both"
-out_size = [176, 208, 176]
-out_center_str = "brain"
-
-root_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
 out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
+
+scratch_root_dir: Path = Path("/mnt/scratch/personal/jesperdn/training_data")
+train_data_dir = scratch_root_dir / "pseudo20"
+
+projects_root_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
+validation_data_dir = projects_root_dir / "full"
+
+datasets = None # ["HCP"]
 
 # =============================================================================
 # TRAINING MODE
@@ -71,26 +57,26 @@ match mode_contrast:
         images_val = ["t1w"]
         subject_subset_train = "train"
         subject_subset_val = "validation"
-        datasets = None
+        datasets = datasets
     case "t1w":
         images_train = ["t1w"]
         images_val = ["t1w"]
-        subject_subset_train = "train"
+        subject_subset_train = "source20" # "train"
         subject_subset_val = "validation"
-        datasets = None
+        datasets = datasets
     case "t2w":
         images_train = ["t2w"]
         images_val = ["t2w"]
         # HCP sub-059 excluded: T2w is just zeros!
         subject_subset_train = "train.t2"
         subject_subset_val = "validation.t2"
-        datasets = ["HCP", "OASIS3"]
+        datasets = ["HCP", "OASIS3"] if datasets is None else datasets
     case "flair":
         images_train = ["flair"]
         images_val = ["flair"]
         subject_subset_train = "train.flair"
         subject_subset_val = "validation.flair"
-        datasets = ["ADNI3", "AIBL"]
+        datasets = ["ADNI3", "AIBL"] if datasets is None else datasets
     case _:
         raise ValueError
 
@@ -115,6 +101,7 @@ cfg_train = config.TrainParameters(
     epoch_length_train = 100,
     epoch_length_val = 50,
     gradient_accumulation_steps = gradient_accumulation_steps,
+    evaluate_on=Events.EPOCH_COMPLETED(every=10),
     events_trainer = events_trainer.events,
     events_evaluators = events_evaluator.events,
     enable_amp = True,
@@ -132,8 +119,8 @@ cfg_dataloader = config.DataloaderParameters()
 
 cfg_dataset = config.DatasetParameters(
     train = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "full",
-        subject_dir = root_dir / "subject_splits",
+        root_dir = train_data_dir,
+        subject_dir = scratch_root_dir, #projects_root_dir / "subject_splits",
         subject_subset = subject_subset_train,
         datasets = datasets,
         images = images_train,
@@ -142,8 +129,8 @@ cfg_dataset = config.DatasetParameters(
         initial_surface_resolution = initial_surface_resolution,
     ),
     validation = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "full",
-        subject_dir = root_dir / "subject_splits",
+        root_dir = validation_data_dir,
+        subject_dir = projects_root_dir / "subject_splits",
         subject_subset = subject_subset_val,
         datasets = datasets,
         images = images_val,

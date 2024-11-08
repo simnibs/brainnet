@@ -89,7 +89,7 @@ cfg_dataset = config.DatasetParameters(
 
 cfg_criterion = config.CriterionParameters(
     train=cfg_loss,
-    validation=cfg_loss,  # could/should be different...
+    validation=cfg_loss, # could/should be different...
 )
 
 # =============================================================================

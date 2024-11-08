@@ -5,7 +5,6 @@ import brainnet.config
 import brainnet.modules
 
 def init_model(config: brainnet.config.BrainNetParameters):
-    # Device is needed as arg for topofit for now...
     device = torch.device(config.device)
     model_cls = getattr(brainnet.modules, config.model)
     model = model_cls(**vars(config))
@@ -15,13 +14,15 @@ def init_model(config: brainnet.config.BrainNetParameters):
 
 def init_optimizer(config, model):
 
-    np_body = sum(p.numel() for p in model.body.parameters() if p.requires_grad)
     print("Number of trainable parameters")
-    print(f"  body           {np_body:10d}")
-    # print(f"  heads")
-    # for h,v in model.heads.items():
-    #     np_h = sum(p.numel() for p in v.parameters() if p.requires_grad)
-    #     print(f"    {h:10s}   {np_h:10d}")
+    if hasattr(model, "body"):
+        np_body = sum(p.numel() for p in model.body.parameters() if p.requires_grad)
+        print(f"  body           {np_body:10d}")
+    # if hasattr("heads", model):
+    #     print("  heads")
+    #     for h,v in model.heads.items():
+    #         np_h = sum(p.numel() for p in v.parameters() if p.requires_grad)
+    #         print(f"    {h:10s}   {np_h:10d}")
     n_parameters = sum(
         p.numel() for p in model.parameters() if p.requires_grad
     )

@@ -142,19 +142,15 @@ class SupervisedTrainingStep(SupervisedStep):
 
         image, y_true, init_verts = self.prepare_batch(batch)
 
-        # Only wrap forward pass and loss computation. Backward uses the same11
+        # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            y_pred = self.model(image, init_verts)
+            # y_pred = self.model(image, init_verts)
 
-            # features = self.model.body(image)
-            # we need this as we go back to float32 for the rest...
-            # features = [f.float() for f in features]
+            features = self.model.body(image)
+            features = {k:v.float() for k,v in features.items()}
 
-            # {k:v.half() for k,v in init_verts.items()}
-            # y_pred = self.model.forward_heads(features, init_verts)
-
-        # with torch.autocast(self.device.type, enabled=self.enable_amp):
+            y_pred = self.model.forward_heads(features, init_verts)
 
             loss = self.compute_loss(y_pred, y_true)
             total_loss = recursive_dict_sum(loss["weighted"])
@@ -178,7 +174,6 @@ class SupervisedTrainingStep(SupervisedStep):
                 # accumulate across multiple passes (whenever .backward is
                 # called)
                 self.optimizer.zero_grad()
-
         loss = recursive_itemize(loss)
 
         # these are stored in engine.state.output
@@ -339,6 +334,7 @@ def train(args):
 
     # Start the training
     epoch_length = train_setup.train_params.epoch_length_train or len(iter(dataloader["train"]))
+    # trainer.state.epoch_length = epoch_length
     trainer.run(
         dataloader["train"],
         epoch_length=epoch_length,

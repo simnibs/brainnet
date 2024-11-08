@@ -21,7 +21,7 @@ from brainnet.mesh import topology
 from brainsynth.transforms import (
     EnsureDevice,
     IntensityNormalization,
-)  # , OneHotEncoding
+)
 
 
 class SupervisedStep:

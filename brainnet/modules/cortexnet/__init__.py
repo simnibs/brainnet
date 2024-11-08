@@ -1,7 +1,7 @@
 import torch
 
-from brainnet.modules import graph_layers
-from brainnet.modules.graph import SurfaceModule
+from brainnet.modules.graph import layers
+from brainnet.modules.graph.modules import SurfaceModule
 
 # Cortical surface reconstruction network (C)
 
@@ -65,14 +65,14 @@ class CortexThing(SurfaceModule):
         for topo, p in zip(self.topologies, self.white_feature_maps):
             reduce_index, gather_index = topo.get_convolution_indices()
             self.white_deform.append(
-                # graph_layers.GraphConvolutionDeformationBlock(
+                # layers.GraphConvolutionDeformationBlock(
                 #     sum(in_channels[i] for i in p),
                 #     white_graph_channels,
                 #     out_channels,
                 #     reduce_index,
                 #     gather_index,
                 # )
-                graph_layers.ResidualGraphConvolutionDeformationBlock(
+                layers.ResidualGraphConvolutionDeformationBlock(
                     sum(in_channels[i] for i in p),
                     white_graph_channels,
                     out_channels,
@@ -84,7 +84,7 @@ class CortexThing(SurfaceModule):
 
         reduce_index, gather_index = self.out_topology.get_convolution_indices()
 
-        self.pial_deform = graph_layers.GraphConvolutionDeformationBlock(
+        self.pial_deform = layers.GraphConvolutionDeformationBlock(
             sum(in_channels[i] for i in self.pial_feature_maps),
             pial_graph_channels,
             out_channels,
@@ -94,7 +94,7 @@ class CortexThing(SurfaceModule):
 
         # layer 4 and pial placement
         # NOTE one or two linear deformation layers? shared or different parameters?
-        # self.linear_deform = graph_layers.GraphLinearDeform(
+        # self.linear_deform = layers.GraphLinearDeform(
         #     in_channels,
         #     config.linear_deform.channels,
         #     config.linear_deform.n_iterations,

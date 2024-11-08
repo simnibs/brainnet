@@ -1,1 +1,1 @@
-from brainnet.modules.brainnet import BrainNet, BrainReg
+from brainnet.modules.brainnet import BrainNet, BrainReg, BrainInflate

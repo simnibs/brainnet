@@ -89,6 +89,10 @@ class TemplateSurfaces:
     #     assert value.shape[1] == self.topology.n_vertices
     #     self._mean_curvature_vector = value
 
+
+    def bounding_box(self):
+        return torch.stack((self.vertices.amin(1), self.vertices.amax(1)), dim=1)
+
     def sample_points(
         self,
         n_samples: int,

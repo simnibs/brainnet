@@ -1,6 +1,6 @@
 import torch
 
-from brainnet.modules.graph import UNetTransform, LinearTransform, SurfaceModule
+from brainnet.modules.graph.modules import UNetTransform, LinearTransform, SurfaceModule
 
 class TopoFit(SurfaceModule):
     def __init__(

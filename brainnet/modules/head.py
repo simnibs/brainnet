@@ -1,8 +1,8 @@
 import torch
 
 from brainnet.modules.blocks import ConvBlock
-from brainnet.modules.cortexnet import CortexThing
-from brainnet.modules.topofit import TopoFit
+# from brainnet.modules.cortexnet import CortexThing
+from brainnet.modules.topofit import TopoFit#, TopoReg
 
 """
 image -> feature extractor -> task nets -> prediction
@@ -150,4 +150,6 @@ class ContrastiveModule(torch.nn.Module):
     #     return outputs
 
 
-surface_modules = (CortexThing, TopoFit)
+# surface_modules = (CortexThing, TopoFit)
+surface_modules = (TopoFit, )
+

@@ -2,7 +2,7 @@ import torch
 
 from brainnet.mesh import topology
 
-from brainnet.modules import graph_layers
+from brainnet.modules.graph import layers
 
 
 class SurfaceModule(torch.nn.Module):
@@ -180,9 +180,8 @@ class SurfaceModule(torch.nn.Module):
         # samples is N,C,D,H,W where C is from `image` and D,H,W are from `points`
         samples = torch.nn.functional.grid_sample(
             image.swapaxes(2, 4),  # N,C,W,H,D -> N,C,D,H,W
-            vertices.mT[
-                :, :, None, None
-            ],  # N,3,M -> N,M,3 -> N,D,H,W,3 where D=M; H=W=1
+            # N,3,M -> N,M,3 -> N,D,H,W,3 where D=M; H=W=1
+            vertices.mT[:, :, None, None],
             align_corners=True,
         )
         return samples[..., 0, 0]  # squeeze out H, W
@@ -292,14 +291,14 @@ class UNet(torch.nn.Module):
         self.encoder_pool = torch.nn.ModuleList()
         for out_ch, topo in zip(enc_channels, enc_topologies):
             self.encoder_conv.append(
-                graph_layers.nConv(in_ch, out_ch, conv_module, topo, n_conv)
+                layers.nConv(in_ch, out_ch, conv_module, topo, n_conv)
             )
-            self.encoder_pool.append(graph_layers.GraphPool(topo, reduce))
+            self.encoder_pool.append(layers.Pool(topo, reduce))
 
             in_ch = out_ch
 
         # U bend
-        self.ubend_conv = graph_layers.nConv(
+        self.ubend_conv = layers.nConv(
             in_ch,
             out_ch := unet_channels["ubend"],
             conv_module,
@@ -320,11 +319,9 @@ class UNet(torch.nn.Module):
         for out_ch, skip_ch, unpool_topology, conv_topology in zip(
             dec_channels, skip_channels, unpool_topologies, conv_topologies
         ):
-            self.decoder_unpool.append(
-                graph_layers.GraphUnpool(unpool_topology, reduce)
-            )
+            self.decoder_unpool.append(layers.Unpool(unpool_topology, reduce))
             self.decoder_conv.append(
-                graph_layers.nConv(
+                layers.nConv(
                     in_ch + skip_ch, out_ch, conv_module, conv_topology, n_conv
                 )
             )
@@ -362,8 +359,8 @@ class UNetTransform(torch.nn.Module):
         out_channels: int,
         topologies: list[topology.Topology],
         channels: None | dict = None,
-        unet_conv_module: torch.nn.Module = graph_layers.EdgeConvolutionBlock,
-        deform_conv_module: torch.nn.Module = graph_layers.EdgeConvolution,
+        unet_conv_module: torch.nn.Module = layers.EdgeConvolutionBlock,
+        deform_conv_module: torch.nn.Module = layers.EdgeConvolution,
         reduction: str = "amax",
         max_depth: int = 4,
         n_convolutions: int = 1,
@@ -384,8 +381,6 @@ class UNetTransform(torch.nn.Module):
 
         # Final convolution block to estimate deformation field from features
         reduce_index, gather_index = topologies[-1].get_convolution_indices()
-
-        # conv_module = graph_layers.GraphConvolution
 
         unet = UNet(
             in_channels,
