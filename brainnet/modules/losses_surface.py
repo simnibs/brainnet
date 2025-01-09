@@ -1,10 +1,11 @@
 import torch
 
 from brainnet.mesh.surface import TemplateSurfaces
-
+from brainnet import sphere_utils
 
 # SURFACE LOSS FUNCTIONS
 
+# Norm loss = 3 * MSE loss
 
 class MSELoss(torch.nn.Module):
     def __init__(self) -> None:
@@ -16,8 +17,19 @@ class MSELoss(torch.nn.Module):
         else:
             return torch.sum(w * (a - b) ** 2) / w.sum()
 
+class L1Loss(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
 
-# Norm loss = 3 * MSE loss
+    def forward(self, a, b, w=None):
+        if w is None:
+            return torch.abs(a - b).mean()
+        else:
+            return torch.sum(w * torch.abs(a - b)) / w.sum()
+
+class RMSELoss(MSELoss):
+    def forward(self, *args, **kwargs):
+        return super().forward(*args, **kwargs).sqrt()
 
 
 class MeanSquaredNormLoss(torch.nn.Module):
@@ -33,6 +45,12 @@ class MeanSquaredNormLoss(torch.nn.Module):
             return torch.sum((a - b) ** 2, self.dim).mean()
         else:
             return torch.sum(w * torch.sum((a - b) ** 2, self.dim)) / w.sum()
+
+
+
+class RootMeanSquaredNormLoss(MeanSquaredNormLoss):
+    def forward(self, *args, **kwargs):
+        return super().forward(*args, **kwargs).sqrt()
 
 
 class CosineSimilarityLoss(torch.nn.CosineSimilarity):
@@ -68,21 +86,123 @@ class MatchedDistanceLoss(MeanSquaredNormLoss):
         )
         return super().forward(y_pred.vertices, y_true.vertices, weights)
 
+class SurfaceRMSELoss(RMSELoss):
 
-class MatchedCurvatureMSELoss(MSELoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
     def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
-        K = y_pred.compute_laplace_beltrami_operator()
-        cp = y_pred.compute_mean_curvature(K)
+        """Average (squared) distance between matched vertices of surfaces a and b.
 
-        K = y_true.compute_laplace_beltrami_operator()
-        ct = y_true.compute_mean_curvature(K)
+        Parameters
+        ----------
+        surface_a : TemplateSurfaces
+            First surface
+        surface_b : TemplateSurfaces
+            Second surface.
 
-        return super().forward(cp, ct)
+        Returns
+        -------
+        loss
+            _description_
+        """
+        weights = (
+            y_true.vertex_data["weights"] if "weights" in y_true.vertex_data else None
+        )
+        return super().forward(y_pred.vertices, y_true.vertices, weights)
 
-class MatchedCurvatureNormLoss(MeanSquaredNormLoss):
+class SurfaceEdgeRMSELoss(RMSELoss):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, y_pred, y_true):
+        # (n_batch, n_vertices, v_per_edge (= 2), coordinates)
+        edges = y_pred.vertices[:, y_pred.topology.vertex_adjacency]
+        y_pred_dist = edges.diff(dim=2).norm(dim=3)
+
+        edges = y_true.vertices[:, y_true.topology.vertex_adjacency]
+        y_true_dist = edges.diff(dim=2).norm(dim=3)
+
+        return super().forward(y_pred_dist, y_true_dist)
+
+
+class CentralAngleLoss(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, y_pred, y_true):
+        a_pred = sphere_utils.cart_to_sph(y_pred.vertices)[..., 1:]
+        a_true = sphere_utils.cart_to_sph(y_true.vertices)[..., 1:]
+        return sphere_utils.compute_central_angle(a_pred, a_true).mean()
+
+
+class SphericalArcLoss(torch.nn.Module):
+    def __init__(self, radius: float | None = None) -> None:
+        super().__init__()
+        self.radius = radius
+
+    def forward(self, y_pred, y_true):
+        return sphere_utils.compute_arc_length(y_pred.vertices, y_true.vertices, self.radius).pow(2).mean()
+        # return compute_arc_length(y_pred.vertices, y_true.vertices, self.radius).mean()
+
+
+class SphericalAxisAlignedArcLoss_tensor(torch.nn.Module):
+    def __init__(self, radius: float | None = None) -> None:
+        """Compute the mean squared distance two points on the """
+        super().__init__()
+        self.radius = radius
+
+    def forward(self, y_pred, y_true):
+        theta = sphere_utils.compute_axis_aligned_arc_length(y_pred[..., 0], y_true[..., 0], self.radius).pow(2).mean().sqrt()
+        phi = sphere_utils.compute_axis_aligned_arc_length(y_pred[..., 1], y_true[..., 1], self.radius).pow(2).mean().sqrt()
+        return theta + phi
+
+
+class SphericalAxisAlignedArcLoss(torch.nn.Module):
+    def __init__(self, radius: float | None = None) -> None:
+        """Compute the mean squared distance two points on the """
+        super().__init__()
+        self._tensor_loss = SphericalAxisAlignedArcLoss_tensor(radius)
+
+    def forward(self, y_pred, y_true):
+        return self._tensor_loss(y_pred.vertices, y_true.vertices)
+
+
+class SphericalEdgeLoss(RMSELoss):
+    def __init__(self, radius: float | None = None) -> None:
+        super().__init__()
+        self.saaa = SphericalAxisAlignedArcLoss_tensor(radius)
+
+    def forward(self, y_pred, y_true):
+        # (n_batch, n_vertices, v_per_edge (= 2), coordinates)
+        edge_vertices = y_pred.vertices[:, y_pred.topology.vertex_adjacency]
+        y_pred_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
+
+        edge_vertices = y_true.vertices[:, y_true.topology.vertex_adjacency]
+        y_true_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
+
+        return super().forward(y_pred_dist, y_true_dist)
+
+
+class SphericalNormalLoss(MeanSquaredNormLoss):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, y_pred):
+        # origin to barycenter
+        bc = y_pred.compute_face_barycenters()
+        bc = bc / bc.norm(dim=-1, keepdim=True)
+        # bc = sph_to_cart(1.0, bc[..., 0], bc[..., 1]) # normalized
+
+        # v_orig = y_pred.vertices.clone()
+        # y_pred.vertices = sph_to_cart(1.0, y_pred.vertices[..., 0], y_pred.vertices[..., 1])
+        n = y_pred.compute_face_normals()
+        # y_pred.vertices = v_orig
+
+        return super().forward(n, bc)
+
+
+class MatchedCurvatureMSELoss(MSELoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -237,7 +357,7 @@ class SymmetricNormalMSELoss(SymmetricMSELoss):
 #         )
 
 
-class HingeLoss(MeanSquaredNormLoss):
+class FaceNormalConsistencyLoss(MeanSquaredNormLoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -246,6 +366,35 @@ class HingeLoss(MeanSquaredNormLoss):
         edge_face_normals = normals[:, y_pred.topology.face_adjacency]
         a, b = edge_face_normals.unbind(2)
         return super().forward(a, b)
+
+
+class SmoothnessLoss(MeanSquaredNormLoss):
+    def __init__(self, dim=-1) -> None:
+        """Penalize smoothness of the surface as measured by the Laplacian."""
+        super().__init__(dim)
+
+    def forward(self, y_pred):
+        ri, gi = y_pred.topology.get_convolution_indices()
+        return super().forward(y_pred.vertices[y_pred.batch_ix, ri], y_pred.vertices[y_pred.batch_ix, gi])
+
+
+
+
+class SpringForceLoss(MSELoss):
+    def __init__(self, *args, **kwargs) -> None:
+        """Penalize differences in distances between neighboring vertices."""
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def compute_distances(s):
+        """Compute distances between a vertex and all its neighbors."""
+        ri, gi = s.topology.get_convolution_indices()
+        return torch.linalg.norm(s.vertices[s.batch_ix, ri] - s.vertices[s.batch_ix, gi], dim=-1)
+
+    def forward(self, y_pred, y_true):
+        dp = self.compute_distances(y_pred)
+        dt = self.compute_distances(y_true)
+        return super().forward(dp, dt)
 
 
 # class VertexToVertexAngleLoss(torch.nn.CosineSimilarity):
@@ -386,6 +535,21 @@ class SymmetricThicknessLoss(SymmetricMeanSquaredNormLoss):
 #         edge_face_normals = normals[:, y_pred.topology.face_adjacency]
 #         a, b = edge_face_normals.unbind(2)
 #         return super().forward(a, b)
+
+
+class MeanCurvatureVarianceLoss(MSELoss):
+    def __init__(self, *args, **kwargs) -> None:
+        """Variance of normalized mean curvature."""
+        super().__init__(*args, **kwargs)
+
+    def forward(self, y_pred: TemplateSurfaces):
+        K = y_pred.compute_laplace_beltrami_operator()
+        cp = y_pred.compute_mean_curvature(K) # , signed=False
+        n = cp.shape[1]
+        # new mean is 1
+        cp_mu1 = cp * n / cp.sum(1)[:, None]
+        # mean squared difference to the mean
+        return torch.mean(torch.sum((cp_mu1 - 1) ** 2, 1) / n)
 
 
 class EdgeLengthVarianceLoss(torch.nn.Module):

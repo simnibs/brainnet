@@ -183,10 +183,11 @@ def write_example_to_disk(
     engine: Engine,
     evaluators: dict[str, Engine],
     config: brainnet.config.ResultsParameters,
+    writer=event_handlers.write_example,
 ):
     engine.add_event_handler(
         config.save_example_on,
-        event_handlers.write_example,
+        writer,
         evaluators=evaluators,
         config=config,
     )

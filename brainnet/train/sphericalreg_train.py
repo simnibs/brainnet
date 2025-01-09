@@ -15,6 +15,8 @@ from brainnet.utilities import recursive_dict_sum, recursive_itemize
 
 from brainnet.mesh.surface import TemplateSurfaces
 
+from brainnet.sphere_utils import change_sphere_size
+
 
 class SupervisedStep:
     def __init__(
@@ -27,28 +29,43 @@ class SupervisedStep:
         self.device = self.model.device
         self.ensure_device = EnsureDevice(self.device)
 
-        surfaces = ["inflated"]
+        self.radius_for_loss = 1.0 # 100.0
+        self.radius_for_save = 100.0
 
-        self.template_surfaces = {}
-        for h, surf_obj in self.model.surface.items():
-            self.template_surfaces[h] = {}
+        surfaces = ["sphere.reg"]
+
+        self.y_true_template = {}
+        self.y_pred_template = {}
+        for h, top in self.model.topology.items():
+            self.y_true_template[h] = {}
+            self.y_pred_template[h] = {}
             for s in surfaces:
-                t = copy.deepcopy(surf_obj.topology)
-                self.template_surfaces[h][s] = TemplateSurfaces(
+                self.y_true_template[h][s] = TemplateSurfaces(
                     torch.zeros(
-                        (surf_obj.n_batch, t.n_vertices, 3), device=self.device
+                        (1, top.n_vertices, 3), device=self.device
                     ),
-                    t,
+                    top,
+                )
+                self.y_pred_template[h][s] = TemplateSurfaces(
+                    torch.zeros(
+                        (1, top.n_vertices, 3), device=self.device
+                    ),
+                    top,
                 )
 
-    def as_surface(self, data):
+    def as_surface(self, y_true, y_pred):
         """Insert vertices data from `data` into template and replace `data`
         with the template.
         """
-        for h, surfaces in data.items():
+        for h, surfaces in y_true.items():
             for s, v in surfaces.items():
-                self.template_surfaces[h][s].vertices = v
-                data[h][s] = self.template_surfaces[h][s]
+                self.y_true_template[h][s].vertices = v
+                y_true[h][s] = self.y_true_template[h][s]
+
+        for h, surfaces in y_pred.items():
+            for s, v in surfaces.items():
+                self.y_pred_template[h][s].vertices = v
+                y_pred[h][s] = self.y_pred_template[h][s]
 
     def prepare_batch(self, batch):
         """Run data augmentation/synthesis on the batch as returned by the
@@ -60,37 +77,52 @@ class SupervisedStep:
 
         for k, v in y_true.items():
             for m, u in v.items():
-                y_true[k][m] = u[:, : self.template_surfaces[k][m].topology.n_vertices]
+                y_true[k][m] = u[:, : self.y_true_template[k][m].topology.n_vertices]
         for k, v in init_verts.items():
-            init_verts[k] = v[:, : self.template_surfaces[k][m].topology.n_vertices]
+            init_verts[k] = v[:, : self.y_true_template[k][m].topology.n_vertices]
 
         return y_true, init_verts
 
     def prepare_for_loss_calculation(self, y_pred, y_true):
         """Ensure surfaces are stored like
 
-            y["surface"]["lh"]["inflated"]
+            y["surface"]["lh"]["sphere.reg"]
 
         and that values are TemplateSurfaces.
         """
-        # y_pred has keys lh, rh; reorder to y_pred[surface][hemi][inflated]
-        y_pred = dict(surface={h: dict(inflated=v) for h, v in y_pred.items()})
-        # y_true
-        self.as_surface(y_true)
+        # y_pred has keys lh, rh; reorder to y_pred[hemi][sphere.reg]
 
-        # center on (0,0,0)
-        for k, v in y_true.items():
-            for kk, vv in v.items():
-                # center and scale to size of y_pred
-                bbox = vv.bounding_box()
-                center = bbox.mean(1)[:, None]
-                size = bbox[:, [1]] - center
-                y_true[k][kk].vertices -= center
-                y_true[k][kk].vertices /= size
-                y_true[k][kk].vertices *= self.model.size[k]
+        y_pred = {h: {"sphere.reg": v} for h, v in y_pred.items()}
 
+        self.as_surface(y_true, y_pred)
+
+        # set radius
+        for h, v in y_pred.items():
+            for s in v:
+                # y_pred[h][s].center_on_origin()
+                change_sphere_size(y_pred[h][s], self.radius_for_loss)
+
+        # center on origin; fix radius
+        for h, v in y_true.items():
+            for s in v:
+                # y_true[h][s].center_on_origin()
+                change_sphere_size(y_true[h][s], self.radius_for_loss)
+
+        y_pred = dict(surface=y_pred)
         y_true = dict(surface=y_true)
+
         return y_pred, y_true
+
+    def prepare_for_save(self, y_pred, y_true):
+        if self.radius_for_save != self.radius_for_loss:
+            self._prepare_for_save(y_pred)
+            self._prepare_for_save(y_true)
+
+    def _prepare_for_save(self, surf):
+        for h, v in surf["surface"].items():
+            for s in v:
+                surf["surface"][h][s].center_on_origin()
+                change_sphere_size(surf["surface"][h][s], self.radius_for_save)
 
     def compute_loss(self, y_pred, y_true):
         raw = self.criterion(y_pred, y_true)
@@ -116,20 +148,21 @@ class SupervisedTrainingStep(SupervisedStep):
     def __call__(self, engine, batch) -> tuple:
         self.model.train()
 
+        # sub,dsname=batch[-2:]
+        # batch = batch[0]
+
         # no image
         y_true, init_verts = self.prepare_batch(batch)
 
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
+        # with torch.autograd.set_detect_anomaly(True):
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             y_pred = self.model(init_verts)
+            n_batch = next(iter(y_pred.values())).shape[0]
 
-            n_batch = next(iter(y_pred.values())).n_batch
-
-            # Use init as y_true
-            y_init = {k: dict(inflated=v) for k, v in init_verts.items()}
-            y_pred, y_init = self.prepare_for_loss_calculation(y_pred, y_init)
-            loss = self.compute_loss(y_pred, y_init)
+            y_pred, y_true = self.prepare_for_loss_calculation(y_pred, y_true)
+            loss = self.compute_loss(y_pred, y_true)
 
             total_loss = recursive_dict_sum(loss["weighted"])
             total_loss /= self.gradient_accumulation_steps
@@ -154,9 +187,12 @@ class SupervisedTrainingStep(SupervisedStep):
                 self.optimizer.zero_grad()
         loss = recursive_itemize(loss)
 
+        self.prepare_for_save(y_pred, y_true)
+
+
         # these are stored in engine.state.output
         # the multiple of None is a hack...
-        return loss, n_batch * [None], y_pred, y_init
+        return loss, n_batch * [None], y_pred, y_true
 
 
 class EvaluationStep(SupervisedStep):
@@ -167,21 +203,25 @@ class EvaluationStep(SupervisedStep):
     def __call__(self, engine, batch):
         self.model.eval()
 
+        # sub,dsname=batch[-2:]
+        # batch = batch[0]
+
         y_true, init_verts = self.prepare_batch(batch)
 
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(init_verts)
-                n_batch = next(iter(y_pred.values())).n_batch
+                n_batch = next(iter(y_pred.values())).shape[0]
 
-                y_init = {k: dict(inflated=v) for k, v in init_verts.items()}
-                y_pred, y_init = self.prepare_for_loss_calculation(y_pred, y_init)
-                loss = self.compute_loss(y_pred, y_init)
+                y_pred, y_true = self.prepare_for_loss_calculation(y_pred, y_true)
+                loss = self.compute_loss(y_pred, y_true)
 
         # we don't need the weighted loss
         loss = recursive_itemize(loss["raw"])
 
-        return loss, n_batch * [None], y_pred, y_init
+        self.prepare_for_save(y_pred, y_true)
+
+        return loss, n_batch * [None], y_pred, y_true
 
 
 def train(args):
@@ -190,6 +230,10 @@ def train(args):
     train_setup_file = "brainnet.config.braininflate.main"
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
     train_setup.wandb.enable = False
+
+    args =  brainnet.train.utilities.parse_args("brainnet/train/sphericalreg_train.py brainnet.config.braininflate.main --load-checkpoint 40 --max-epochs 1600 --no-wandb".split())
+
+
 
     """
 

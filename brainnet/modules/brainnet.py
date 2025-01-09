@@ -1,16 +1,19 @@
 import copy
 
+import nibabel as nib
 import torch
 
-import brainnet.modules.head
 
+import brainsynth
 import brainsynth.transforms
 from brainsynth.transforms.utilities import channel_last
 from brainsynth.transforms.spatial import ScaleAndSquare
 
+import brainnet.modules.head
 import brainnet.mesh.topology
 from brainnet.mesh.surface import TemplateSurfaces
 from brainnet.modules.graph.modules import UNetTransform
+from brainnet.sphere_utils import change_sphere_size
 
 
 class BrainReg(torch.nn.Module):
@@ -55,10 +58,7 @@ class BrainReg(torch.nn.Module):
         # assert images.size()[1] == 2, f"Exactly two images are required (got {images.size()[1]})"
         features = self.body(images)
         # predict an SVF for each feature map and sum them
-        svf = torch.zeros(
-            (images.shape[0], 3, *spatial_size),
-            device=images.device
-        )
+        svf = torch.zeros((images.shape[0], 3, *spatial_size), device=images.device)
         for svf_module, scale in zip(self.svf, self.svf_scales):
             svf = svf + self.body.upsample_feature(svf_module(features), scale)
         return svf
@@ -224,6 +224,7 @@ class BrainNet(torch.nn.Module):
             pred[name] = y
         return pred
 
+
 class BrainInflate(torch.nn.Module):
     def __init__(
         self,
@@ -235,8 +236,7 @@ class BrainInflate(torch.nn.Module):
         self.device = torch.device(device)
 
         n_topologies = 7
-        in_channels = 9 # coordinates, normals, LBO
-
+        in_channels = 9  # coordinates, normals, LBO
 
         # assert n_topologies >= out_res + 1
         # self.out_res = out_res
@@ -254,11 +254,16 @@ class BrainInflate(torch.nn.Module):
             n_topologies - 1,
             brainnet.mesh.topology.initial_faces.to(self.device),
         )
+        self.topologies = self.topologies[:-1]
+
         top = self.topologies[-1]
         self.topology = dict(lh=top, rh=copy.deepcopy(top))
         self.topology["rh"].reverse_face_orientation()
 
-        self.surface = {k: TemplateSurfaces(torch.zeros(v.n_vertices, 3, device=self.device), v) for k,v in self.topology.items()}
+        self.surface = {
+            k: TemplateSurfaces(torch.zeros(v.n_vertices, 3, device=self.device), v)
+            for k, v in self.topology.items()
+        }
 
         self.n_steps = n_steps
         self.step_size = 1.0 / n_steps
@@ -270,26 +275,32 @@ class BrainInflate(torch.nn.Module):
         )
         UNetTransform_kwargs = dict(channels=channels, n_convolutions=2)
 
-        self.transform = UNetTransform(in_channels, out_channels, self.topologies, **UNetTransform_kwargs)
+        self.transform = UNetTransform(
+            in_channels, out_channels, self.topologies, **UNetTransform_kwargs
+        )
 
     def set_surfaces(self, vertices):
-        self.surface = {k: TemplateSurfaces(v, self.topology[k]) for k,v in vertices.items()}
+        self.surface = {
+            k: TemplateSurfaces(v, self.topology[k]) for k, v in vertices.items()
+        }
 
     def normalize_coordinates(self):
         """Normalize coordinates by centering the surface on the origin and
         dividing by the maximum along in each dimension.
         """
-        self.bbox = {k: v.bounding_box() for k,v in self.surface.items()}
-        self.center = {k: v.mean(1)[:, None] for k,v in self.bbox.items()}
-        self.size = {k: self.bbox[k][:,[1]]-self.center[k] for k in self.bbox}
+        self.bbox = {k: v.bounding_box() for k, v in self.surface.items()}
+        self.center = {k: v.mean(1)[:, None] for k, v in self.bbox.items()}
+        self.size = {k: self.bbox[k][:, [1]] - self.center[k] for k in self.bbox}
         for h in self.surface:
             self.surface[h].vertices -= self.center[h]
             self.surface[h].vertices /= self.size[h]
 
-    def unnormalize_coordinates(self):
+    def unnormalize_coordinates(self, undo_scale=True, undo_center=False):
         for h in self.surface:
-            self.surface[h].vertices *= self.size[h]
-            self.surface[h].vertices += self.center[h]
+            if undo_scale:
+                self.surface[h].vertices *= self.size[h]
+            if undo_center:
+                self.surface[h].vertices += self.center[h]
 
     def compute_features(self, surface):
         normals = surface.compute_vertex_normals()
@@ -302,14 +313,20 @@ class BrainInflate(torch.nn.Module):
 
     def _forward_hemi(self, hemi):
         surface = self.surface[hemi]
-        surface.vertex_data["sulc"] = torch.zeros((surface.n_batch, surface.topology.n_vertices), device=self.device)
+        surface.vertex_data["sulc"] = torch.zeros(
+            (surface.n_batch, surface.topology.n_vertices), device=self.device
+        )
         for _ in range(self.n_steps):
             features = self.compute_features(surface)
             dV = self.transform(features)
-            surface.vertices = self.update_coordinates(surface.vertices, self.step_size * dV)
+            surface.vertices = self.update_coordinates(
+                surface.vertices, self.step_size * dV
+            )
             # average convexity
             # we already computed the normals as features (3-6)!
-            surface.vertex_data["sulc"] += self.step_size * torch.sum(features[:, 3:6] * dV, 1)
+            surface.vertex_data["sulc"] += self.step_size * torch.sum(
+                features[:, 3:6] * dV, 1
+            )
 
     def forward(self, vertices: dict[str, torch.Tensor]):
         self.set_surfaces(vertices)
@@ -321,3 +338,174 @@ class BrainInflate(torch.nn.Module):
         self.unnormalize_coordinates()
 
         return self.surface
+
+
+class SphericalReg(torch.nn.Module):
+    def __init__(
+        self,
+        out_channels: int = 3,
+        device: str | torch.device = "cpu",
+    ) -> None:
+        super().__init__()
+        self.device = torch.device(device)
+
+        n_topologies = 6
+        in_channels = 3  # xyz coordinates
+        n_steps = 1
+
+        self.n_steps = n_steps
+        self.step_size = 1.0 / n_steps
+
+        # assert n_topologies >= out_res + 1
+        # self.out_res = out_res
+        self.set_topologies(n_topologies)
+
+        self.surface = {
+            k: TemplateSurfaces(torch.zeros(v.n_vertices, 3, device=self.device), v)
+            for k, v in self.topology.items()
+        }
+
+        # Initial positions
+        self.sphere = TemplateSurfaces(
+            torch.tensor(
+                nib.freesurfer.read_geometry(
+                    brainsynth.resources_dir / "sphere-reg.srf"
+                )[0][: self.topology["lh"].n_vertices],
+                dtype=torch.float,
+                device=self.device,
+            ),
+            self.topology["lh"],
+        )
+        self.prepare_sphere()
+
+        self.moved = copy.deepcopy(self.sphere)
+
+        # self.nn_tris = torch.load(
+        #     brainnet.resources_dir / f"template.{n_topologies - 1}.nn_tri.pt"
+        # ).to(self.device)
+
+
+        # channels = dict(
+        #     encoder=[128, 128, 128],
+        #     ubend=128,
+        #     decoder=[128, 128, 128],
+        # )
+        channels = dict(
+            encoder=[32, 64, 128],
+            ubend=256,
+            decoder=[128, 64, 32],
+        )
+        UNetTransform_kwargs = dict(channels=channels, n_convolutions=2)
+
+        self.transform = UNetTransform(
+            in_channels, out_channels, self.topologies, **UNetTransform_kwargs
+        )
+
+    def set_topologies(self, n_topologies):
+        # The topology is defined on the left hemisphere and although the
+        # topology is the same for both hemispheres, we need to reverse the
+        # order of the vertices in face array in order for the ordering to
+        # remain consistent (e.g., counter-clockwise) once the vertices are
+        # (almost) left-right mirrored
+
+        # We use the left topology in the submodules which only use knowledge
+        # of the neighborhoods to define the convolutions (and this is
+        # independent of the face orientation).
+        self.topologies = brainnet.mesh.topology.get_recursively_subdivided_topology(
+            n_topologies - 1,
+            brainnet.mesh.topology.initial_faces.to(self.device),
+        )
+
+        top = self.topologies[-1]
+        self.topology = dict(lh=top, rh=copy.deepcopy(top))
+        self.topology["rh"].reverse_face_orientation()
+
+    def set_surfaces(self, vertices):
+        for k,v in vertices.items():
+            self.surface[k].vertices = v
+            self.surface[k].normalize_to_bounding_box()
+
+    def prepare_sphere(self):
+        # map to unit sphere
+        self.sphere.center_on_origin()
+        change_sphere_size(self.sphere, radius=1.0)
+
+        # indices, indptr, counts = self.sphere.topology.get_vertexwise_faces()
+        # self.sphere_indices = indices
+        # self.sphere_indptr = indptr
+        # self.sphere_tricounts = counts
+
+        # self.spherical_coords = cart_to_sph(self.sphere.vertices)
+
+    # def normalize_from_quantiles(self, t, low=0.01, high=0.99):
+    #     ql = t.quantile(low)
+    #     qu = t.quantile(high)
+    #     return torch.clip((t - ql) / (qu - ql), 0.0, 1.0)
+
+    def compute_features(self, feature_surface, interpolate_features: bool = True):
+        # K = surface.compute_laplace_beltrami_operator()
+        # H = surface.compute_mean_curvature(K)
+        # H = surface.compute_iterative_spatial_smoothing(H, iterations=5)
+        # H = self.normalize_from_quantiles(H)
+        # return torch.concat((surface.vertices.mT, H[:, None]), dim=1)
+
+        # if interpolate_features:
+        #     # Interpolate features at the location of the
+        #     if self.device == "cpu":
+
+        #         tree = cKDTree(self.moved.vertices.numpy())
+        #         _, nn = tree.query(self.sphere.vertices.numpy())
+        #         nn = torch.tensor(nn)
+        #     else:
+        #         # for each v in vertices find the closest point in sphere.vertices
+        #         nn = self.sphere.nearest_neighbor(self.moved)
+
+        #     proj_tri, proj_w = self.moved.project_points(
+        #         self.sphere.vertices,
+        #         self.nn_tris[nn],
+        #         return_proj=False,
+        #         return_dist=False,
+        #     )
+
+        #     tris = feature_surface.vertices[
+        #         feature_surface.batch_ix, feature_surface.faces[proj_tri]
+        #     ]
+        #     features = torch.sum(tris * proj_w[..., None], dim=-2)
+        # else:
+        #     # map features
+        #     features = feature_surface.vertices
+
+        features = feature_surface.vertices
+
+        return features.mT
+
+    def update_coordinates(self, dv):
+        # vertices : (batch, vertices, coordinates)
+        # dv : (batch, channels, vertices)
+        dv = dv.mT
+        # k = dv[..., :3]
+        # alpha = dv[..., [3]]
+        # print(k[0, :10])
+        # print(alpha[0, :10])
+        # self.moved.rotate(k, alpha, inplace=True)
+        for i in range(3):
+            self.moved.rotate_dim(i, dv[..., [i]], inplace=True)
+
+    def _forward_hemi(self, hemi):
+        # initialize positions
+        self.moved.vertices = self.sphere.vertices.clone()
+        # features, surf in original space
+        feature_surface = self.surface[hemi]
+
+        for i in range(self.n_steps):
+            # interpolate features
+            # (do not interpolate in first iteration!)
+            features = self.compute_features(feature_surface, i > 0)
+            dV = self.transform(features)
+            self.update_coordinates(self.step_size * dV)
+        return self.moved.vertices
+
+    def forward(self, vertices: dict[str, torch.Tensor]):
+        self.set_surfaces(vertices)
+
+        return {h: self._forward_hemi(h) for h in vertices}

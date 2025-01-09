@@ -290,7 +290,6 @@ def write_surface(
                     volume_info=vol_info,
                 )
 
-
 def write_volume(
     vol: torch.Tensor, affine, out_dir: Path, prefix: str, tag: str, label: None | str
 ):
@@ -321,6 +320,7 @@ def write_volume(
 
         nib.Nifti1Image(v.cpu().numpy(), affine).to_filename(out_dir / name)
 
+
 def write_example(
     engine: Engine,
     evaluators: dict[str, Engine],
@@ -343,3 +343,21 @@ def write_example(
                         write_surface(v, vol_info, config.examples_dir, st, k, label)
                     else:
                         write_volume(v, affine, config.examples_dir, st, k, label)
+
+def write_surfaces(
+    engine: Engine,
+    evaluators: dict[str, Engine],
+    config: brainnet.config.ResultsParameters,
+):
+    vol_info = copy.deepcopy(FREESURFER_VOLUME_INFO)
+    vol_info["volume"] = (256, 256, 256)
+
+    k = "surface"
+    for prefix, e in (dict(trainer=engine) | evaluators).items():
+        _, _, y_pred, y_true = e.state.output
+
+        st = f"epoch-{engine.state.epoch:05d}.{prefix}"
+
+        if config.examples_keys is None or k in config.examples_keys:
+            for label, y in zip(("pred", "true"), (y_pred, y_true)):
+                write_surface(y[k], vol_info, config.examples_dir, st, k, label)
