@@ -12,6 +12,7 @@ from . import events_evaluator, events_trainer, losses
 """
 
 # Stage 1:
+# - surface resolution 4
 # - add chamfer at 500
 python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --max-epochs 800
 
@@ -24,30 +25,25 @@ python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-
 # - increase target surface resolution to 6
 python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-checkpoint 1400 --max-epochs 1600
 
-
 """
-
-
 
 # =============================================================================
 # GENERAL VARIABLES
 # =============================================================================
 
-mode_contrast = "t1w"     # synth, t1w, t2w, flair
+mode_contrast = "t2w"     # synth, t1w, t2w, flair
 mode_resolution = "1mm"     # 1mm, random
 
 project: str = "TopoFit"
-run: str = f"01_{mode_contrast}_{mode_resolution}"
+run: str = f"{mode_contrast}_{mode_resolution}"
 
 run_id: None | str = None # f"{run}-00"
 resume_from_run: None | str = None # run
 tags = [mode_contrast, mode_resolution]
 device: str | torch.device  = torch.device("cuda:0")
 
-gradient_accumulation_steps = 1
-
-initial_surface_resolution: int = 0
-target_surface_resolution: int = 6
+resolution = 6
+target_surface = dict(resolution=resolution, name="target-decoupled")
 
 # Single hemisphere
 # target_surface_hemisphere: str = "lh"
@@ -55,7 +51,6 @@ target_surface_resolution: int = 6
 # out_center_str = "lh"
 
 # Full brain
-target_surface_hemisphere: str = "both"
 out_size = [176, 208, 176]
 out_center_str = "brain"
 
@@ -66,19 +61,33 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 # TRAINING MODE
 # =============================================================================
 
+# Use COBRE and MCIC as test sets
+# ISBI2015 are not great from FS
+datasets = [
+    "ABIDE",
+    "ADHD200",
+    "ADNI3",
+    "AIBL",
+    "Buckner40",
+    "Chinese-HCP",
+    # "COBRE",
+    "HCP",
+    # "ISBI2015",
+    # "MCIC",
+    "OASIS3",
+]
+
 match mode_contrast:
     case "synth":
-        images_train = ["generation_labels_dist"]
+        images_train = ["generation_labels_dist", "t1w"]
         images_val = ["t1w"]
         subject_subset_train = "train"
         subject_subset_val = "validation"
-        datasets = None
     case "t1w":
         images_train = ["t1w"]
         images_val = ["t1w"]
         subject_subset_train = "train"
         subject_subset_val = "validation"
-        datasets = None
     case "t2w":
         images_train = ["t2w"]
         images_val = ["t2w"]
@@ -111,7 +120,7 @@ cfg_train = config.TrainParameters(
     max_epochs = 5000,
     epoch_length_train = 100,
     epoch_length_val = 50,
-    gradient_accumulation_steps = gradient_accumulation_steps,
+    gradient_accumulation_steps = 1,
     events_trainer = events_trainer.events,
     events_evaluators = events_evaluator.events,
     enable_amp = True,
@@ -138,9 +147,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset = subject_subset_train,
         datasets = datasets,
         images = images_train,
-        target_surface_resolution = target_surface_resolution,
-        target_surface_hemispheres = target_surface_hemisphere,
-        initial_surface_resolution = initial_surface_resolution,
+        target_surface = target_surface,
     ),
     validation = brainsynth.config.DatasetConfig(
         root_dir = root_dir / "full",
@@ -148,9 +155,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset = subject_subset_val,
         datasets = datasets,
         images = images_val,
-        target_surface_resolution = target_surface_resolution,
-        target_surface_hemispheres = target_surface_hemisphere,
-        initial_surface_resolution = initial_surface_resolution,
+        target_surface = target_surface,
     ),
 )
 
@@ -195,7 +200,7 @@ cfg_model = config.BrainNetParameters(
     heads = dict(
         surface = head.TopoFit(
             in_channels=unet.num_features,
-            out_res=target_surface_resolution,
+            out_res=resolution,
             device=device,
         ),
     ),

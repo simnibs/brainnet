@@ -6,7 +6,7 @@ import torch
 import brainsynth.config
 
 from brainnet import config
-from brainnet.modules import BrainInflate
+from brainnet.modules import SphericalReg
 
 # Parameters defined in other files
 from . import events_trainer, events_evaluator
@@ -16,17 +16,17 @@ from .losses import cfg_loss
 # GENERAL VARIABLES
 # =============================================================================
 
-project: str = "BrainInflate"
-run: str = "01"
+project: str = "SphericalReg"
+run: str = "06"
 
 tags = []
 
-run_id: None | str = None
+run_id: None | str = None  # "h7dclsgn"
 resume_from_run: None | str = None
 device: str | torch.device = torch.device("cuda:0")
 
-initial_surface = dict(types="white", resolution=6, name="prediction")
-target_surface = dict(types="inflated", resolution=None, name=None)
+initial_surface = dict(hemispheres="lh", types="white", resolution=6, name="prediction")
+target_surface = dict(hemispheres="lh", types="sphere.reg", resolution=None, name=None)
 
 root_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
 out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
@@ -35,8 +35,8 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 # TRAINING MODE
 # =============================================================================
 
-subject_subset_train = "train"
-subject_subset_val = "validation"
+subject_subset_train = "train.spherereg"
+subject_subset_val = "validation.spherereg"
 datasets = None
 
 # =============================================================================
@@ -44,14 +44,13 @@ datasets = None
 # =============================================================================
 
 cfg_train = config.TrainParameters(
-    max_epochs = 5000,
-    epoch_length_train = 100,
-    epoch_length_val = 25,
-    gradient_accumulation_steps = 1,
-    # evaluate_on=Events.EPOCH_COMPLETED,
-    events_trainer = events_trainer.events,
-    events_evaluators = events_evaluator.events,
-    enable_amp = True,
+    max_epochs=5000,
+    epoch_length_train=100,
+    epoch_length_val=50,
+    gradient_accumulation_steps=1,
+    events_trainer=events_trainer.events,
+    events_evaluators=events_evaluator.events,
+    enable_amp=True,
 )
 
 # =============================================================================
@@ -65,23 +64,23 @@ cfg_dataloader = config.DataloaderParameters()
 # =============================================================================
 
 cfg_dataset = config.DatasetParameters(
-    train = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "spherereg",
-        subject_dir = root_dir / "subject_splits",
-        subject_subset = subject_subset_train,
-        datasets = datasets,
-        images = [],
-        target_surface = target_surface,
-        initial_surface = initial_surface,
+    train=brainsynth.config.DatasetConfig(
+        root_dir=root_dir / "spherereg",
+        subject_dir=root_dir / "subject_splits",
+        subject_subset=subject_subset_train,
+        datasets=datasets,
+        images=[],
+        target_surface=target_surface,
+        initial_surface=initial_surface,
     ),
-    validation = brainsynth.config.DatasetConfig(
-        root_dir = root_dir / "spherereg",
-        subject_dir = root_dir / "subject_splits",
-        subject_subset = subject_subset_val,
-        datasets = datasets,
-        images = [],
-        target_surface = target_surface,
-        initial_surface = initial_surface,
+    validation=brainsynth.config.DatasetConfig(
+        root_dir=root_dir / "spherereg",
+        subject_dir=root_dir / "subject_splits",
+        subject_subset=subject_subset_val,
+        datasets=datasets,
+        images=[],
+        target_surface=target_surface,
+        initial_surface=initial_surface,
     ),
 )
 
@@ -92,14 +91,14 @@ cfg_dataset = config.DatasetParameters(
 
 cfg_criterion = config.CriterionParameters(
     train=cfg_loss,
-    validation=cfg_loss, # could/should be different...
+    validation=cfg_loss,  # could/should be different...
 )
 
 # =============================================================================
 # MODEL
 # =============================================================================
 
-model = BrainInflate(out_channels=3, n_steps=10, device=device)
+model = SphericalReg(device=device)  # n_steps=5,
 model.to(device)
 
 # =============================================================================
@@ -114,7 +113,10 @@ cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=1.0e-4))
 
 cfg_results = config.ResultsParameters(
     out_dir=out_dir / project / run,
-    load_from_dir = out_dir / project / resume_from_run if resume_from_run is not None else None,
+    load_from_dir=out_dir / project / resume_from_run
+    if resume_from_run is not None
+    else None,
+    # save_example_on=Events.EPOCH_COMPLETED(every=10)
 )
 
 # =============================================================================
@@ -126,8 +128,8 @@ cfg_wandb = config.WandbParameters(
     project=project,
     name=run,
     wandb_dir=out_dir / "wandb",
-    log_on = cfg_train.evaluate_on,
-    run_id = run_id,
+    log_on=cfg_train.evaluate_on,
+    run_id=run_id,
     tags=tags,
 )
 

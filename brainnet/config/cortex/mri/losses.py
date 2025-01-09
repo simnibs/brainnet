@@ -5,7 +5,7 @@ from brainnet.modules.loss_wrappers import (
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
-    HingeLoss,
+    FaceNormalConsistencyLoss,
     MatchedAngleLoss,
     MatchedDistanceLoss,
     SymmetricChamferLoss,
@@ -27,7 +27,7 @@ functions = dict(
             MatchedDistanceLoss(),
             **kw_white,
         ),
-        hinge=SurfaceRegularizationLoss(HingeLoss(), y_pred="white"),
+        hinge=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         chamfer=SurfaceSupervisedLoss(
             SymmetricSampledNormLoss("sampled_P"),
@@ -47,7 +47,7 @@ functions = dict(
             MatchedDistanceLoss(),
             **kw_pial,
         ),
-        hinge=SurfaceRegularizationLoss(HingeLoss(), y_pred="pial"),
+        hinge=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
         chamfer=SurfaceSupervisedLoss(
             SymmetricSampledNormLoss("sampled_P"),
