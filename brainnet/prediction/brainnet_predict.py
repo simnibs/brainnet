@@ -73,7 +73,7 @@ class PredictionStep(SupervisedStep):
         surfaces = self.ensure_device(surfaces)
         init_verts = self.ensure_device(init_verts)
 
-        image = self.intensity_normalization(images["t1w"])
+        image = self.intensity_normalization(images["t2w"])
 
         return image, surfaces, init_verts, affine
 
@@ -85,7 +85,7 @@ class PredictionStep(SupervisedStep):
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, init_verts)
 
-        return image, y_pred, affine
+        return image, y_pred, affine, y_true
 
 
 def predict(args):
@@ -108,7 +108,7 @@ def predict(args):
 
     out_dir = Path(args.out_dir)
     if not out_dir.exists():
-        out_dir.mkdir()
+        out_dir.mkdir(parents=True)
 
     criterion = brainnet.initializers.init_criterion(train_setup.criterion)[args.subset]
     dataloader = brainnet.initializers.init_dataloader(
@@ -164,9 +164,9 @@ def predict(args):
         img = getattr(IMAGE.images, first_img)
         ds_dir = dataset.ds_dir / dataset.name
         for i,sub in enumerate(dataset.subjects):
-            print(f"subject {i+1} of {len(dataset)}")
+            print(f"subject {i+1:4d} of {len(dataset):4d}")
             affine = torch.tensor(nib.load(ds_dir / sub / img.filename).affine, dtype=torch.float)
-            image, y_pred, adjusted_affine = eval_step(None, dataset[i], affine)
+            image, y_pred, adjusted_affine, _ = eval_step(None, dataset[i], affine)
 
             this_out = out_dir / dataset.name / sub
 
@@ -182,8 +182,6 @@ def predict(args):
                 case "freesurfer":
                     vol_info["volume"] = list(image.shape[-3:])
                     write_surface_freesurfer(y_pred["surface"], faces, this_out, adjusted_affine[0].numpy(), vol_info)
-
-
 
 def write_surface_freesurfer(surfaces, faces, out_dir, affine, volume_info):
     if not out_dir.exists():
