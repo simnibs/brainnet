@@ -89,9 +89,20 @@ class TemplateSurfaces:
     #     assert value.shape[1] == self.topology.n_vertices
     #     self._mean_curvature_vector = value
 
+    def as_mesh(self):
+        # (n_batch, n_vertices, v_per_face, coordinates)
+        return self.vertices[:, self.faces]
+
+    def compute_face_barycenters(self):
+        return self.as_mesh().mean(2)
 
     def bounding_box(self):
+        """(batch, 2, 3)."""
         return torch.stack((self.vertices.amin(1), self.vertices.amax(1)), dim=1)
+
+    def center_on_origin(self):
+        center = self.bounding_box().mean(1)[:, None]
+        self.vertices = self.vertices - center
 
     def sample_points(
         self,
@@ -145,9 +156,7 @@ class TemplateSurfaces:
         else:
             return samples
 
-    def interpolate_vertex_features(
-        self, x, faces, barycentric_coords
-    ):
+    def interpolate_vertex_features(self, x, faces, barycentric_coords):
         """Sample a set of features (B, N[, C]) onto the barycentric coordinates
         defined in `barycentric_coords` (B, N_SAMPLES, 3) each of which refers
         to the faces defined in `faces` (B, N_SAMPLES).
@@ -367,6 +376,15 @@ class TemplateSurfaces:
         else:
             return 0.5 * K.norm(dim=-1)
 
+    def mean_curvature_flow(self, step_size=1.0, n_iter=1, smooth_iter=10):
+        v = self.vertices
+        for _ in range(n_iter):
+            K = self.compute_laplace_beltrami_operator()
+            if smooth_iter > 1:
+                K = self.compute_iterative_spatial_smoothing(K)
+            v = v + step_size * K
+        return v
+
     # def compute_curvatures(self, K):
 
     #     # Mean curvature
@@ -414,7 +432,9 @@ class TemplateSurfaces:
             )
         return out
 
-    def smooth_taubin(self, buffer=None, a=0.8, b=-0.85, n_iter=1, dim=1, inplace=False):
+    def smooth_taubin(
+        self, buffer=None, a=0.8, b=-0.85, n_iter=1, dim=1, inplace=False
+    ):
         # assert 0.0 <= a <= 1.0, f"a should be in 0 <= a <= 1 (got {a})"
         # assert b <= -a, f"b should be <= -a (got a = {a} and b = {b})"
 
@@ -475,24 +495,8 @@ class TemplateSurfaces:
         # update
         return x + a * (buffer - x)
 
-
     def compute_edge_lengths(self):
-        """Variance of normalized edge length. Edge lengths are normalized so that
-        their sum is equal to the number of edges. Otherwise, zero error can be
-        achieved simply by shrinking the mesh.
-
-        The idea is to encourage equilateral triangles.
-
-        Parameters
-        ----------
-        surfaces : TemplateSurfaces
-
-
-        Returns
-        -------
-        loss : float
-
-        """
+        """ """
         return (
             self.vertices[:, self.topology.vertex_adjacency]
             .diff(dim=-2)
@@ -527,7 +531,7 @@ class TemplateSurfaces:
 
     def compute_self_intersections(self):
         assert self.vertices.dtype == torch.float
-        assert self.faces.dtype == torch.int # torch.int64
+        assert self.faces.dtype == torch.int  # torch.int64
         vertices = self.vertices.detach()
         faces = self.faces.detach()
 
@@ -536,6 +540,302 @@ class TemplateSurfaces:
             return cuda_extensions.compute_self_intersections(vertices[0], faces)
         else:
             return [
-                cuda_extensions.compute_self_intersections(v, faces)
-                for v in vertices
+                cuda_extensions.compute_self_intersections(v, faces) for v in vertices
             ]
+
+    def project_points(
+        self,
+        points: torch.Tensor,
+        tris_per_point: torch.Tensor,
+        return_proj: bool = True,
+        return_dist: bool = True,
+        return_all: bool = False,
+    ):
+        """Project each point in `points` to the closest point on the surface
+        restricted to the triangles in `tris_per_point`.
+
+        PARAMETERS
+        ----------
+        points : torch.Tensor
+            Array with shape (B, N, D) where N is the number of points and D is
+            the dimension.
+        tris_per_point : torch.Tensor
+            If a ragged/nested array, the ith entry contains the triangles against
+            which the ith point will be tested.
+        return_all : bool
+            Whether to return all projection results (i.e., the projection of a
+            point on each of the triangles which it was tested against) or only the
+            projection on the closest triangle.
+
+        RETURNS
+        -------
+        tris : ndarray
+            The index of the triangle onto which a point was projected.
+        weights : ndarray
+            The linear interpolation weights resulting in the projection of a point
+            onto a particular triangle.
+        projs :
+            The coordinates of the projection of a point on a triangle.
+        dists :
+            The distance of a point to its projection on a triangle.
+
+        NOTES
+        -----
+        The cost function to be minimized is the squared distance between a point
+        P and a triangle T
+
+            Q(s,t) = |P - T(s,t)|**2 =
+                = a*s**2 + 2*b*s*t + c*t**2 + 2*d*s + 2*e*t + f
+
+        The gradient
+
+            Q'(s,t) = 2(a*s + b*t + d, b*s + c*t + e)
+
+        is set equal to (0,0) to find (s,t).
+
+        REFERENCES
+        ----------
+        https://www.geometrictools.com/Documentation/DistancePoint3Triangle3.pdf
+
+        """
+        m = self.as_mesh()
+        v0 = m[:, :, 0]  # Origin of the triangle
+        e0 = m[:, :, 1] - v0  # s coordinate axis
+        e1 = m[:, :, 2] - v0  # t coordinate axis
+
+        # Vector from point to triangle origin (if reverse, the negative
+        # determinant must be used)
+        w = v0[self.batch_ix, tris_per_point] - points[:, :, None]
+
+        a = torch.sum(e0**2, -1)[self.batch_ix, tris_per_point]
+        b = torch.sum(e0 * e1, -1)[self.batch_ix, tris_per_point]
+        c = torch.sum(e1**2, -1)[self.batch_ix, tris_per_point]
+        d = torch.sum(e0[self.batch_ix, tris_per_point] * w, -1)
+        e = torch.sum(e1[self.batch_ix, tris_per_point] * w, -1)
+        # f = np.sum(w**2, 1)
+
+        # s,t are so far unnormalized!
+        s = b * e - c * d
+        t = b * d - a * e
+        det = a * c - b**2
+
+        # Project points (s,t) to the closest points on the triangle (s',t')
+        sp = torch.zeros_like(s)
+        tp = torch.zeros_like(t)
+
+        # We do not need to check a point against all edges/interior of a triangle.
+        #
+        #          t
+        #     \ R2|
+        #      \  |
+        #       \ |
+        #        \|
+        #         \
+        #         |\
+        #         | \
+        #     R3  |  \  R1
+        #         |R0 \
+        #    _____|____\______ s
+        #         |     \
+        #     R4  | R5   \  R6
+        #
+        # The code below is equivalent to the following if/else structure
+        #
+        # if s + t <= 1:
+        #     if s < 0:
+        #         if t < 0:
+        #             region 4
+        #         else:
+        #             region 3
+        #     elif t < 0:
+        #         region 5
+        #     else:
+        #         region 0
+        # else:
+        #     if s < 0:
+        #         region 2
+        #     elif t < 0
+        #         region 6
+        #     else:
+        #         region 1
+
+        # Conditions
+        st_l1 = (s + t) <= det
+        s_l0 = s < 0
+        t_l0 = t < 0
+
+        # Region 0 (inside triangle)
+        i = torch.where(st_l1 & ~s_l0 & ~t_l0)
+        deti = det[i]
+        sp[i] = s[i] / deti
+        tp[i] = t[i] / deti
+
+        # Region 1
+        # The idea is to substitute the constraints on s and t into F(s,t) and
+        # solve, e.g., here we are in region 1 and have Q(s,t) = Q(s,1-s) = F(s)
+        # since in this case, for a point to be on the triangle, s+t must be 1
+        # meaning that t = 1-s.
+        i = torch.where(~st_l1 & ~s_l0 & ~t_l0)
+        aa, bb, cc, dd, ee = a[i], b[i], c[i], d[i], e[i]
+        numer = cc + ee - (bb + dd)
+        denom = aa - 2 * bb + cc
+        sp[i] = torch.clamp(numer / denom, 0, 1)
+        tp[i] = 1 - sp[i]
+
+        # Region 2
+        i = torch.where(~st_l1 & s_l0)  # ~t_l0
+        aa, bb, cc, dd, ee = a[i], b[i], c[i], d[i], e[i]
+        tmp0 = bb + dd
+        tmp1 = cc + ee
+        j = tmp1 > tmp0
+        j_ = ~j
+        k = tuple(ii[j] for ii in i)
+        k_ = tuple(ii[j_] for ii in i)
+        # k, k_ = i[j], i[j_]
+        numer = tmp1[j] - tmp0[j]
+        denom = aa[j] - 2 * bb[j] + cc[j]
+        sp[k] = torch.clamp(numer / denom, 0, 1)
+        tp[k] = 1 - sp[k]
+        sp[k_] = 0
+        tp[k_] = torch.clamp(-ee[j_] / cc[j_], 0, 1)
+
+        # Region 3
+        i = torch.where(st_l1 & s_l0 & ~t_l0)
+        cc, ee = c[i], e[i]
+        sp[i] = 0
+        tp[i] = torch.clamp(-ee / cc, 0, 1)
+
+        # Region 4
+        i = torch.where(st_l1 & s_l0 & t_l0)
+        aa, cc, dd, ee = a[i], c[i], d[i], e[i]
+        j = dd < 0
+        j_ = ~j
+        k = tuple(ii[j] for ii in i)
+        k_ = tuple(ii[j_] for ii in i)
+        # k, k_ = i[j], i[j_]
+        sp[k] = torch.clamp(-dd[j] / aa[j], 0, 1)
+        tp[k] = 0
+        sp[k_] = 0
+        tp[k_] = torch.clamp(-ee[j_] / cc[j_], 0, 1)
+
+        # Region 5
+        i = torch.where(st_l1 & ~s_l0 & t_l0)
+        aa, dd = a[i], d[i]
+        tp[i] = 0
+        sp[i] = torch.clamp(-dd / aa, 0, 1)
+
+        # Region 6
+        i = torch.where(~st_l1 & t_l0)  # ~s_l0
+        aa, bb, cc, dd, ee = a[i], b[i], c[i], d[i], e[i]
+        tmp0 = bb + ee
+        tmp1 = aa + dd
+        j = tmp1 > tmp0
+        j_ = ~j
+        k = tuple(ii[j] for ii in i)
+        k_ = tuple(ii[j_] for ii in i)
+        # k, k_ = i[j], i[j_]
+        numer = tmp1[j] - tmp0[j]
+        denom = aa[j] - 2 * bb[j] + cc[j]
+        tp[k] = torch.clamp(numer / denom, 0, 1)
+        sp[k] = 1 - tp[k]
+        tp[k_] = 0
+        sp[k_] = torch.clamp(-dd[j_] / aa[j_], 0, 1)
+
+        projs = (
+            v0[self.batch_ix, tris_per_point]
+            + sp[..., None] * e0[self.batch_ix, tris_per_point]
+            + tp[..., None] * e1[self.batch_ix, tris_per_point]
+        )
+        # Distance from original point to its projection on the triangle
+        dists = torch.linalg.norm(points[:, :, None] - projs, dim=-1)
+
+        if return_all:
+            tris = tris_per_point
+            weights = torch.stack((1 - sp - tp, sp, tp), dim=-1)
+        else:
+            # Find the closest projection
+            i = dists.argmin(-1)
+
+            ind = torch.arange(points.shape[1], device=points.device)
+
+            tris = tris_per_point[self.batch_ix, ind, i]
+            spi = sp[self.batch_ix, ind, i]
+            tpi = tp[self.batch_ix, ind, i]
+            weights = torch.stack((1 - spi - tpi, spi, tpi), dim=-1)
+            if return_dist:
+                dists = dists[self.batch_ix, ind, i]
+            if return_proj:
+                projs = projs[self.batch_ix, ind, i]
+
+        if return_dist:
+            if return_proj:
+                return tris, weights, projs, dists
+            else:
+                return tris, weights, dists
+        elif return_proj:
+            return tris, weights, projs
+        else:
+            return tris, weights
+
+    def normalize_to_bounding_box(self):
+        """Normalize coordinates by centering the surface on the origin and
+        dividing by the maximum along in each dimension.
+        """
+        self.center_on_origin()
+        size = self.bounding_box()[:, [1]]  # .amax()
+        self.vertices = self.vertices / size
+
+    def rotate(self, k: torch.Tensor, alpha: torch.Tensor, inplace: bool = False):
+        """Rotate `v` by `alpha` (angle) around `k` (axis).
+
+        Rodrigues' rotation formula.
+
+        Parameters
+        ----------
+        k : torch.Tensor
+            Axis around which to rotate. Either one axis for all vertices
+            (k.shape = (3,)) or one axis per vertex (k.shape = (..., 3)).
+        alpha : torch.Tensor
+
+
+        References
+        ----------
+        https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
+
+        """
+        cos_angle = alpha.cos()
+
+        k = torch.nn.functional.normalize(k, dim=-1)
+        k_as_v = k.expand_as(self.vertices)
+
+        res = (
+            self.vertices * cos_angle
+            + torch.cross(self.vertices, k_as_v) * alpha.sin()
+            + torch.sum(self.vertices * k_as_v, dim=-1, keepdim=True) * k_as_v * (1 - cos_angle)
+        )
+        if inplace:
+            self.vertices = res
+        else:
+            return res
+
+    def rotate_dim(self, dim, alpha, inplace: bool = False):
+        """Rotate around one of the major axes as specified by `dim`."""
+        cos_angle = alpha.cos()
+
+        n = self.n_dim
+        k = torch.zeros(n, device=self.device)
+        k[dim] = 1.0
+        k_as_v = k.expand_as(self.vertices)
+
+        q = torch.zeros_like(self.vertices)
+        q[..., dim] = self.vertices[..., dim]
+
+        res = (
+            self.vertices * cos_angle
+            + torch.cross(self.vertices, k_as_v) * alpha.sin()
+            + q * (1 - cos_angle)
+        )
+        if inplace:
+            self.vertices = res
+        else:
+            return res
