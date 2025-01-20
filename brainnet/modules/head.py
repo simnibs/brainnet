@@ -83,46 +83,6 @@ class SuperResolutionModule(HeadModule):
         super().__init__(*args, **kwargs)
 
 
-# class BiasFieldModule(torch.nn.Module):
-#     def __init__(
-#         self,
-#         in_channels: int,
-#         out_channels: int,
-#         in_shape: torch.Size | torch.Tensor,
-#         out_shape: torch.Size | torch.Tensor,
-#     ) -> None:
-#         """Perform (up)convolution on the specified features and scale to the
-#         target shape if necessary.
-#         """
-#         super().__init__()
-
-#         # expose in config
-#         self.in_shape = torch.tensor(in_shape)
-#         self.out_shape = torch.tensor(out_shape)
-
-#         if self.in_shape.equal(self.out_shape):
-#             self.convolve = Convolution(in_channels, out_channels, spatial_dims=3)
-#         else:
-#             self.convolve = torch.nn.ConvTranspose3d(
-#                 in_channels, out_channels, kernel_size=8, stride=8, padding=0
-#             )
-
-#         self.resize = monai.transforms.Resize(
-#             self.out_shape, mode="trilinear"
-#         )  # area is default
-
-#     def forward(self, features):
-#         if self.feature_level is not None:
-#             features = features[self.feature_level]
-#         x = self.convolve(features)
-#         x = (
-#             x
-#             if self.out_shape.equal(torch.tensor(x.shape))
-#             else monai.transforms.Resize(x)
-#         )
-#         return x.exp()
-
-
 class ContrastiveModule(torch.nn.Module):
     def __init__(self, dim=1):
         """Normalize features.

@@ -76,6 +76,7 @@ def load_checkpoint(to_load, train_setup):
         )
         print(f"Loading checkpoint {ckpt_name}")
         ckpt = train_setup.results._from_checkpoint_dir / ckpt_name
+        ckpt = torch.load(ckpt, map_location=train_setup.device)
         ModelCheckpoint.load_objects(to_load, ckpt)
 
 

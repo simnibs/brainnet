@@ -1,55 +1,26 @@
 import torch
 
 from brainnet.mesh import topology
-
 from brainnet.modules.graph import layers
 
 
 class SurfaceModule(torch.nn.Module):
     def __init__(
         self,
-        out_res: int = 6,
+        in_order: int = 0,
+        out_order: int = 6,
+        max_order: int = 6,  # n_topologies: int = 7, # 0 - n_topologies
         white_kwargs: dict | None = None,
         pial_kwargs: dict | None = None,
         device: str | torch.device = "cpu",
     ) -> None:
         super().__init__()
-        n_topologies = 7  # 0,1,2,3,4,5,6
-
         self.device = torch.device(device)
 
-        if white_kwargs is None:
-            white_kwargs = {}
-        if "n_steps" not in white_kwargs:
-            white_kwargs["n_steps"] = [2, 2, 2, 2, 2, 2, 1]
-        if "feature_maps" not in white_kwargs:
-            white_kwargs["feature_maps"] = [
-                ["encoder:3", "decoder:0"],
-                ["encoder:2", "decoder:1"],
-                ["encoder:1", "decoder:2"],
-                ["encoder:0", "decoder:3"],
-                ["encoder:0", "decoder:3"],
-                ["encoder:0", "decoder:3"],
-                ["encoder:0", "decoder:3"],
-            ]
-
-        if pial_kwargs is None:
-            pial_kwargs = {}
-        if "n_steps" not in pial_kwargs:
-            pial_kwargs["n_steps"] = 10
-        if "feature_maps" not in pial_kwargs:
-            pial_kwargs["feature_maps"] = ["encoder:0", "decoder:3"]
-
-        self.white_n_steps = white_kwargs["n_steps"]
-        self.white_step_size = [1.0 / i for i in self.white_n_steps]
-        self.white_feature_maps = white_kwargs["feature_maps"]
-
-        self.pial_n_steps = pial_kwargs["n_steps"]
-        self.pial_step_size = 1.0 / self.pial_n_steps
-        self.pial_feature_maps = pial_kwargs["feature_maps"]
-
-        assert n_topologies >= out_res + 1
-        self.out_res = out_res
+        # TOPOLOGIES
+        # assert n_topologies >= out_res + 1
+        assert max_order >= out_order
+        self.out_order = out_order
 
         # The topology is defined on the left hemisphere and although the
         # topology is the same for both hemispheres, we need to reverse the
@@ -60,15 +31,69 @@ class SurfaceModule(torch.nn.Module):
         # We use the left topology in the submodules which only use knowledge
         # of the neighborhoods to define the convolutions (and this is
         # independent of the face orientation).
-        self.topologies = topology.get_recursively_subdivided_topology(
-            n_topologies - 1,
-            topology.initial_faces.to(self.device),
+
+        # self.topologies = topology.get_recursively_subdivided_topology(
+        #     max_order,
+        #     device=self.device,
+        # )
+
+        self.topologies = topology.StandardTopology.recursive_subdivision(
+            max_order,
+            device=self.device,
         )
-        self.n_topologies = len(self.topologies)
-        self.out_topology = self.topologies[out_res]
+
+        # self.topologies = topology.get_fsaverage_topology(max_order, self.device)
+
+        # self.topologies = topology.FsAverageTopology.recursive_subdivision(
+        #     max_order,
+        #     device=self.device,
+        # )
+
+        self.active_topologies = list(range(in_order, max_order + 1))
+
+        self.out_topology = self.topologies[self.active_topologies[-1]]
+
+        # WHITE MATTER CONFIG
+        if white_kwargs is None:
+            white_kwargs = {}
+        if "n_steps" not in white_kwargs:
+            white_kwargs["n_steps"] = dict(
+                zip(self.active_topologies, [2, 2, 2, 2, 2, 2, 1])
+            )
+        if "feature_maps" not in white_kwargs:
+            white_kwargs["feature_maps"] = dict(
+                zip(
+                    self.active_topologies,
+                    (
+                        ["encoder:3", "decoder:0"],
+                        ["encoder:2", "decoder:1"],
+                        ["encoder:1", "decoder:2"],
+                        ["encoder:0", "decoder:3"],
+                        ["encoder:0", "decoder:3"],
+                        ["encoder:0", "decoder:3"],
+                        ["encoder:0", "decoder:3"],
+                    ),
+                )
+            )
+
+        # PIAL CONFIG
+        if pial_kwargs is None:
+            pial_kwargs = {}
+        if "n_steps" not in pial_kwargs:
+            pial_kwargs["n_steps"] = 10
+        if "feature_maps" not in pial_kwargs:
+            pial_kwargs["feature_maps"] = ["encoder:0", "decoder:3"]
+
+        self.white_n_steps = white_kwargs["n_steps"]
+        self.white_step_size = {k: 1.0 / v for k, v in self.white_n_steps.items()}
+        self.white_feature_maps = white_kwargs["feature_maps"]
+
+        self.pial_n_steps = pial_kwargs["n_steps"]
+        self.pial_step_size = 1.0 / self.pial_n_steps
+        self.pial_feature_maps = pial_kwargs["feature_maps"]
 
         self.white_deform = torch.nn.ModuleDict()
-        self.pial_deform = torch.nn.ModuleDict()
+        self.pial_deform = torch.nn.Module()
 
     def forward(
         self,
@@ -128,15 +153,15 @@ class SurfaceModule(torch.nn.Module):
         return torch.cat([features[m] for m in maps], dim=1)
 
     def _estimate_white(self, features: dict[str, torch.Tensor], v: torch.Tensor):
-        for i in range(self.out_res + 1):
-            step_size = self.white_step_size[i]
-            deform = self.white_deform[i]
-            fmap = self._get_features(features, self.white_feature_maps[i])
-            for _ in range(self.white_n_steps[i]):
+        for order in self.active_topologies:
+            step_size = self.white_step_size[order]
+            deform = self.white_deform[str(order)]
+            fmap = self._get_features(features, self.white_feature_maps[order])
+            for _ in range(self.white_n_steps[order]):
                 v_features = self.grid_sample(fmap, v)
                 v = v + step_size * deform(v_features)
-            if i < self.out_res:
-                v = self.topologies[i].subdivide_vertices(v)
+            if order < self.out_order:
+                v = self.topologies[order].subdivide_vertices(v)
         return v
 
     def _esimate_pial(self, features: dict[str, torch.Tensor], v: torch.Tensor):
@@ -187,7 +212,7 @@ class SurfaceModule(torch.nn.Module):
         return samples[..., 0, 0]  # squeeze out H, W
 
     def set_image_center(self, image):
-        """This is used with grid sampling with align_corners=True."""
+        """This is used with grid sampling when align_corners=True."""
         self._image_shape = torch.tensor(image.shape[-3:], device=image.device)
         center = 0.5 * (self._image_shape - 1.0)
         self._image_center = center[None, :, None]
@@ -208,10 +233,12 @@ def make_unet_channels(in_channels: int, depth: int, multiplier: int = 2) -> dic
 
     assert depth >= 1
     m = depth - 1
-    encoder = [in_channels * multiplier**i for i in range(m)]
-    ubend = in_channels * multiplier**m
-    decoder = encoder[::-1]
-    return dict(encoder=encoder, ubend=ubend, decoder=decoder)
+    # encoder = [in_channels * multiplier**i for i in range(m)]
+    # ubend = in_channels * multiplier**m
+    # return dict(encoder=encoder, ubend=ubend, decoder=decoder)
+    encoder = [in_channels * multiplier**i for i in range(m + 1)]
+    decoder = encoder[:-1][::-1]
+    return dict(encoder=encoder, decoder=decoder)
 
 
 class UNet(torch.nn.Module):
@@ -294,7 +321,6 @@ class UNet(torch.nn.Module):
                 layers.nConv(in_ch, out_ch, conv_module, topo, n_conv)
             )
             self.encoder_pool.append(layers.Pool(topo, reduce))
-
             in_ch = out_ch
 
         # U bend
@@ -379,9 +405,6 @@ class UNetTransform(torch.nn.Module):
         if channels is None:
             channels = dict(encoder=[64, 96, 128], ubend=160, decoder=[128, 96, 64])
 
-        # Final convolution block to estimate deformation field from features
-        reduce_index, gather_index = topologies[-1].get_convolution_indices()
-
         unet = UNet(
             in_channels,
             topologies,
@@ -391,6 +414,9 @@ class UNetTransform(torch.nn.Module):
             max_depth=max_depth,
             n_conv=n_convolutions,
         )
+
+        # Final convolution block to estimate deformation field from features
+        reduce_index, gather_index = topologies[-1].get_convolution_indices()
         deform = deform_conv_module(
             unet.out_ch,
             out_channels,
