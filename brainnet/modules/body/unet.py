@@ -86,8 +86,6 @@ class UNet(torch.nn.Module):
         # we always return the final features!
         self.return_decoder_features[-1] = True
 
-        add_skip_connection = lambda level: level < (self.num_levels - 1)
-
         # Downsampling (Pooling)
         MaxPooling = getattr(torch.nn, "MaxPool%dd" % spatial_dims)
         self.pooling = MaxPooling(max_pool_size)
@@ -106,7 +104,8 @@ class UNet(torch.nn.Module):
                 conv_block.append(ConvBlock(spatial_dims, in_ch, out_ch))
                 in_ch = out_ch
             self.encoder.append(conv_block)
-            if add_skip_connection(i):
+            # Add skip connection
+            if i < (self.num_levels - 1):
                 skip_connections.append(in_ch)
             self.encoder_scale.append(int(max_pool_size**i))
 
@@ -126,8 +125,6 @@ class UNet(torch.nn.Module):
 
         self.final_channels = out_ch
 
-        self.do_pooling = lambda level: level < (self.num_levels - 1)
-
         self.feature_scales = [
             s
             for i, s in zip(
@@ -136,9 +133,8 @@ class UNet(torch.nn.Module):
             )
             if i
         ]
-        self._fm_name = dict(encoder=lambda i: f"encoder:{i}", decoder=lambda i: f"decoder:{i}")
-        self.num_features = {f"{self._fm_name['encoder'](i)}": n[-1] for i,n in enumerate(encoder_channels)}
-        self.num_features |= {f"{self._fm_name['decoder'](i)}": n[-1] for i,n in enumerate(decoder_channels)}
+        self.num_features = {f"encoder:{i}": n[-1] for i,n in enumerate(encoder_channels)}
+        self.num_features |= {f"decoder:{i}": n[-1] for i,n in enumerate(decoder_channels)}
 
         # self.feature_scales = {f"{self._fm_name['encoder'](i)}": n for i,n in enumerate(self.encoder_scale)}
         # self.feature_scales |= {f"{self._fm_name['decoder'](i)}": n for i,n in enumerate(self.decoder_scale)}
@@ -189,8 +185,9 @@ class UNet(torch.nn.Module):
             for block in conv_blocks:
                 features = block(features)
             if self.return_encoder_features[i]:
-                unet_features[self._fm_name['encoder'](i)] = features
-            if self.do_pooling(i):
+                unet_features[f"encoder:{i}"] = features
+            # Pool
+            if i < (self.num_levels - 1):
                 skip_connections.append(features)
                 features = self.pooling(features)
 
@@ -202,6 +199,6 @@ class UNet(torch.nn.Module):
                 features = block(features)
             # the last features are returned anyway
             if self.return_decoder_features[i] and not i == (self.num_levels - 1):
-                unet_features[self._fm_name['decoder'](i)] = features
+                unet_features[f"decoder:{i}"] = features
 
         return unet_features
