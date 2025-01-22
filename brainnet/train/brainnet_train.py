@@ -204,11 +204,11 @@ def train(args):
 
     """
 
-    train_setup_file = "brainnet.config.topofit.synth.main"
+    train_setup_file = "brainnet.config.topofit.mri.main"
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
     train_setup.wandb.enable = False
 
-    """
+        """
 
     train_setup_file = args.config  # "brainnet.config.cortex.main"
 
