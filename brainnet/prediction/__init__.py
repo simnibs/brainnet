@@ -24,6 +24,7 @@ class PretrainedModels:
         ]
 
     def _model_loader(self, name, model_config, model_state, device):
+        device = torch.device(device)
 
         match name:
             case "topofit":
@@ -39,6 +40,7 @@ class PretrainedModels:
         return model
 
     def _get_model_state(self, name, specs, device):
+        device = torch.device(device)
         specs_str = "_".join(specs)
         return  torch.load(self.dir / name / f"{specs_str}_state.pt", map_location=device)
 

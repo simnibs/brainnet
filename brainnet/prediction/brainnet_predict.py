@@ -1,4 +1,5 @@
 import copy
+import functools
 
 import torch
 from torch.utils.data import default_collate
@@ -10,11 +11,10 @@ from brainnet.modules.head import surface_modules
 # from brainsynth.dataset import GenericDataset
 
 # from brainnet.resources import PretrainedModels
-# from brainnet.utilities import apply_affine, recursively_apply_function
+from brainsynth.utilities import apply_affine
+from brainnet.utilities import recursively_apply_function
 
-# import functools
 # from pathlib import Path
-
 
 
 class PredictionStep:
@@ -43,7 +43,7 @@ class PredictionStep:
         return tuple(default_collate([b]) for b in batch)
 
     def __call__(self, engine, batch):
-        images, _, template, affine = self.prepare_batch(batch)
+        images, _, template, vox_to_mri = self.prepare_batch(batch)
         image = images["image"]
 
         self.model.eval()
@@ -54,7 +54,16 @@ class PredictionStep:
                 with torch.autocast(self.model.device.type, enabled=self.enable_amp):
                     y_pred = self.model(image, template)
 
-        return y_pred, affine
+            # remove batch dimension
+            func = functools.partial(torch.squeeze, dim=0),
+            y_pred = recursively_apply_function(y_pred, func)
+
+            # convert from voxel to MRI space
+            if "surface" in y_pred:
+                func = functools.partial(apply_affine, vox_to_mri),
+                y_pred["surface"] = recursively_apply_function(y_pred["surface"], func)
+
+        return y_pred, vox_to_mri
 
 
 # device = torch.device("cuda:0")
