@@ -8,6 +8,7 @@ maintainers = [
 requires-python = ">=3.11"
 dependencies = [
     "brainsynth >= 0.0.1",
+    "ignite >= 0.4",
     "nibabel >= 5.1",
     "numpy >= 1.26",
     "scipy >= 1.11",
@@ -18,4 +19,3 @@ dependencies = [
 train = [
     "wandb >= 0.16",
 ]
-
