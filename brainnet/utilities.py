@@ -4,7 +4,8 @@ def recursively_apply_function(d, fn, out=None):
         out = {}
     for k,v in d.items():
         if isinstance(v, dict):
-            recursively_apply_function(v, fn, out)
+            out[k] = {}
+            recursively_apply_function(v, fn, out[k])
         else:
             out[k] = fn(v)
     return out
