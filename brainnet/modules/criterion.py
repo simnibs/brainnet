@@ -197,10 +197,12 @@ class Criterion(torch.nn.Module):
         # curv_weight = self.config.prepare_for_surface_loss.curv_weight
 
         # clip H of y_true before interpolating to sampled points
-        H_clip_to_percentile = dict(
-            white = (0.001, 0.999),
-            pial = (0.01, 0.99),
-        )
+        # H_clip_to_percentile = dict(
+        #     white = (0.001, 0.999),
+        #     pial = (0.001, 0.999),
+        # )
+
+        H_clip_to_values = (-20, 20)
 
         sampled_index = "sampled_index"
         sampled_points = "sampled_P"
@@ -222,7 +224,8 @@ class Criterion(torch.nn.Module):
                     y_true[h][s],
                     n_samples,
                     smooth_y_true,
-                    H_clip_to_percentile = H_clip_to_percentile[s],
+                    # H_clip_to_percentile = H_clip_to_percentile[s],
+                    H_clip_to_values = H_clip_to_values,
                     # set_medial_wall_weights = True,
                 )
                 y_true[h][s].vertex_data |= sampled
@@ -263,7 +266,8 @@ class Criterion(torch.nn.Module):
         surface,
         n_samples: int,
         taubin_smoothing: bool = False,
-        H_clip_to_percentile: None | tuple[float, float] = None,
+        # H_clip_to_percentile: None | tuple[float, float] = None,
+        H_clip_to_values: None | tuple[float, float] = None,
         # set_medial_wall_weights: bool = False,
     ):
         if self._needs_curvature:
@@ -271,7 +275,7 @@ class Criterion(torch.nn.Module):
                 vo = torch.empty_like(surface.vertices)
                 vo = vo.copy_(surface.vertices)
 
-                surface.smooth_taubin(a=0.9, b=-0.95, inplace=True)
+                surface.vertices = surface.smooth_taubin(a=0.9, b=-0.95, inplace=True)
 
             K = surface.compute_laplace_beltrami_operator()
             H = surface.compute_mean_curvature(K)
@@ -281,10 +285,12 @@ class Criterion(torch.nn.Module):
             # N = surface.compute_vertex_normals()
             # H = 0.5 * torch.sum(N * K, -1)
 
-            if H_clip_to_percentile:
-                H.clamp_(
-                    *H.quantile(torch.tensor(H_clip_to_percentile, device=H.device))
-                )
+            # if H_clip_to_percentile:
+            #     H.clamp_(
+            #         *H.quantile(torch.tensor(H_clip_to_percentile, device=H.device))
+            #     )
+            if H_clip_to_values is not None:
+                H.clamp_(*H_clip_to_values)
 
             if taubin_smoothing:
                 surface.vertices = vo
