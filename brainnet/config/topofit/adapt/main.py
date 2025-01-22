@@ -154,37 +154,49 @@ cfg_criterion = config.CriterionParameters(
 # MODEL
 # =============================================================================
 
-spatial_dims = 3
-in_channels = 1
+unet_kwargs = dict(
+    spatial_dims = 3,
+    in_channels = 1,
+    encoder_channels = [[16], [32], [64], [96], [128]],
+    decoder_channels = [[96], [64], [64], [32]],
 
-unet_enc_ch = [[16], [32], [64], [96], [128]]
-unet_dec_ch = [[96], [64], [64], [32]]
-unet_encoder_features = [True, True, True, True, False]
-unet_decoder_features = [True, True, True, True]
+    # unet_enc_ch = [[32], [64], [64], [96], [96]]
+    # unet_dec_ch = [[96], [64], [64], [64]]
 
-unet_out_ch = [i[0] for i,j in zip(
-    unet_enc_ch + unet_dec_ch, unet_encoder_features + unet_decoder_features
-) if j]
+    return_encoder_features = [True, True, True, True, False],
+    return_decoder_features = [True, True, True, True],
 
-unet = body.UNet(
-    spatial_dims,
-    in_channels,
-    unet_enc_ch,
-    unet_dec_ch,
-    return_encoder_features=unet_encoder_features,
-    return_decoder_features=unet_decoder_features,
+)
+unet = body.UNet(**unet_kwargs)
+
+topofit_kwargs = dict(
+    in_channels = unet.num_features,
+    in_order = 0,
+    out_order = out_order,
+    max_order = 6,
+    white_channels = dict(
+                encoder=[64, 64, 64],
+                ubend=64,
+                decoder=[64, 64, 64],
+            ),
+    pial_channels = [32],
 )
 
+# graph_white_channels = dict(
+#             encoder=[64, 64, 64, 64],
+#             decoder=[64, 64, 64],
+#         )
+# graph_white_channels = dict(
+#             encoder=[96, 96, 96],
+#             ubend=96,
+#             decoder=[96, 96, 96],
+#         )
+
+
 cfg_model = config.BrainNetParameters(
-    device=device,
+    device = device,
     body = unet,
-    heads = dict(
-        surface = head.TopoFit(
-            in_channels=unet.num_features,
-            out_res=target_surface_resolution,
-            device=device,
-        ),
-    ),
+    heads = dict(surface = head.TopoFit(**topofit_kwargs, device=device)),
 )
 
 # =============================================================================
