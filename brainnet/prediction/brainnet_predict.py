@@ -3,19 +3,11 @@ import functools
 
 import torch
 from torch.utils.data import default_collate
-from brainnet.modules.head import surface_modules
 
-# import nibabel as nib
-# import torch
-
-# from brainsynth.dataset import GenericDataset
-
-# from brainnet.resources import PretrainedModels
 from brainsynth.utilities import apply_affine
 from brainnet.utilities import recursively_apply_function
 
-# from pathlib import Path
-
+from brainnet.modules.head import surface_modules
 
 class PredictionStep:
     def __init__(self, preprocessor, model, enable_amp: bool = False):
@@ -32,7 +24,6 @@ class PredictionStep:
         self.topology["rh"].reverse_face_orientation()
 
     def prepare_batch(self, batch):
-        # decollate and loop?
         image, template, vox_to_mri = batch
         batch = self.preprocessor(
             images=dict(image=image),
@@ -54,70 +45,90 @@ class PredictionStep:
                 with torch.autocast(self.model.device.type, enabled=self.enable_amp):
                     y_pred = self.model(image, template)
 
-            # remove batch dimension
-            func = functools.partial(torch.squeeze, dim=0),
-            y_pred = recursively_apply_function(y_pred, func)
-
             # convert from voxel to MRI space
             if "surface" in y_pred:
-                func = functools.partial(apply_affine, vox_to_mri),
+                func = functools.partial(apply_affine, vox_to_mri)
                 y_pred["surface"] = recursively_apply_function(y_pred["surface"], func)
+
+            # decollate (remove batch dimension)
+            func = functools.partial(torch.squeeze, dim=0)
+            y_pred = recursively_apply_function(y_pred, func)
 
         return y_pred, vox_to_mri
 
 
-# device = torch.device("cuda:0")
+from pathlib import Path
+import nibabel as nib
+import torch
 
-# # Dataset
-# dataset = GenericDataset(
-#     images=["/home/jesperdn/nobackup/eugenio/466137_conform.nii.gz"],
-#     mni_transform=["/home/jesperdn/nobackup/eugenio/affine.txt"],
-# )
+import brainsynth
+from brainsynth.dataset import PredictionDataset
 
-# name = "topofit"
-# specs = ("synth", "random")
-# pretrained_models = PretrainedModels()
-# model = pretrained_models.load_model(name, specs, device)
-# preprocessor = pretrained_models.load_preprocessor(name, specs, device)
+from brainnet.prediction import PretrainedModels
 
-# predict_step = PredictionStep(preprocessor, model, enable_amp=True)
+device = torch.device("cuda:0")
+
+# Dataset
+dataset = PredictionDataset(
+    images=[
+        "/home/jesperdn/nobackup/eugenio/second_batch/17-0333.photo_0_conform.nii.gz",
+        "/home/jesperdn/nobackup/eugenio/second_batch/17-0333.photo_1_conform.nii.gz",
+        "/home/jesperdn/nobackup/eugenio/second_batch/17-0333.photo_2_conform.nii.gz",
+        "/home/jesperdn/nobackup/eugenio/second_batch/19_t1_2.5mmiso_conform.nii.gz",
+        "/home/jesperdn/nobackup/eugenio/second_batch/19_t2_2.5mmiso_conform.nii.gz",
+        "/home/jesperdn/nobackup/eugenio/second_batch/T1W_FSE_conform.nii.gz",
+        "/home/jesperdn/nobackup/eugenio/second_batch/T2W_FSE_conform.nii.gz",
+    ],
+    mni_transform=[
+        "/home/jesperdn/nobackup/eugenio/second_batch/17-0333.photo.affinebrain.txt",
+        "/home/jesperdn/nobackup/eugenio/second_batch/17-0333.photo.affinebrain.txt",
+        "/home/jesperdn/nobackup/eugenio/second_batch/17-0333.photo.affinebrain.txt",
+        "/home/jesperdn/nobackup/eugenio/second_batch/19_t1_2.5mmiso.affine.txt",
+        "/home/jesperdn/nobackup/eugenio/second_batch/19_t2_2.5mmiso.affine.txt",
+        "/home/jesperdn/nobackup/eugenio/second_batch/T1W_FSE.affine.txt",
+        "/home/jesperdn/nobackup/eugenio/second_batch/T2W_FSE.affine.txt",
+    ],
+)
+
+name = "topofit"
+specs = ("synth", "random")
+pretrained_models = PretrainedModels()
+model = pretrained_models.load_model(name, specs, device)
+preprocessor = pretrained_models.load_preprocessor(name, specs, device)
+
+predict_step = PredictionStep(preprocessor, model, enable_amp=True)
 
 
-# vol_info = dict(
-#     head=[2, 0, 20],
-#     valid="1  # volume info valid",
-#     filename="vol.nii",
-#     voxelsize=[1, 1, 1],
-#     volume=(0, 0, 0),
-#     xras=[-1, 0, 0],
-#     yras=[0, 0, -1],
-#     zras=[0, 1, 0],
-#     cras=[0, 0, 0],
-# )
-# vol_info["volume"] = (256, 256, 256)
+vol_info = dict(
+    head=[2, 0, 20],
+    valid="1  # volume info valid",
+    filename="vol.nii",
+    voxelsize=[1, 1, 1],
+    volume=(0, 0, 0),
+    xras=[-1, 0, 0],
+    yras=[0, 0, -1],
+    zras=[0, 1, 0],
+    cras=[0, 0, 0],
+)
+vol_info["volume"] = (256, 256, 256)
 
-# predictions = []
-# for batch in dataset:
-#     y_pred, vox_to_mri = predict_step(None, batch)
-#     y_pred = y_pred["surface"]
+for i,batch in enumerate(dataset):
+    img = Path(dataset.images[i])
+    print(img)
+    out_dir = img.parent / img.stem.rstrip(".nii")
 
-#     # convert from voxel to MRI space
-#     for func in [
-#         functools.partial(apply_affine, vox_to_mri),
-#         functools.partial(torch.squeeze, dim=0),
-#     ]:
-#         y_pred = recursively_apply_function(y_pred, func)
+    y_pred, vox_to_mri = predict_step(None, batch)
+    y_pred = y_pred["surface"]
 
-#     out_dir = Path("/home/jesperdn/nobackup/eugenio/")
-#     # if not out_dir.exists():
-#     #     out_dir.mkdir(parents=True)
+    if not out_dir.exists():
+        out_dir.mkdir(parents=True)
 
-#     for hemi, s in y_pred.items():
-#         for surf, ss in s.items():
-#             v = ss
-#             nib.freesurfer.write_geometry(
-#                 out_dir / f"{hemi}.{surf}",
-#                 v.cpu().numpy(),
-#                 predict_step.topology[hemi].faces.cpu().numpy(),
-#                 volume_info=vol_info
-#             )
+    for hemi, s in y_pred.items():
+        for surf, ss in s.items():
+            v = ss
+            nib.freesurfer.write_geometry(
+                out_dir / f"{hemi}.{surf}",
+                v.cpu().numpy(),
+                predict_step.topology[hemi].faces.cpu().numpy(),
+                volume_info=vol_info
+            )

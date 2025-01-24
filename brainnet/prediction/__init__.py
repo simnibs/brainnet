@@ -64,7 +64,7 @@ class PretrainedModels:
         model_config = self._get_model_config(name, specs)
 
         config = InferenceConfig(
-            "Inference",
+            "PredictionBuilder",
             model_config["out_size"],
             model_config["out_center_str"],
             device=device
