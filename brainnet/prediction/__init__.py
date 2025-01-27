@@ -4,7 +4,7 @@ import json
 import torch
 
 from brainsynth import Synthesizer
-from brainsynth.config import InferenceConfig
+from brainsynth.config import PredictionConfig
 
 import brainnet
 import brainnet.config
@@ -63,7 +63,7 @@ class PretrainedModels:
 
         model_config = self._get_model_config(name, specs)
 
-        config = InferenceConfig(
+        config = PredictionConfig(
             "PredictionBuilder",
             model_config["out_size"],
             model_config["out_center_str"],
