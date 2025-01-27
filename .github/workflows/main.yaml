@@ -1,0 +1,63 @@
+name: Build, Test, and Upload
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - v*
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build wheels
+    runs-on: ubuntu-latest
+
+    if: ${{ startsWith(github.ref, 'refs/tags') || !contains(github.event.head_commit.message, '[skip ci]') }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Python - set up
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.11
+    - name: Build wheel
+      run: pip wheel --no-deps . -w dist
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheels
+        path: ./dist/*.whl
+
+  # test:
+  #   name: Test wheels
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - name: Python - set up
+  #     uses: actions/setup-python@v5
+  #     with:
+  #       python-version: 3.11
+  #   - name: Artifact - download
+  #     uses: actions/download-artifact@v4
+  #   - name:
+  #     run: |
+  #       pip install brainnet*.whl
+  #       pip install pytest
+  #       pytest tests
+
+  publish:
+    name: Publish wheels
+    needs: build # test
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Artifact - download
+      uses: actions/download-artifact@v4
+      with:
+        name: wheels
+        path: ${{ github.workspace }}
+    - name: Artifact - Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ github.workspace }}/*.whl

@@ -1,6 +1,6 @@
 [project]
 name = "BrainNet"
-version = "0.0.1"
+version = "0.1a"
 description = "Neural network for various neuroimaging related tasks (e.g., segmentation)."
 maintainers = [
     {name = "Jesper Duemose Nielsen"}
@@ -10,7 +10,7 @@ dependencies = [
     "brainsynth >= 0.0.1",
     "ignite >= 0.4",
     "nibabel >= 5.1",
-    "numpy >= 1.26",
+    "numpy >= 2",
     "scipy >= 1.11",
     "torch >= 2",
 ]
@@ -18,4 +18,12 @@ dependencies = [
 [project.optional-dependencies]
 train = [
     "wandb >= 0.16",
+]
+
+[tool.setuptools.package-data]
+brainnet = [
+    "mesh/cuda/extensions.cpp",
+    "mesh/cuda/nearest_neighbor.cu",
+    "mesh/cuda/self_intersections.cu",
+    "resources/models/topofit/*"
 ]
