@@ -10,10 +10,14 @@ dependencies = [
     "brainsynth >= 0.0.1",
     "ignite >= 0.4",
     "nibabel >= 5.1",
-    "numpy >= 2",
+    "numpy >= 1.26",
     "scipy >= 1.11",
-    "torch >= 2",
+    "torch >= 2.1",
 ]
+
+[build-system]
+requires = ["setuptools>=69.2", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
 train = [
