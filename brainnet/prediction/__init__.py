@@ -39,17 +39,6 @@ class PretrainedModels:
 
         return model
 
-    def _get_model_state(self, name, specs, device):
-        device = torch.device(device)
-        specs_str = "_".join(specs)
-        return  torch.load(self.dir / name / f"{specs_str}_state.pt", map_location=device)
-
-    def _get_model_config(self, name, specs):
-        specs_str = "_".join(specs)
-        with open(self.dir / name / f"{specs_str}_config.json", "r") as f:
-            model_config = json.load(f)
-        return model_config
-
     def load_model(self, name, specs, device):
         assert any([(name == m.name and specs == m.specs) for m in self.known_models]), "Invalid model name or specs."
 
@@ -57,6 +46,17 @@ class PretrainedModels:
         model_state = self._get_model_state(name, specs, device)
 
         return self._model_loader(name, model_config, model_state, device)
+
+    def _get_model_state(self, name, specs, device):
+        device = torch.device(device)
+        specs_str = "_".join(specs)
+        return  torch.load(self.dir / name / f"{specs_str}_state.pt", map_location=device, weights_only=True)
+
+    def _get_model_config(self, name, specs):
+        specs_str = "_".join(specs)
+        with open(self.dir / name / f"{specs_str}_config.json", "r") as f:
+            model_config = json.load(f)
+        return model_config
 
     def load_preprocessor(self, name, specs, device):
         assert any([(name == m.name and specs == m.specs) for m in self.known_models]), "Invalid model name or specs."
