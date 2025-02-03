@@ -1,4 +1,3 @@
-
 import argparse
 from pathlib import Path
 import sys
@@ -23,8 +22,8 @@ vol_info = dict(
     cras=[0, 0, 0],
 )
 
-def predict(args):
 
+def predict(args):
     device = torch.device(args.device)
 
     try:
@@ -38,7 +37,7 @@ def predict(args):
     try:
         # a single transform
         t = np.loadtxt(args.transform)
-        assert t.shape == (4,4)
+        assert t.shape == (4, 4)
         transforms = [args.transform]
     except ValueError:
         # list of transform filenames
@@ -50,11 +49,11 @@ def predict(args):
         out_dir = [args.out]
 
     dataset = PredictionDataset(
-        images = images,
-        mni_transforms = transforms,
-        mni_direction = args.mni_dir,
-        mni_space = args.mni_space,
-        conform = args.conform,
+        images=images,
+        mni_transforms=transforms,
+        mni_direction=args.mni_dir,
+        mni_space=args.mni_space,
+        conform=args.conform,
     )
 
     print("|========================================|")
@@ -71,7 +70,7 @@ def predict(args):
     model = pretrained_models.load_model("topofit", specs, device)
     preprocessor = pretrained_models.load_preprocessor("topofit", specs, device)
     predict_step = PredictionStep(preprocessor, model, enable_amp=True)
-    faces = {h: t.faces.cpu().numpy() for h,t in predict_step.topology.items()}
+    faces = {h: t.faces.cpu().numpy() for h, t in predict_step.topology.items()}
 
     print("Processing subjects")
     n = len(dataset)
@@ -94,22 +93,59 @@ def predict(args):
                     volume_info=vol_info,
                 )
 
+
 def parse_args(argv):
     description = "Main interface to prediction using a BrainNet model."
     parser = argparse.ArgumentParser(
         prog="BrainNetPrediction",
         description=description,
     )
-    parser.add_argument("image", type=str, help="Path to a single image or a text file containing a list of filenames of images.")
-    parser.add_argument("transform", type=str, help="Path to a text file containing a single MNI transformation or a text file containing a list of filenames of MNI transformations")
-    parser.add_argument("out", type=str, help="Path to a directory or a text file containing a list of directories in which to store the surface predictions.")
-    parser.add_argument("--mni-dir", choices=["mni2sub", "sub2mni"], default="mni2sub", help="Direction of MNI transformation.")
-    parser.add_argument("--mni-space", choices=["mni152", "mni305"], default="mni152", help="MNI space to which the transform relates.")
-    parser.add_argument("--conform", action="store_true", help="Whether or not to conform (resample to 1 mm resolution, align with identity affine) the image before prediction.")
-    parser.add_argument("--device", "-d", default="cuda", help="The device on which to run the predictions.")
-    parser.add_argument("--contrast", "-c", choices=["t1w", "synth"], default="t1w", help="")
-    parser.add_argument("--resolution", "-r", choices=["1mm", "random"], default="1mm", help="")
+    parser.add_argument(
+        "image",
+        type=str,
+        help="Path to a single image or a text file containing a list of filenames of images.",
+    )
+    parser.add_argument(
+        "transform",
+        type=str,
+        help="Path to a text file containing a single MNI transformation or a text file containing a list of filenames of MNI transformations",
+    )
+    parser.add_argument(
+        "out",
+        type=str,
+        help="Path to a directory or a text file containing a list of directories in which to store the surface predictions.",
+    )
+    parser.add_argument(
+        "--mni-dir",
+        choices=["mni2sub", "sub2mni"],
+        default="mni2sub",
+        help="Direction of MNI transformation.",
+    )
+    parser.add_argument(
+        "--mni-space",
+        choices=["mni152", "mni305"],
+        default="mni152",
+        help="MNI space to which the transform relates.",
+    )
+    parser.add_argument(
+        "--conform",
+        action="store_true",
+        help="Whether or not to conform (resample to 1 mm resolution, align with identity affine) the image before prediction.",
+    )
+    parser.add_argument(
+        "--device",
+        "-d",
+        default="cuda",
+        help="The device on which to run the predictions.",
+    )
+    parser.add_argument(
+        "--contrast", "-c", choices=["t1w", "synth"], default="t1w", help=""
+    )
+    parser.add_argument(
+        "--resolution", "-r", choices=["1mm", "random"], default="1mm", help=""
+    )
     return parser.parse_args(argv[1:])
+
 
 if __name__ == "__main__":
     args = parse_args(sys.argv)
