@@ -37,17 +37,17 @@ def predict(args):
 
     try:
         # a single transform
-        t = np.loadtxt(getattr(args, "mni-transform"))
+        t = np.loadtxt(args.transform)
         assert t.shape == (4,4)
-        transforms = [getattr(args, "mni-transform")]
+        transforms = [args.transform]
     except ValueError:
         # list of transform filenames
-        transforms = np.loadtxt(getattr(args, "mni-transform"), dtype=str)
+        transforms = np.loadtxt(args.transform, dtype=str)
 
     try:
-        out_dir = np.loadtxt(getattr(args, "out-dir"), dtype=str)
+        out_dir = np.loadtxt(args.out, dtype=str)
     except (FileNotFoundError, IsADirectoryError):
-        out_dir = [getattr(args, "out-dir")]
+        out_dir = [args.out]
 
     dataset = PredictionDataset(
         images = images,
@@ -101,11 +101,11 @@ def parse_args(argv):
         description=description,
     )
     parser.add_argument("image", type=str, help="Path to a single image or a text file containing a list of filenames of images.")
-    parser.add_argument("mni-transform", type=str, help="Path to a text file containing a single MNI transformation or a text file containing a list of filenames of MNI transformations")
-    parser.add_argument("out-dir", type=str, help="Path to a directory or a text file containing a list of directories in which to store the surface predictions.")
+    parser.add_argument("transform", type=str, help="Path to a text file containing a single MNI transformation or a text file containing a list of filenames of MNI transformations")
+    parser.add_argument("out", type=str, help="Path to a directory or a text file containing a list of directories in which to store the surface predictions.")
     parser.add_argument("--mni-dir", choices=["mni2sub", "sub2mni"], default="mni2sub", help="Direction of MNI transformation.")
     parser.add_argument("--mni-space", choices=["mni152", "mni305"], default="mni152", help="MNI space to which the transform relates.")
-    parser.add_argument("--conform", action="store_true", help="Whether or not to conform (resample to 1 mm RAS) the image upon loading it.")
+    parser.add_argument("--conform", action="store_true", help="Whether or not to conform (resample to 1 mm resolution, align with identity affine) the image before prediction.")
     parser.add_argument("--device", "-d", default="cuda", help="The device on which to run the predictions.")
     parser.add_argument("--contrast", "-c", choices=["t1w", "synth"], default="t1w", help="")
     parser.add_argument("--resolution", "-r", choices=["1mm", "random"], default="1mm", help="")
