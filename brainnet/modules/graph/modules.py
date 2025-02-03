@@ -533,8 +533,7 @@ class EncoderUnit(torch.nn.Module):
     def forward(self, features):
         features = self.conv(features)
         skip_features = features
-        if self.do_pool:
-            features = self.pool(features)
+        features = self.pool(features) if self.do_pool else features
         return features, skip_features
 
 

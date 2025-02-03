@@ -40,7 +40,7 @@ class PretrainedModels:
         return model
 
     def load_model(self, name, specs, device):
-        assert any([(name == m.name and specs == m.specs) for m in self.known_models]), "Invalid model name or specs."
+        assert any([(name == m.name and specs == m.specs) for m in self.known_models]), f"Invalid model name or specs. (name: {name}; specs: {specs})"
 
         model_config = self._get_model_config(name, specs)
         model_state = self._get_model_state(name, specs, device)
@@ -59,7 +59,7 @@ class PretrainedModels:
         return model_config
 
     def load_preprocessor(self, name, specs, device):
-        assert any([(name == m.name and specs == m.specs) for m in self.known_models]), "Invalid model name or specs."
+        assert any([(name == m.name and specs == m.specs) for m in self.known_models]), f"Invalid model name or specs. (name: {name}; specs: {specs})"
 
         model_config = self._get_model_config(name, specs)
 

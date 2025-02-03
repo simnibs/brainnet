@@ -509,3 +509,102 @@ class SphericalReg(torch.nn.Module):
         self.set_surfaces(vertices)
 
         return {h: self._forward_hemi(h) for h in vertices}
+
+
+# from torch.distributions.uniform import Uniform
+
+# class BrainAlign(torch.nn.Module):
+#     def __init__(self, device: str | torch.device, points_per_hemisphere: int = 12):
+
+#         self.device = torch.device(device)
+
+#         # MNI152 template
+#         self.hemispheres = ("lh", "rh")
+
+#         # BOUNDING BOX within which to sample initial points. Uniformly? 12 points perh hemi
+#         # L: [-80.0, 0.0], [-120.0, 80.0], [-60.0, 90.0]
+#         # R: [0.0, 80.0], [-120.0, 80.0], [-60.0, 90.0]
+
+#         bbox_brain = dict(
+#             lh=torch.tensor([[-80.0, 0.0], [-120.0, 80.0], [-60.0, 90.0]], device=self.device),
+#             rh=torch.tensor([[0.0, 80.0], [-120.0, 80.0], [-60.0, 90.0]], device=self.device),
+#         )
+#         self.template_points = {
+#             h: torch.nn.Parameter(
+#                 torch.stack(
+#                     [Uniform(low, high, shape=(points_per_hemisphere,)) for low,high in bbox_brain[h]]
+#                 ),
+#                 requires_grad=True
+#             )  for h in hemi}
+#         self.predicted_points = {h: torch.zeros_like(p) for h,p in self.template_points.items()}
+#         self.coordinates = None
+#         self.image_shape = torch.Size([])
+
+
+#         self.unet =
+#         self.
+
+#     def WLS(self, X: torch.Tensor, Y: torch.Tensor, W: torch.Tensor):
+#         """Solve a weighted least squares problem.
+
+#             Y = XB
+
+#         Parameters
+#         ----------
+#         X : torch.Tensor
+#             Predicted points.
+#         Y : torch.Tensor
+#             The learned template points.
+#         W : torch.Tensor
+#             Weighted (salience) of each predicted point.
+#         """
+#         XTW = X.T * (W / W.sum())
+#         return torch.linalg.inv(XTW @ X) @ XTW @ Y
+
+#     def forward(self, image, vox_to_mri, hemi=None):
+#         shape = self.image.shape
+#         if (image_shape := shape[-3:]) != self.image_shape:
+#             self.coordinates = torch.meshgrid([torch.arange(s, device=image.device) for s in shape])
+#             self.coordinates = torch.stack(self.coordinates, dim=-1).reshape(-1, 3)
+#             self.image_shape = image_shape
+
+#         if hemi is None:
+#             hemi = self.hemispheres
+#         else:
+#             assert hemi in self.hemispheres
+#             hemi = (hemi, )
+
+#         hemi = hemi or self.hemispheres
+
+#         features = self.unet(image)
+
+#         features = self.head(features)
+
+
+
+#         saliency = {}
+#         weights = {}
+#         predicted_points = {}
+#         transform = {}
+
+#         for h in hemi:
+#             S = self.hemi_features(features).reshape(shape[0], shape[1], -1)
+#             W = S.sum(-1)
+#             X = S / W @ self.coordinates
+
+#             # X @ vox_to_mri
+
+#             transform[h] = self.WLS(X, self.template_points[h], W)
+
+#             saliency[h] = S
+#             weights[h] = W
+#             predicted_points[h] = X
+
+#         if len(hemi) == 2:
+#             transform["brain"] = self.WLS(
+#                 torch.cat(predicted_points.values()),
+#                 torch.cat(self.template_points.values()),
+#                 torch.cat(W.values()),
+#             )
+
+#         return transform
