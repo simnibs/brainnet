@@ -1,5 +1,5 @@
-from brainnet.modules.graph.modules import UNetTransform, LinearTransform, SurfaceModule
-
+from brainnet.modules.graph.modules import UNetTransform, SurfaceModule
+import brainnet.modules.graph.layers
 
 class TopoFit(SurfaceModule):
     def __init__(
@@ -8,19 +8,16 @@ class TopoFit(SurfaceModule):
         out_channels: int = 3,
         white_channels: dict | None = None,
         pial_channels: list | None = None,
+        pial_deform_module: str = "LinearDeformationBlock",
         *args,
         **kwargs,
-        # image_shape: torch.IntTensor | torch.LongTensor,
-        # config: None | config.TopoFitModelParameters = None,
     ) -> None:
         super().__init__(*args, **kwargs)
 
-        # encoder=[64, 96, 128], ubend=160, decoder=[128, 96, 64]
         white_channels = (
             dict(
-                encoder=[64, 64, 64],
-                ubend=64,
-                decoder=[64, 64, 64],
+                encoder=[96, 96, 96, 96],
+                decoder=[96, 96, 96],
             )
             if white_channels is None
             else white_channels
@@ -29,7 +26,7 @@ class TopoFit(SurfaceModule):
 
         UNetTransform_kwargs = dict(channels=white_channels)
 
-        for topo in self.active_topologies:  # e.g., 1, 2, ..., 7
+        for topo in self.all_topologies:  # e.g., 1, 2, ..., 7
             self.white_deform[str(topo)] = UNetTransform(
                 sum(in_channels[j] for j in self.white_feature_maps[topo]),
                 out_channels,
@@ -37,8 +34,30 @@ class TopoFit(SurfaceModule):
                 **UNetTransform_kwargs,
             )
 
-        self.pial_deform = LinearTransform(
-            sum(in_channels[j] for j in self.pial_feature_maps),
-            out_channels,
-            pial_channels,
-        )
+        m = getattr(brainnet.modules.graph.layers, pial_deform_module)
+        match pial_deform_module:
+            case "LinearDeformationBlock":
+                self.pial_deform = m(
+                    sum(in_channels[j] for j in self.pial_feature_maps),
+                    pial_channels,
+                    out_channels,
+                )
+            case "GraphConvolutionDeformationBlock" | "EdgeConvolutionDeformationBlock":
+                self.pial_deform = m(
+                    sum(in_channels[j] for j in self.pial_feature_maps),
+                    pial_channels,
+                    out_channels,
+                    self.out_topology.conv_index_reduce,
+                    self.out_topology.conv_index_gather,
+                )
+            case "ResidualGraphConvolutionDeformationBlock":
+                self.pial_deform = m(
+                    sum(in_channels[j] for j in self.pial_feature_maps),
+                    pial_channels,
+                    out_channels,
+                    self.out_topology.conv_index_reduce,
+                    self.out_topology.conv_index_gather,
+                    n_residual_blocks=3,
+                )
+            case _:
+                raise ValueError(f"Invalid module for pial deformation ({pial_deform_module})")

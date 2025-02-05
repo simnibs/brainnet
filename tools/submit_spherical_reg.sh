@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=sphericalreg         # Job name
+#SBATCH --job-name=inflate         # Job name
 #SBATCH --output=/mnt/scratch/personal/jesperdn/slurm_logs/%x_%A_%a.log          # A = master job id, a = task job id
 #SBATCH --nodes=1                   # Relevant when program implements MPI (multi system/distributed parallelism)
 #SBATCH --ntasks=1                  # Relevant when program implements MPI (multi system/distributed parallelism)
@@ -27,88 +27,20 @@ conda activate synth
 # find /mnt/scratch/personal/jesperdn/training_data/spherereg/ -type d -name "*sub-*" > allsubs.txt
 sub=$(cat /mnt/scratch/personal/jesperdn/training_data/allsubs.txt | sed -n "${SLURM_ARRAY_TASK_ID}p")
 
-echo $sub
+BRAINSYNTH_TOOLS_DIR=/mrhome/jesperdn/repositories/brainsynth/tools
 
 cd $sub
+echo Running FreeSurfer commands in $PWD
 
+# ?h.white is the predicted surface.
 for hemi in lh rh
 do
-    echo $hemi
-
-    torchsurf=$sub/${hemi}.white.6.prediction.pt
-    insurf=$sub/freesurfer.${hemi}.white.6.prediction
-    sphere=$sub/${hemi}.sphere
-    fssphere=$sub/freesurfer.${hemi}.sphere
-    spherereg=$sub/${hemi}.sphere.reg
-
-    if [[ ! -f ${spherereg}.pt ]]; then
-
-        echo "$hemi: spherical registration of $sub"
-
-        python /mrhome/jesperdn/repositories/brainsynth/tools/torch_vertices_to_freesurfer_surface.py ${torchsurf} $hemi
-        python /mrhome/jesperdn/repositories/brainsynth/tools/torch_vertices_to_freesurfer_surface.py ${sphere}.pt $hemi
-
-        ln -s $insurf smoothwm
-        ln -s $fssphere sphere
-
-        mris_register -curv sphere $FREESURFER_HOME/average/${hemi}.folding.atlas.acfb40.noaparc.i12.2016-08-02.tif $spherereg
-
-        python -c "import nibabel as nib; import torch; v, _ = nib.freesurfer.read_geometry('$spherereg'); torch.save(torch.tensor(v, dtype=torch.float), '${spherereg}.pt')"
-
-        rm smoothwm sphere $spherereg $fssphere $insurf
-    fi
+    # steps taken from recon-all dev table
+    mris_smooth -n 3 -nw $hemi.white $hemi.smoothwm
+    mris_inflate $hemi.smoothwm $hemi.inflated
+    mris_sphere $hemi.inflated $hemi.sphere
+    CURV_ATLAS=$FREESURFER_HOME/average/$hemi.average.curvature.filled.buckner40.tif
+    mris_register -curv $hemi.sphere $CURV_ATLAS $hemi.sphere.reg
+    # clean
+    # rm $hemi.curv $hemi.smoothwm $hemi.inflated $hemi.sphere
 done
-
-
-# hemi=lh
-
-# torchsurf=$sub/${hemi}.white.6.prediction.pt
-# insurf=$sub/freesurfer.${hemi}.white.6.prediction
-# sphere=$sub/${hemi}.sphere
-# fssphere=$sub/freesurfer.${hemi}.sphere
-# spherereg=$sub/${hemi}.sphere.reg
-
-# if [[ ! -f ${spherereg}.pt ]]; then
-
-#     echo "$hemi: spherical registration of $sub"
-
-#     python /mrhome/jesperdn/repositories/brainsynth/tools/torch_vertices_to_freesurfer_surface.py ${torchsurf} $hemi
-#     python /mrhome/jesperdn/repositories/brainsynth/tools/torch_vertices_to_freesurfer_surface.py ${sphere}.pt $hemi
-
-#     ln -s $insurf smoothwm
-#     ln -s $fssphere sphere
-
-#     mris_register -curv sphere $FREESURFER_HOME/average/${hemi}.folding.atlas.acfb40.noaparc.i12.2016-08-02.tif $spherereg
-
-#     python -c "import nibabel as nib; import torch; v, _ = nib.freesurfer.read_geometry('$spherereg'); torch.save(torch.tensor(v, dtype=torch.float), '${spherereg}.pt')"
-
-#     rm smoothwm sphere $spherereg $fssphere $insurf
-# fi
-
-# # Right
-
-# hemi=rh
-
-# torchsurf=$sub/${hemi}.white.6.prediction.pt
-# insurf=$sub/freesurfer.${hemi}.white.6.prediction
-# sphere=$sub/${hemi}.sphere
-# fssphere=$sub/freesurfer.${hemi}.sphere
-# spherereg=$sub/${hemi}.sphere.reg
-
-# if [[ ! -f ${spherereg}.pt ]]; then
-
-#     echo "$hemi: spherical registration of $sub"
-
-#     python /mrhome/jesperdn/repositories/brainsynth/tools/torch_vertices_to_freesurfer_surface.py ${torchsurf} $hemi
-#     python /mrhome/jesperdn/repositories/brainsynth/tools/torch_vertices_to_freesurfer_surface.py ${sphere}.pt $hemi
-
-#     ln -s $insurf smoothwm
-#     ln -s $fssphere sphere
-
-#     mris_register -curv sphere $FREESURFER_HOME/average/${hemi}.folding.atlas.acfb40.noaparc.i12.2016-08-02.tif $spherereg
-
-#     python -c "import nibabel as nib; import torch; v, _ = nib.freesurfer.read_geometry('$spherereg'); torch.save(torch.tensor(v, dtype=torch.float), '${spherereg}.pt')"
-
-#     rm smoothwm sphere $spherereg $fssphere $insurf
-
-# fi

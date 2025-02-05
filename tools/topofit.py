@@ -57,7 +57,7 @@ def predict(args):
     )
 
     print("|========================================|")
-    print("| Topofit                                |")
+    print("| TopoFit                                |")
     print("|                                        |")
     print("| Specifications                         |")
     print(f"|   Contrast     : {args.contrast:>10s}            |")

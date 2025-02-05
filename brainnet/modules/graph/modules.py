@@ -7,18 +7,19 @@ from brainnet.modules.graph import layers
 class SurfaceModule(torch.nn.Module):
     def __init__(
         self,
-        in_order: int = 0,
-        out_order: int = 6,
-        max_order: int = 6,  # n_topologies: int = 7, # 0 - n_topologies
-        white_kwargs: dict | None = None,
-        pial_kwargs: dict | None = None,
+        in_order: int,
+        out_order: int,
+        max_order: int,  # n_topologies: int = 7, # 0 - n_topologies
+        white_feature_maps: list[list[str]],
+        pial_feature_maps: list[str],
+        white_n_steps: int | list[int] | None = None,
+        pial_n_steps: int  = 10,
         device: str | torch.device = "cpu",
     ) -> None:
         super().__init__()
         self.device = torch.device(device)
 
         # TOPOLOGIES
-        # assert n_topologies >= out_res + 1
         assert max_order >= out_order
         self.out_order = out_order
 
@@ -32,65 +33,36 @@ class SurfaceModule(torch.nn.Module):
         # of the neighborhoods to define the convolutions (and this is
         # independent of the face orientation).
 
-        # self.topologies = topology.get_recursively_subdivided_topology(
+        # self.topologies = topology.StandardTopology.recursive_subdivision(
         #     max_order,
         #     device=self.device,
         # )
 
-        self.topologies = topology.StandardTopology.recursive_subdivision(
+        self.topologies = topology.FsAverageTopology.recursive_subdivision(
             max_order,
             device=self.device,
         )
 
-        # self.topologies = topology.get_fsaverage_topology(max_order, self.device)
-
-        # self.topologies = topology.FsAverageTopology.recursive_subdivision(
-        #     max_order,
-        #     device=self.device,
-        # )
-
-        self.active_topologies = list(range(in_order, max_order + 1))
-
+        self.active_topologies = list(range(in_order, out_order + 1))
         self.out_topology = self.topologies[self.active_topologies[-1]]
+        self.all_topologies = list(range(in_order, max_order + 1))
+        n_topologies = len(self.all_topologies)
 
         # WHITE MATTER CONFIG
-        if white_kwargs is None:
-            white_kwargs = {}
-        if "n_steps" not in white_kwargs:
-            white_kwargs["n_steps"] = dict(
-                zip(self.active_topologies, [2, 2, 2, 2, 2, 2, 1])
-            )
-        if "feature_maps" not in white_kwargs:
-            white_kwargs["feature_maps"] = dict(
-                zip(
-                    self.active_topologies,
-                    (
-                        ["encoder:3", "decoder:0"],
-                        ["encoder:2", "decoder:1"],
-                        ["encoder:1", "decoder:2"],
-                        ["encoder:0", "decoder:3"],
-                        ["encoder:0", "decoder:3"],
-                        ["encoder:0", "decoder:3"],
-                        ["encoder:0", "decoder:3"],
-                    ),
-                )
-            )
+        if white_n_steps is None:
+            white_n_steps =[2] * (n_topologies-1) + [1]
+        elif isinstance(white_n_steps, int):
+            white_n_steps = [white_n_steps] * n_topologies
+
+        self.white_n_steps = dict(zip(self.all_topologies, white_n_steps))
+        self.white_step_size = {k: 1.0 / v for k, v in self.white_n_steps.items()}
+        self.white_feature_maps = dict(zip(self.all_topologies, white_feature_maps))
 
         # PIAL CONFIG
-        if pial_kwargs is None:
-            pial_kwargs = {}
-        if "n_steps" not in pial_kwargs:
-            pial_kwargs["n_steps"] = 10
-        if "feature_maps" not in pial_kwargs:
-            pial_kwargs["feature_maps"] = ["encoder:0", "decoder:3"]
 
-        self.white_n_steps = white_kwargs["n_steps"]
-        self.white_step_size = {k: 1.0 / v for k, v in self.white_n_steps.items()}
-        self.white_feature_maps = white_kwargs["feature_maps"]
-
-        self.pial_n_steps = pial_kwargs["n_steps"]
+        self.pial_n_steps = pial_n_steps
         self.pial_step_size = 1.0 / self.pial_n_steps
-        self.pial_feature_maps = pial_kwargs["feature_maps"]
+        self.pial_feature_maps = pial_feature_maps
 
         self.white_deform = torch.nn.ModuleDict()
         self.pial_deform = torch.nn.Module()
@@ -241,144 +213,144 @@ def make_unet_channels(in_channels: int, depth: int, multiplier: int = 2) -> dic
     return dict(encoder=encoder, decoder=decoder)
 
 
+# class UNet(torch.nn.Module):
+#     def __init__(
+#         self,
+#         in_channels: int,
+#         topologies: list[topology.Topology],
+#         conv_module: torch.nn.Module,
+#         reduce: str = "amax",
+#         channels: int | dict = 32,
+#         max_depth: int = 4,
+#         n_conv: int = 1,
+#     ):
+#         """Similar to a conventional UNet achitecture but on a graph. We
+#         exploit the fact that the topologies represent a hierarchy of
+#         recursive subdivision. Consequently, we can move up and down this
+#         hierarchy to obtain different mesh resolutions.
+
+
+#         Parameters
+#         ----------
+#         in_channels : int
+#         topologies :
+#         conv_module
+#         reduce: str
+#         channels: int | dict
+#         max_depth: int
+#         multiplier: int
+#         n_conv: int
+
+
+#         """
+#         # The UNet architecture and naming
+#         #
+#         # ENCODER                         DECODER   Hierarchy level (example)
+#         #
+#         # I C C ------------------------- I C C     4
+#         #     P                           U
+#         #     I C C ----------------- I C C         3
+#         #         P                   U
+#         #         I C C --------- I C C             2
+#         #             P           U
+#         #             I C C - I C C                 1
+#         #                 P   U
+#         #                 I C C                     0
+#         #                 U-bend
+#         #
+#         # I : input
+#         # C : conv
+#         # P : pooling
+#         # U : unpooling
+#         # - : skip connection
+#         #
+#         # Encoder unit: (I-)C-C-P
+#         # Decoder unit: U(-I)-C-C
+#         # U-bend: (I-)C-C
+#         super().__init__()
+
+#         max_depth = min(max_depth, len(topologies))
+#         self.topologies = topologies[-max_depth:]
+
+#         unet_channels = (
+#             make_unet_channels(channels, max_depth)
+#             if isinstance(channels, int)
+#             else channels
+#         )
+#         assert isinstance(unet_channels, dict)
+
+#         # Encoder
+#         in_ch = in_channels
+
+#         enc_topologies = self.topologies[1:][::-1]
+#         # get only the first channels if `topologies` is smaller than unet levels
+#         enc_channels = unet_channels["encoder"][::-1][: max_depth - 1][::-1]
+
+#         self.encoder_conv = torch.nn.ModuleList()
+#         self.encoder_pool = torch.nn.ModuleList()
+#         for out_ch, topo in zip(enc_channels, enc_topologies):
+#             self.encoder_conv.append(
+#                 layers.nConv(in_ch, out_ch, conv_module, topo, n_conv)
+#             )
+#             self.encoder_pool.append(layers.Pool(topo, reduce))
+#             in_ch = out_ch
+
+#         # U bend
+#         self.ubend_conv = layers.nConv(
+#             in_ch,
+#             out_ch := unet_channels["ubend"],
+#             conv_module,
+#             self.topologies[0],
+#             n_conv,
+#         )
+#         in_ch = out_ch
+
+#         # Decoder
+#         unpool_topologies = self.topologies[:-1]
+#         conv_topologies = self.topologies[1:]
+#         skip_channels = enc_channels[::-1]
+#         # get only the first channels if `topologies` is smaller than unet levels
+#         dec_channels = unet_channels["decoder"][: max_depth - 1]
+
+#         self.decoder_unpool = torch.nn.ModuleList()
+#         self.decoder_conv = torch.nn.ModuleList()
+#         for out_ch, skip_ch, unpool_topology, conv_topology in zip(
+#             dec_channels, skip_channels, unpool_topologies, conv_topologies
+#         ):
+#             self.decoder_unpool.append(layers.Unpool(unpool_topology, reduce))
+#             self.decoder_conv.append(
+#                 layers.nConv(
+#                     in_ch + skip_ch, out_ch, conv_module, conv_topology, n_conv
+#                 )
+#             )
+#             in_ch = out_ch
+#         self.out_ch = out_ch
+
+#     def get_prediction_topology(self):
+#         return self.topologies[-1]
+
+#     def forward(self, features):
+#         # Encoder
+#         skip_features = []
+#         for conv, pool in zip(self.encoder_conv, self.encoder_pool):
+#             features = conv(features)
+#             skip_features.append(features)
+#             features = pool(features)
+
+#         features = self.ubend_conv(features)
+
+#         # Decoder
+#         for conv, unpool, sf in zip(
+#             self.decoder_conv, self.decoder_unpool, skip_features[::-1]
+#         ):
+#             features = unpool(features)
+#             features = torch.concat((features, sf), dim=1)
+#             features = conv(features)
+
+#         return features
+
+
 class UNet(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        topologies: list[topology.Topology],
-        conv_module: torch.nn.Module,
-        reduce: str = "amax",
-        channels: int | dict = 32,
-        max_depth: int = 4,
-        n_conv: int = 1,
-    ):
-        """Similar to a conventional UNet achitecture but on a graph. We
-        exploit the fact that the topologies represent a hierarchy of
-        recursive subdivision. Consequently, we can move up and down this
-        hierarchy to obtain different mesh resolutions.
-
-
-        Parameters
-        ----------
-        in_channels : int
-        topologies :
-        conv_module
-        reduce: str
-        channels: int | dict
-        max_depth: int
-        multiplier: int
-        n_conv: int
-
-
-        """
-        # The UNet architecture and naming
-        #
-        # ENCODER                         DECODER   Hierarchy level (example)
-        #
-        # I C C ------------------------- I C C     4
-        #     P                           U
-        #     I C C ----------------- I C C         3
-        #         P                   U
-        #         I C C --------- I C C             2
-        #             P           U
-        #             I C C - I C C                 1
-        #                 P   U
-        #                 I C C                     0
-        #                 U-bend
-        #
-        # I : input
-        # C : conv
-        # P : pooling
-        # U : unpooling
-        # - : skip connection
-        #
-        # Encoder unit: (I-)C-C-P
-        # Decoder unit: U(-I)-C-C
-        # U-bend: (I-)C-C
-        super().__init__()
-
-        max_depth = min(max_depth, len(topologies))
-        self.topologies = topologies[-max_depth:]
-
-        unet_channels = (
-            make_unet_channels(channels, max_depth)
-            if isinstance(channels, int)
-            else channels
-        )
-        assert isinstance(unet_channels, dict)
-
-        # Encoder
-        in_ch = in_channels
-
-        enc_topologies = self.topologies[1:][::-1]
-        # get only the first channels if `topologies` is smaller than unet levels
-        enc_channels = unet_channels["encoder"][::-1][: max_depth - 1][::-1]
-
-        self.encoder_conv = torch.nn.ModuleList()
-        self.encoder_pool = torch.nn.ModuleList()
-        for out_ch, topo in zip(enc_channels, enc_topologies):
-            self.encoder_conv.append(
-                layers.nConv(in_ch, out_ch, conv_module, topo, n_conv)
-            )
-            self.encoder_pool.append(layers.Pool(topo, reduce))
-            in_ch = out_ch
-
-        # U bend
-        self.ubend_conv = layers.nConv(
-            in_ch,
-            out_ch := unet_channels["ubend"],
-            conv_module,
-            self.topologies[0],
-            n_conv,
-        )
-        in_ch = out_ch
-
-        # Decoder
-        unpool_topologies = self.topologies[:-1]
-        conv_topologies = self.topologies[1:]
-        skip_channels = enc_channels[::-1]
-        # get only the first channels if `topologies` is smaller than unet levels
-        dec_channels = unet_channels["decoder"][: max_depth - 1]
-
-        self.decoder_unpool = torch.nn.ModuleList()
-        self.decoder_conv = torch.nn.ModuleList()
-        for out_ch, skip_ch, unpool_topology, conv_topology in zip(
-            dec_channels, skip_channels, unpool_topologies, conv_topologies
-        ):
-            self.decoder_unpool.append(layers.Unpool(unpool_topology, reduce))
-            self.decoder_conv.append(
-                layers.nConv(
-                    in_ch + skip_ch, out_ch, conv_module, conv_topology, n_conv
-                )
-            )
-            in_ch = out_ch
-        self.out_ch = out_ch
-
-    def get_prediction_topology(self):
-        return self.topologies[-1]
-
-    def forward(self, features):
-        # Encoder
-        skip_features = []
-        for conv, pool in zip(self.encoder_conv, self.encoder_pool):
-            features = conv(features)
-            skip_features.append(features)
-            features = pool(features)
-
-        features = self.ubend_conv(features)
-
-        # Decoder
-        for conv, unpool, sf in zip(
-            self.decoder_conv, self.decoder_unpool, skip_features[::-1]
-        ):
-            features = unpool(features)
-            features = torch.concat((features, sf), dim=1)
-            features = conv(features)
-
-        return features
-
-
-class UNetNEW(torch.nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -525,7 +497,7 @@ class EncoderUnit(torch.nn.Module):
 
         self.do_pool = do_pool
         self.conv = torch.nn.Sequential(
-            layers.nConv(**conv_kwargs),
+            layers.ConvolutionRepeater(**conv_kwargs),
         )
         if self.do_pool:
             self.pool = layers.Pool(**pool_kwargs)
@@ -555,7 +527,7 @@ class DecoderUnit(torch.nn.Module):
         super().__init__()
         self.unpool = layers.Unpool(**unpool_kwargs)
         self.concatenate = Concatenate(dim=1)
-        self.conv = layers.nConv(**conv_kwargs)
+        self.conv = layers.ConvolutionRepeater(**conv_kwargs)
 
     def forward(self, features, skip_features):
         return self.conv(self.concatenate(self.unpool(features), skip_features))
@@ -623,83 +595,6 @@ class UNetTransform(torch.nn.Module):
         #     dV = self.spatial_deform(sampled_f)
         #     vertices = vertices + self.step_size * dV
 
-        return self.transform(features)
-
-
-class LinearTransform(torch.nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        channels: list[int],
-        batch_norm=False,
-        # add_normal_features=False,
-    ) -> None:
-        super().__init__()
-        """Quadrature deformation block.
-
-
-
-
-        Parameters
-        ----------
-        in_channels : int
-
-        channels :
-
-        n_iterations : int
-
-
-        Returns
-        -------
-
-
-        """
-        # self.add_normal_features = add_normal_features
-        # self.n_steps = n_steps
-        # self.step_size = 1.0 / self.n_steps
-
-        # if self.add_normal_features:
-        #     assert topology is not None
-        #     # initialize with batch size = 1
-        #     self._surface = TemplateSurfaces(
-        #         torch.empty((1, topology.n_vertices, 3), device=topology.faces.device),
-        #         topology.faces,
-        #     )
-        #     in_channels += 3
-
-        # we might as well use linear layers but use 1D convolutions instead as
-        # that expects tensors of the format (N, C)
-        self.transform = torch.nn.Sequential()
-        for out_ch in channels:
-            self.transform.append(torch.nn.Conv1d(in_channels, out_ch, 1))
-            if batch_norm:
-                self.transform.append(torch.nn.BatchNorm1d(out_ch))
-            self.transform.append(torch.nn.PReLU())
-            in_channels = out_ch
-
-        # Final convolution to predict deformation vector
-        self.transform.append(torch.nn.Conv1d(in_channels, out_channels, 1))
-
-    def forward(self, features):
-        """
-
-        image :
-
-        vertices :
-            shape (N, M, 3)
-        """
-        # for _ in torch.arange(self.n_steps, device=image.device):
-        #     features = grid_sample(image, vertices)
-
-        #     # if self.add_normal_features:
-        #     #     self._surface.vertices = vertices.mT
-        #     #     nn = self._surface.compute_vertex_normals().mT
-        #     #     features = torch.cat((features, nn), dim=1)
-
-        #     vertices = vertices + self.step_size * self.transform(features)
-
-        # return vertices
         return self.transform(features)
 
 

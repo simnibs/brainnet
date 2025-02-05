@@ -135,7 +135,7 @@ class SupervisedTrainingStep(SupervisedStep):
         self.enable_amp = enable_amp
         self.gradient_accumulation_steps = gradient_accumulation_steps
         if self.enable_amp:
-            self.grad_scaler = torch.cuda.amp.GradScaler()
+            self.grad_scaler = torch.amp.GradScaler("cuda")
 
     def __call__(self, engine, batch) -> tuple:
         self.model.train()
@@ -208,7 +208,7 @@ def train(args):
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
     train_setup.wandb.enable = False
 
-        """
+    """
 
     train_setup_file = args.config  # "brainnet.config.cortex.main"
 

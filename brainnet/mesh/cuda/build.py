@@ -26,8 +26,7 @@ src_dir = Path(__file__).parent.resolve()
 include_dirs = []
 
 # only CONDA_PREFIX/lib is included in runtime dirs
-runtime_library_dirs = []
-runtime_library_dirs += torch.utils.cpp_extension.library_paths(cuda=True)
+runtime_library_dirs = [torch.utils.cpp_extension.library_paths(cuda=True)]
 
 sources = ["extensions.cpp", "nearest_neighbor.cu", "self_intersections.cu"]
 sources = [src_dir / f for f in sources]

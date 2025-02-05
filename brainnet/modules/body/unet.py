@@ -47,10 +47,8 @@ class UNet(torch.nn.Module):
         encoder_channels: list[list[int]],
         decoder_channels: list[list[int]],
         max_pool_size: int = 2,
-        return_encoder_features: (
-            None | list[bool]
-        ) = None,  # [False, False, False, False, True]
-        return_decoder_features: None | list[bool] = None,  # [True, True, True, True]
+        return_encoder_features: (None | list[bool]) = None,
+        return_decoder_features: None | list[bool] = None,
     ):
         """_summary_
 
@@ -133,8 +131,15 @@ class UNet(torch.nn.Module):
             )
             if i
         ]
-        self.num_features = {f"encoder:{i}": n[-1] for i,n in enumerate(encoder_channels)}
-        self.num_features |= {f"decoder:{i}": n[-1] for i,n in enumerate(decoder_channels)}
+        self.num_features = {
+            f"encoder:{i}": n[-1] for i, n in enumerate(encoder_channels)
+        }
+        self.num_features |= {
+            f"decoder:{i}": n[-1] for i, n in enumerate(decoder_channels)
+        }
+
+        self.encoder_features = [f"encoder:{i}" for i,b in enumerate(self.return_encoder_features) if b]
+        self.decoder_features = [f"decoder:{i}" for i,b in enumerate(self.return_decoder_features) if b]
 
         # self.feature_scales = {f"{self._fm_name['encoder'](i)}": n for i,n in enumerate(self.encoder_scale)}
         # self.feature_scales |= {f"{self._fm_name['decoder'](i)}": n for i,n in enumerate(self.decoder_scale)}
@@ -176,7 +181,6 @@ class UNet(torch.nn.Module):
     #         )
 
     def forward(self, features):
-
         unet_features = dict()
 
         # Encoder
