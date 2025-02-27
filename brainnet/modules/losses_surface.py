@@ -3,81 +3,192 @@ import torch
 from brainnet.mesh.surface import TemplateSurfaces
 from brainnet import sphere_utils
 
-# SURFACE LOSS FUNCTIONS
-
 # Norm loss = 3 * MSE loss
+from brainnet.modules.losses import MSELoss, MSNELoss, MSCosSimLoss
 
 
-class MSELoss(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, a, b, w=None):
-        if w is None:
-            return torch.mean((a - b) ** 2)
-        else:
-            return torch.sum(w * (a - b) ** 2) / w.sum()
+# DECORATORS
 
 
-class L1Loss(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
+def SemiSymmetricLoss(Loss):
+    """Decorator to compute symmetric loss of inputs."""
 
-    def forward(self, a, b, w=None):
-        if w is None:
-            return torch.abs(a - b).mean()
-        else:
-            return torch.sum(w * torch.abs(a - b)) / w.sum()
+    class SemiSymmetricLoss(Loss):
+        def __init__(
+            self,
+            sym_weights: list[float] | tuple[float, float] = (0.5, 0.5),
+            *args,
+            **kwargs,
+        ) -> None:
+            """_summary_
 
-class RMSELoss(MSELoss):
-    def forward(self, *args, **kwargs):
-        return super().forward(*args, **kwargs).sqrt()
+            Parameters
+            ----------
+            sym_weights : list[float] | tuple
+                weights[0] is the weight given to the loss from `y_pred` to the
+                corresponding value in `y_true`, i.e,
+                    sym_weights[0] * loss(y_pred, y_true[i_pred]) +
+                    sym_weights[1] * loss(y_true, y_pred[i_true])
+
+            """
+            super().__init__(*args, **kwargs)
+            assert len(sym_weights) == 2 and sum(sym_weights) == 1.0
+            self.w = sym_weights
+
+        def forward(
+            self,
+            y_pred: torch.Tensor,
+            y_true: torch.Tensor,
+            i_pred: torch.IntTensor,
+            i_true: torch.IntTensor,
+            w_pred: None | torch.Tensor = None,
+            w_true: None | torch.Tensor = None,
+        ):
+            """
+            Parameters
+            ----------
+
+            i_pred :
+                Contains indices into `y_true`, i.e., y_true[i_pred[i]] is the
+                item in y_true that corresponds to y_pred[i].
+            i_true :
+                Defined similarly to `i_pred` but contains indices into
+                `y_pred`.
+
+            Returns
+            -------
+
+            """
+
+            if (batch_size := y_pred.shape[0]) > 1:
+                batch_index = torch.arange(batch_size)[:, None]
+                return self.w[0] * super().forward(
+                    y_pred, y_true[batch_index, i_pred], w_pred
+                ) + self.w[1] * super().forward(
+                    y_pred[batch_index, i_true], y_true, w_true
+                )
+            else:
+                p = y_pred.squeeze(0)
+                t = y_true.squeeze(0)
+                w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
+                w_true = w_true.squeeze(0) if w_true is not None else w_true
+                return self.w[0] * super().forward(
+                    p, t[i_pred.squeeze(0)], w_pred
+                ) + self.w[1] * super().forward(p[i_true.squeeze(0)], t, w_true)
+
+    return SemiSymmetricLoss
 
 
-class MSNormLoss(torch.nn.Module):
-    def __init__(self, dim=-1) -> None:
-        super().__init__()
-        self.dim = dim
-        # reduction="mean"
-        # self.reduction = reduction
+def SampledLoss(Loss):
+    class SampledLoss(Loss):
+        def __init__(
+            self,
+            value_key: str,
+            index_key="sampled_index",
+            weight_key: str | None = None,
+            *args,
+            **kwargs,
+        ) -> None:
+            super().__init__(*args, **kwargs)
+            self.value_key = value_key
+            self.index_key = index_key
+            self.weight_key = weight_key
 
-    def forward(self, a, b, w=None):
-        if w is None:
-            return torch.sum((a - b) ** 2, self.dim).mean()
-        else:
-            return torch.sum(w * torch.sum((a - b) ** 2, self.dim)) / w.sum()
+        def forward(
+            self,
+            y_pred: TemplateSurfaces,
+            y_true: TemplateSurfaces,
+        ):
+            if self.weight_key is None:
+                return super().forward(
+                    y_pred.vertex_data[self.value_key],
+                    y_true.vertex_data[self.value_key],
+                    y_pred.vertex_data[self.index_key],
+                    y_true.vertex_data[self.index_key],
+                )
 
-class MSNormLossv2(torch.nn.Module):
-    def __init__(self, dim=-1) -> None:
-        super().__init__()
-        self.dim = dim
-        # reduction="mean"
-        # self.reduction = reduction
+            else:
+                return super().forward(
+                    y_pred.vertex_data[self.value_key],
+                    y_true.vertex_data[self.value_key],
+                    y_pred.vertex_data[self.index_key],
+                    y_true.vertex_data[self.index_key],
+                    y_pred.vertex_data[self.weight_key],
+                    y_true.vertex_data[self.weight_key],
+                )
 
-    def forward(self, a, b, w=None):
-        n = int(0.2 * a.shape[0])
+    return SampledLoss
 
-        error = torch.sum((a - b) ** 2, self.dim)
-        error = error.sort().values
-        low, high = error[:-n], error[-n:]
-        index = low.multinomial(num_samples=n, replacement=False)
-        low = low[index]
+# class MSELoss(torch.nn.Module):
+#     def __init__(self) -> None:
+#         super().__init__()
 
-        return 0.5 * low.mean() + 0.5 * high.mean()
+#     def forward(self, a, b, w=None):
+#         if w is None:
+#             return torch.mean((a - b) ** 2)
+#         else:
+#             return torch.sum(w * (a - b) ** 2) / w.sum()
 
-class MeanNormLoss(torch.nn.Module):
-    def __init__(self, dim=-1) -> None:
-        super().__init__()
-        self.dim = dim
-        # reduction="mean"
-        # self.reduction = reduction
 
-    def forward(self, a, b, w=None):
-        # getattr(T, reduction)()
-        if w is None:
-            return torch.linalg.vec_norm(a - b, dim=self.dim).mean()
-        else:
-            return torch.sum(w * torch.linalg.vec_norm(a - b, dim=self.dim)) / w.sum()
+# class L1Loss(torch.nn.Module):
+#     def __init__(self) -> None:
+#         super().__init__()
+
+#     def forward(self, a, b, w=None):
+#         if w is None:
+#             return torch.abs(a - b).mean()
+#         else:
+#             return torch.sum(w * torch.abs(a - b)) / w.sum()
+
+# class RMSELoss(MSELoss):
+#     def forward(self, *args, **kwargs):
+#         return super().forward(*args, **kwargs).sqrt()
+
+
+# class MSNormLoss(torch.nn.Module):
+#     def __init__(self, dim=-1) -> None:
+#         super().__init__()
+#         self.dim = dim
+#         # reduction="mean"
+#         # self.reduction = reduction
+
+#     def forward(self, a, b, w=None):
+#         if w is None:
+#             return torch.sum((a - b) ** 2, self.dim).mean()
+#         else:
+#             return torch.sum(w * torch.sum((a - b) ** 2, self.dim)) / w.sum()
+
+# class MSNormLossv2(torch.nn.Module):
+#     def __init__(self, dim=-1) -> None:
+#         super().__init__()
+#         self.dim = dim
+#         # reduction="mean"
+#         # self.reduction = reduction
+
+#     def forward(self, a, b, w=None):
+#         n = int(0.2 * a.shape[0])
+
+#         error = torch.sum((a - b) ** 2, self.dim)
+#         error = error.sort().values
+#         low, high = error[:-n], error[-n:]
+#         index = low.multinomial(num_samples=n, replacement=False)
+#         low = low[index]
+
+#         return 0.5 * low.mean() + 0.5 * high.mean()
+
+# class MeanNormLoss(torch.nn.Module):
+#     def __init__(self, dim=-1) -> None:
+#         super().__init__()
+#         self.dim = dim
+#         # reduction="mean"
+#         # self.reduction = reduction
+
+#     def forward(self, a, b, w=None):
+#         # getattr(T, reduction)()
+#         if w is None:
+#             return torch.linalg.vec_norm(a - b, dim=self.dim).mean()
+#         else:
+#             return torch.sum(w * torch.linalg.vec_norm(a - b, dim=self.dim)) / w.sum()
 
 
 # class RMSNormLoss(MSNormLoss):
@@ -85,12 +196,12 @@ class MeanNormLoss(torch.nn.Module):
 #         return super().forward(*args, **kwargs).sqrt()
 
 
-class CosineSimilarityLoss(torch.nn.CosineSimilarity):
-    def __init__(self, dim: int = -1, eps: float = 1e-8) -> None:
-        super().__init__(dim, eps)
+# class CosineSimilarityLoss(torch.nn.CosineSimilarity):
+#     def __init__(self, dim: int = -1, eps: float = 1e-8) -> None:
+#         super().__init__(dim, eps)
 
-    def forward(self, a, b):
-        return torch.mean((1 - super().forward(a, b)) ** 2)
+#     def forward(self, a, b):
+#         return torch.mean((1 - super().forward(a, b)) ** 2)
 
 
 class MatchedDistanceLoss(MSNormLoss):
@@ -280,119 +391,11 @@ class SphericalNormalLoss(MSNormLoss):
         return super().forward(n, bc)
 
 
-def SemiSymmetricLoss(Loss):
-    """Decorator to compute symmetric loss of inputs."""
-
-    class SemiSymmetricLoss(Loss):
-        def __init__(
-            self,
-            sym_weights: list[float] | tuple[float, float] = (0.5, 0.5),
-            *args,
-            **kwargs,
-        ) -> None:
-            """_summary_
-
-            Parameters
-            ----------
-            sym_weights : list[float] | tuple
-                weights[0] is the weight given to the loss from `y_pred` to the
-                corresponding value in `y_true`, i.e,
-                    sym_weights[0] * loss(y_pred, y_true[i_pred]) +
-                    sym_weights[1] * loss(y_true, y_pred[i_true])
-
-            """
-            super().__init__(*args, **kwargs)
-            assert len(sym_weights) == 2 and sum(sym_weights) == 1.0
-            self.w = sym_weights
-
-        def forward(
-            self,
-            y_pred: torch.Tensor,
-            y_true: torch.Tensor,
-            i_pred: torch.IntTensor,
-            i_true: torch.IntTensor,
-            w_pred: None | torch.Tensor = None,
-            w_true: None | torch.Tensor = None,
-        ):
-            """
-            Parameters
-            ----------
-
-            i_pred :
-                Contains indices into `y_true`, i.e., y_true[i_pred[i]] is the
-                item in y_true that corresponds to y_pred[i].
-            i_true :
-                Defined similarly to `i_pred` but contains indices into
-                `y_pred`.
-
-            Returns
-            -------
-
-            """
-
-            if (batch_size := y_pred.shape[0]) > 1:
-                batch_index = torch.arange(batch_size)[:, None]
-                return self.w[0] * super().forward(
-                    y_pred, y_true[batch_index, i_pred], w_pred
-                ) + self.w[1] * super().forward(
-                    y_pred[batch_index, i_true], y_true, w_true
-                )
-            else:
-                p = y_pred.squeeze(0)
-                t = y_true.squeeze(0)
-                w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
-                w_true = w_true.squeeze(0) if w_true is not None else w_true
-                return self.w[0] * super().forward(
-                    p, t[i_pred.squeeze(0)], w_pred
-                ) + self.w[1] * super().forward(p[i_true.squeeze(0)], t, w_true)
-
-    return SemiSymmetricLoss
-
-
-def SampledLoss(Loss):
-    class SampledLoss(Loss):
-        def __init__(
-            self,
-            value_key: str,
-            index_key="sampled_index",
-            weight_key: str | None = None,
-            *args,
-            **kwargs,
-        ) -> None:
-            super().__init__(*args, **kwargs)
-            self.value_key = value_key
-            self.index_key = index_key
-            self.weight_key = weight_key
-
-        def forward(
-            self,
-            y_pred: TemplateSurfaces,
-            y_true: TemplateSurfaces,
-        ):
-            if self.weight_key is None:
-                return super().forward(
-                    y_pred.vertex_data[self.value_key],
-                    y_true.vertex_data[self.value_key],
-                    y_pred.vertex_data[self.index_key],
-                    y_true.vertex_data[self.index_key],
-                )
-
-            else:
-                return super().forward(
-                    y_pred.vertex_data[self.value_key],
-                    y_true.vertex_data[self.value_key],
-                    y_pred.vertex_data[self.index_key],
-                    y_true.vertex_data[self.index_key],
-                    y_pred.vertex_data[self.weight_key],
-                    y_true.vertex_data[self.weight_key],
-                )
-
-    return SampledLoss
 
 
 SemiSymmetricMSNormLoss = SemiSymmetricLoss(MSNormLossv2)
 SemiSymmetricMSELoss = SemiSymmetricLoss(MSELoss)
-SemiSymmetricMeanNormLoss = SemiSymmetricLoss(MeanNormLoss)
+# SemiSymmetricMeanNormLoss = SemiSymmetricLoss(MeanNormLoss)
 SemiSymmetricL1Loss = SemiSymmetricLoss(L1Loss)
 
 SampledSemiSymmetricMSNormLoss = SampledLoss(SemiSymmetricMSNormLoss)
@@ -401,30 +404,9 @@ SampledSemiSymmetricL1Loss = SampledLoss(SemiSymmetricL1Loss)
 SampledSemiSymmetricRMSNormLoss = SampledLoss(SemiSymmetricMeanNormLoss)
 
 
-# class AsymmetricCurvatureAngleLoss(CosineSimilarityLoss):
-#     """Compute the mean squared distance between the sampled points in y_true
-#     and the corresponding (i.e., closest) sampled points in y_pred.
+# REGULARIZATION
 
-#     Penalize the angles between the curvature vectors.
-
-#     """
-
-#     def __init__(self, *args, **kwargs) -> None:
-#         super().__init__(*args, **kwargs)
-
-#     def forward(
-#         self,
-#         y_pred: TemplateSurfaces,
-#         y_true: TemplateSurfaces,
-#     ):
-#         ix = y_pred.batch_ix[:, None]
-#         return super().forward(
-#             y_pred.vertex_data["K_sampled"][ix, y_true.vertex_data["sampled_index"]],
-#             y_true.vertex_data["K_sampled"],
-#         )
-
-
-class FaceNormalConsistencyLoss(MSNormLoss):
+class FaceNormalConsistencyLoss(MSCosSimLoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -435,7 +417,7 @@ class FaceNormalConsistencyLoss(MSNormLoss):
         return super().forward(a, b)
 
 
-class SmoothnessLoss(MSNormLoss):
+class SmoothnessLoss(MSNELoss):
     def __init__(self, dim=-1) -> None:
         """Penalize smoothness of the surface as measured by the Laplacian."""
         super().__init__(dim)
@@ -466,12 +448,10 @@ class SpringForceLoss(MSELoss):
         return super().forward(dp, dt)
 
 
+class VertexToVertexAngleLoss(MSCosSimLoss):
 
 
-class VertexToVertexAngleLoss(torch.nn.CosineSimilarity):
-
-
-    def __init__(self, cutoff = None, dim: int = 2) -> None:
+    def __init__(self, dim: int = -1) -> None:
         """_summary_
 
         DEGREES     COSINE
@@ -507,24 +487,25 @@ class VertexToVertexAngleLoss(torch.nn.CosineSimilarity):
 
         self.inner = "white"
         self.outer = "pial"
-        self.cutoff = cutoff
+        # self.cutoff = cutoff
         # self.cutoff = torch.deg2rad(cutoff_degrees).cos()
 
     def forward(self, y_pred: dict[str, TemplateSurfaces]):
         vw = y_pred[self.inner].vertices
         vp = y_pred[self.outer].vertices
         nw = y_pred[self.inner].compute_vertex_normals()
+        return super().forward(vp-vw, nw)
 
-        cos = super().forward(vp-vw, nw)
+        # cos = super().forward(vp-vw, nw)
 
-        if self.cutoff is not None:
-            cos_valid = cos[cos <= self.cutoff]
-            # avoid empty array
-            loss = (1 - cos_valid)**2 if cos_valid.any() else torch.tensor([0.0], device=cos_valid.device)
-        else:
-            loss = (1 - cos)**2
+        # if self.cutoff is not None:
+        #     cos_valid = cos[cos <= self.cutoff]
+        #     # avoid empty array
+        #     loss = (1 - cos_valid)**2 if cos_valid.any() else torch.tensor([0.0], device=cos_valid.device)
+        # else:
+        #     loss = (1 - cos)**2
 
-        return loss.mean() # cos, loss,
+        # return loss.mean() # cos, loss,
 
 
 class EdgeLengthVarianceLoss(torch.nn.Module):
@@ -555,6 +536,24 @@ class EdgeLengthVarianceLoss(torch.nn.Module):
         # mean squared difference to the mean
         return torch.mean(torch.sum((edge_length_mu1 - 1) ** 2, 1) / n)
 
+
+# OTHER
+
+class SelfIntersectionCount(torch.nn.Module):
+    def __init__(self, normalize: bool = True):
+        super().__init__()
+        self.normalize = normalize
+
+    def forward(self, surface: TemplateSurfaces):
+        if surface.n_batch == 1:
+            _, n = surface.compute_self_intersections()
+        else:
+            n = torch.mean(
+                torch.stack(
+                    [i for _, i in surface.compute_self_intersections()]
+                ).float()
+            )
+        return 100.0 * n / surface.topology.n_vertices if self.normalize else n
 
 
 # class SymmetricThicknessLoss(SemiSymmetricMSNormLoss):
@@ -617,50 +616,3 @@ class EdgeLengthVarianceLoss(torch.nn.Module):
 #             y_pred[self.outer].vertex_data["sampled_index"],
 #             y_true[self.outer].vertex_data["sampled_index"],
 #         )
-
-
-# class CurvatureWeightedHingeLoss(MeanSquaredNormLoss):
-#     def __init__(self, *args, **kwargs) -> None:
-#         super().__init__(*args, **kwargs)
-
-#     def forward(self, y_pred, y_true):
-#         y_true.vertex_data["face_absH"]
-#         y_true.vertex_data["index"]
-#         y_pred.topology.faces_to_edges
-
-#         normals = y_pred.compute_face_normals()
-#         edge_face_normals = normals[:, y_pred.topology.face_adjacency]
-#         a, b = edge_face_normals.unbind(2)
-#         return super().forward(a, b)
-
-
-# class MeanCurvatureVarianceLoss(MSELoss):
-#     def __init__(self, *args, **kwargs) -> None:
-#         """Variance of normalized mean curvature."""
-#         super().__init__(*args, **kwargs)
-
-#     def forward(self, y_pred: TemplateSurfaces):
-#         K = y_pred.compute_laplace_beltrami_operator()
-#         cp = y_pred.compute_mean_curvature(K)  # , signed=False
-#         n = cp.shape[1]
-#         # new mean is 1
-#         cp_mu1 = cp * n / cp.sum(1)[:, None]
-#         # mean squared difference to the mean
-#         return torch.mean(torch.sum((cp_mu1 - 1) ** 2, 1) / n)
-
-
-class SelfIntersectionCount(torch.nn.Module):
-    def __init__(self, normalize: bool = True):
-        super().__init__()
-        self.normalize = normalize
-
-    def forward(self, surface: TemplateSurfaces):
-        if surface.n_batch == 1:
-            _, n = surface.compute_self_intersections()
-        else:
-            n = torch.mean(
-                torch.stack(
-                    [i for _, i in surface.compute_self_intersections()]
-                ).float()
-            )
-        return 100.0 * n / surface.topology.n_vertices if self.normalize else n
