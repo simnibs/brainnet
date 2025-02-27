@@ -11,22 +11,24 @@ if not have_cuda:
     print("ERROR: cuda is not available.")
     exit()
 
+print(f"CUDA version detected: {torch.version.cuda}")
+
+# To install cuda development kit, use
+#
+#   conda install -c conda-forge cuda-toolkit={cuda_version}
+#
 # cd into this folder then execute
 #
 #   python build.py build_ext --inplace
 
-# CUDA_HOME = env base directory
-
 cpp_std = 17 # 20
 
-# base_dir = Path("/mrhome/jesperdn/repositories/SuperSynth")
-# src_dir = base_dir / "ext" / "graph" / "cuda"
 src_dir = Path(__file__).parent.resolve()
 
 include_dirs = []
 
 # only CONDA_PREFIX/lib is included in runtime dirs
-runtime_library_dirs = [torch.utils.cpp_extension.library_paths(cuda=True)]
+runtime_library_dirs = torch.utils.cpp_extension.library_paths("cuda")
 
 sources = ["extensions.cpp", "nearest_neighbor.cu", "self_intersections.cu"]
 sources = [src_dir / f for f in sources]

@@ -1,3 +1,4 @@
+from collections import defaultdict
 import copy
 from pathlib import Path
 from typing import Callable
@@ -44,7 +45,6 @@ def wandb_finish(engine, logger):
 
 
 def multiply_loss_weight(engine, loss_weights):
-
     for k, v in action_dict.items():
         # multiplyloss key to value
         ...
@@ -151,7 +151,7 @@ class TerminalLogger:
         #     s += " | ".join([self._fmt_loss.format(x, y) for x, y in vv.items()])
         #     s += "\n"
         # return s
-        for kk,vv in loss.items():
+        for kk, vv in loss.items():
             s += f"{self._fmt_name.format(kk)}"
             s += " : "
             s += " | ".join([self._fmt_loss.format(x, y) for x, y in vv.items()])
@@ -188,7 +188,6 @@ class MetricLogger(TerminalLogger):
             self.header = ""
 
     def __call__(self, engine):
-
         epoch = engine.state.epoch  # from trainer (!)
         # iteration = engine.state.iteration   # from engine - basically just n_iter
 
@@ -242,6 +241,11 @@ def optimizer_multiply_lr(engine, factor):
             param_group["lr"] *= gr_factor
 
 
+def optimizer_reset(engine):
+    """Reset the adaptive parameters."""
+    print("Resetting optimizer state")
+    engine._process_function.optimizer.state = defaultdict(dict, {})
+
 # WANDB LOGGING
 
 
@@ -274,13 +278,14 @@ def write_metric(engine, name, out_dir: Path):
     metric = engine.state.metrics[name]
     metric.to_pickle(out_dir / (name + ".pickle"))
 
+
 def write_surface(
     surfaces: dict, vol_info: dict, out_dir: Path, prefix: str, tag: str, label: str
 ):
     for hemi, s in surfaces.items():
         for surf, ss in s.items():
             f = ss.faces.detach().to(torch.int).cpu().numpy()
-            for i,v in enumerate(ss.vertices):
+            for i, v in enumerate(ss.vertices):
                 name = ".".join([prefix, tag, hemi, surf, label, f"{i:02d}"])
 
                 nib.freesurfer.write_geometry(
@@ -290,20 +295,20 @@ def write_surface(
                     volume_info=vol_info,
                 )
 
+
 def write_volume(
     vol: torch.Tensor, affine, out_dir: Path, prefix: str, tag: str, label: None | str
 ):
     ext = "nii.gz"
     # intensity_norm = IntensityNormalization()
 
-    for i,v in enumerate(vol.detach()): # loop over batch
+    for i, v in enumerate(vol.detach()):  # loop over batch
         if label is None:
             name = ".".join((prefix, tag, f"{i:02d}", ext))
         else:
             name = ".".join((prefix, tag, label, f"{i:02d}", ext))
 
         if v.is_floating_point():
-
             # v = v.float()
             # ql = v.amin()
             # qu = v.amax()
@@ -343,21 +348,3 @@ def write_example(
                         write_surface(v, vol_info, config.examples_dir, st, k, label)
                     else:
                         write_volume(v, affine, config.examples_dir, st, k, label)
-
-def write_surfaces(
-    engine: Engine,
-    evaluators: dict[str, Engine],
-    config: brainnet.config.ResultsParameters,
-):
-    vol_info = copy.deepcopy(FREESURFER_VOLUME_INFO)
-    vol_info["volume"] = (256, 256, 256)
-
-    k = "surface"
-    for prefix, e in (dict(trainer=engine) | evaluators).items():
-        _, _, y_pred, y_true = e.state.output
-
-        st = f"epoch-{engine.state.epoch:05d}.{prefix}"
-
-        if config.examples_keys is None or k in config.examples_keys:
-            for label, y in zip(("pred", "true"), (y_pred, y_true)):
-                write_surface(y[k], vol_info, config.examples_dir, st, k, label)

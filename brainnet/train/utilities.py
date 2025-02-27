@@ -67,7 +67,7 @@ def add_model_checkpoint(
     engine.add_event_handler(config.save_checkpoint_on, model_checkpoint, to_save)
 
 
-def load_checkpoint(to_load, train_setup):
+def load_checkpoint_from_setup(to_load, train_setup):
     if train_setup.train_params.load_checkpoint != 0:
         ckpt_name = train_setup.results.checkpoint_filename_pattern.format(
             filename_prefix=train_setup.results.checkpoint_prefix,
@@ -76,8 +76,12 @@ def load_checkpoint(to_load, train_setup):
         )
         print(f"Loading checkpoint {ckpt_name}")
         ckpt = train_setup.results._from_checkpoint_dir / ckpt_name
-        ckpt = torch.load(ckpt, map_location=train_setup.device)
-        ModelCheckpoint.load_objects(to_load, ckpt)
+        load_checkpoint(to_load, ckpt, train_setup.device)
+
+
+def load_checkpoint(to_load, ckpt, device):
+    ckpt = torch.load(ckpt, map_location=device)
+    ModelCheckpoint.load_objects(to_load, ckpt)
 
 
 def add_wandb_logger(engine, evaluators, config: brainnet.config.WandbParameters):

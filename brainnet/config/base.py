@@ -45,7 +45,11 @@ class DatasetParameters:
 class EventAction:
     event: CallableEventWithFilter
     handler: Callable
-    kwargs: dict | None # kwargs passed to handler (besides engine)
+    kwargs: dict | None = None # kwargs passed to handler (besides engine)
+
+    def __post_init__(self):
+        if self.kwargs is None:
+            self.kwargs = {}
 
 @dataclass
 class ModelParameters:
@@ -88,7 +92,7 @@ class ResultsParameters:
     # Which images/surfaces to write when writing examples
     # The image used for prediction is called "x". None -> write everything
     examples_keys: list[str] | None = None
-    save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
+    save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=50)
     save_example_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
     checkpoint_filename_pattern: str = "{filename_prefix}_{name}_{global_step:05d}.pt"
     require_empty: bool = False # require that checkpoints do not already exist

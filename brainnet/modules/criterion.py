@@ -104,8 +104,9 @@ class Criterion(torch.nn.Module):
             isinstance(
                 self.loss_functions[head][loss].loss_fn,
                 (
-                    brainnet.modules.losses_surface.SymmetricSampledMSELoss,
-                    brainnet.modules.losses_surface.SymmetricSampledNormLoss,
+                    brainnet.modules.losses_surface.SampledSemiSymmetricL1Loss,
+                    brainnet.modules.losses_surface.SampledSemiSymmetricMSELoss,
+                    brainnet.modules.losses_surface.SampledSemiSymmetricMSNormLoss,
                 ),
             )
             for head, v in self._active_losses.items() for loss in v
@@ -114,8 +115,9 @@ class Criterion(torch.nn.Module):
             isinstance(
                 self.loss_functions[head][loss].loss_fn,
                 (
-                    brainnet.modules.losses_surface.SymmetricSampledMSELoss,
-                    brainnet.modules.losses_surface.SymmetricSampledNormLoss,
+                    brainnet.modules.losses_surface.SampledSemiSymmetricL1Loss,
+                    brainnet.modules.losses_surface.SampledSemiSymmetricMSELoss,
+                    brainnet.modules.losses_surface.SampledSemiSymmetricMSNormLoss,
                 ),
             ) and self.loss_functions[head][loss].loss_fn.value_key == "sampled_H"
             for head, v in self._active_losses.items() for loss in v
@@ -202,7 +204,7 @@ class Criterion(torch.nn.Module):
         #     pial = (0.001, 0.999),
         # )
 
-        H_clip_to_values = (-20, 20)
+        H_clip_to_values = (-10, 10)
 
         sampled_index = "sampled_index"
         sampled_points = "sampled_P"
@@ -271,29 +273,23 @@ class Criterion(torch.nn.Module):
         # set_medial_wall_weights: bool = False,
     ):
         if self._needs_curvature:
-            if taubin_smoothing:
-                vo = torch.empty_like(surface.vertices)
-                vo = vo.copy_(surface.vertices)
-
-                surface.vertices = surface.smooth_taubin(a=0.9, b=-0.95, inplace=True)
+            # if taubin_smoothing:
+            #     vo = torch.empty_like(surface.vertices)
+            #     vo = vo.copy_(surface.vertices)
+            #     surface.vertices = surface.smooth_taubin(a=0.9, b=-0.95, inplace=True)
 
             K = surface.compute_laplace_beltrami_operator()
             H = surface.compute_mean_curvature(K)
 
-            # do it explicitly here as compute_mean_curvature also calculates
-            # vertex normals
-            # N = surface.compute_vertex_normals()
-            # H = 0.5 * torch.sum(N * K, -1)
+            # Smooth the curvature estimate
+            if taubin_smoothing:
+                H = surface.smooth_taubin(H)
 
-            # if H_clip_to_percentile:
-            #     H.clamp_(
-            #         *H.quantile(torch.tensor(H_clip_to_percentile, device=H.device))
-            #     )
             if H_clip_to_values is not None:
                 H.clamp_(*H_clip_to_values)
 
-            if taubin_smoothing:
-                surface.vertices = vo
+            # if taubin_smoothing:
+            #     surface.vertices = vo
 
         points, samp_face, samp_coo = surface.sample_points(
             n_samples,
