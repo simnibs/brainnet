@@ -3,8 +3,7 @@ import torch
 from brainnet.mesh.surface import TemplateSurfaces
 from brainnet import sphere_utils
 
-# Norm loss = 3 * MSE loss
-from brainnet.modules.losses import MSELoss, MSNELoss, MSCosSimLoss
+from brainnet.modules.losses import L1Loss, MSELoss, MSNELoss, MSCosSimLoss, SemiHardSNELoss
 
 
 # DECORATORS
@@ -204,7 +203,7 @@ def SampledLoss(Loss):
 #         return torch.mean((1 - super().forward(a, b)) ** 2)
 
 
-class MatchedDistanceLoss(MSNormLoss):
+class MatchedDistanceLoss(MSNELoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -255,44 +254,44 @@ class MatchedDistanceLoss(MSNormLoss):
 #         return super().forward(y_pred.vertices, y_true.vertices, weights)
 
 
-class SurfaceRMSELoss(RMSELoss):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+# class SurfaceRMSELoss(RMSELoss):
+#     def __init__(self, *args, **kwargs) -> None:
+#         super().__init__(*args, **kwargs)
 
-    def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
-        """Average (squared) distance between matched vertices of surfaces a and b.
+#     def forward(self, y_pred: TemplateSurfaces, y_true: TemplateSurfaces):
+#         """Average (squared) distance between matched vertices of surfaces a and b.
 
-        Parameters
-        ----------
-        surface_a : TemplateSurfaces
-            First surface
-        surface_b : TemplateSurfaces
-            Second surface.
+#         Parameters
+#         ----------
+#         surface_a : TemplateSurfaces
+#             First surface
+#         surface_b : TemplateSurfaces
+#             Second surface.
 
-        Returns
-        -------
-        loss
-            _description_
-        """
-        weights = (
-            y_true.vertex_data["weights"] if "weights" in y_true.vertex_data else None
-        )
-        return super().forward(y_pred.vertices, y_true.vertices, weights)
+#         Returns
+#         -------
+#         loss
+#             _description_
+#         """
+#         weights = (
+#             y_true.vertex_data["weights"] if "weights" in y_true.vertex_data else None
+#         )
+#         return super().forward(y_pred.vertices, y_true.vertices, weights)
 
 
-class SurfaceEdgeRMSELoss(RMSELoss):
-    def __init__(self) -> None:
-        super().__init__()
+# class SurfaceEdgeRMSELoss(RMSELoss):
+#     def __init__(self) -> None:
+#         super().__init__()
 
-    def forward(self, y_pred, y_true):
-        # (n_batch, n_vertices, v_per_edge (= 2), coordinates)
-        edges = y_pred.vertices[:, y_pred.topology.vertex_adjacency]
-        y_pred_dist = edges.diff(dim=2).norm(dim=3)
+#     def forward(self, y_pred, y_true):
+#         # (n_batch, n_vertices, v_per_edge (= 2), coordinates)
+#         edges = y_pred.vertices[:, y_pred.topology.vertex_adjacency]
+#         y_pred_dist = edges.diff(dim=2).norm(dim=3)
 
-        edges = y_true.vertices[:, y_true.topology.vertex_adjacency]
-        y_true_dist = edges.diff(dim=2).norm(dim=3)
+#         edges = y_true.vertices[:, y_true.topology.vertex_adjacency]
+#         y_true_dist = edges.diff(dim=2).norm(dim=3)
 
-        return super().forward(y_pred_dist, y_true_dist)
+#         return super().forward(y_pred_dist, y_true_dist)
 
 
 class CentralAngleLoss(torch.nn.Module):
@@ -357,23 +356,23 @@ class SphericalAxisAlignedArcLoss(torch.nn.Module):
         return self._tensor_loss(y_pred.vertices, y_true.vertices)
 
 
-class SphericalEdgeLoss(RMSELoss):
-    def __init__(self, radius: float | None = None) -> None:
-        super().__init__()
-        self.saaa = SphericalAxisAlignedArcLoss_tensor(radius)
+# class SphericalEdgeLoss(RMSELoss):
+#     def __init__(self, radius: float | None = None) -> None:
+#         super().__init__()
+#         self.saaa = SphericalAxisAlignedArcLoss_tensor(radius)
 
-    def forward(self, y_pred, y_true):
-        # (n_batch, n_vertices, v_per_edge (= 2), coordinates)
-        edge_vertices = y_pred.vertices[:, y_pred.topology.vertex_adjacency]
-        y_pred_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
+#     def forward(self, y_pred, y_true):
+#         # (n_batch, n_vertices, v_per_edge (= 2), coordinates)
+#         edge_vertices = y_pred.vertices[:, y_pred.topology.vertex_adjacency]
+#         y_pred_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
 
-        edge_vertices = y_true.vertices[:, y_true.topology.vertex_adjacency]
-        y_true_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
+#         edge_vertices = y_true.vertices[:, y_true.topology.vertex_adjacency]
+#         y_true_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
 
-        return super().forward(y_pred_dist, y_true_dist)
+#         return super().forward(y_pred_dist, y_true_dist)
 
 
-class SphericalNormalLoss(MSNormLoss):
+class SphericalNormalLoss(MSNELoss):
     def __init__(self) -> None:
         super().__init__()
 
@@ -391,22 +390,26 @@ class SphericalNormalLoss(MSNormLoss):
         return super().forward(n, bc)
 
 
-
-
-SemiSymmetricMSNormLoss = SemiSymmetricLoss(MSNormLossv2)
 SemiSymmetricMSELoss = SemiSymmetricLoss(MSELoss)
-# SemiSymmetricMeanNormLoss = SemiSymmetricLoss(MeanNormLoss)
-SemiSymmetricL1Loss = SemiSymmetricLoss(L1Loss)
-
-SampledSemiSymmetricMSNormLoss = SampledLoss(SemiSymmetricMSNormLoss)
 SampledSemiSymmetricMSELoss = SampledLoss(SemiSymmetricMSELoss)
+
+SemiSymmetricMSNELoss = SemiSymmetricLoss(MSNELoss)
+SampledSemiSymmetricMSNormLoss = SampledLoss(SemiSymmetricMSNELoss)
+
+SemiSymmetricL1Loss = SemiSymmetricLoss(L1Loss)
 SampledSemiSymmetricL1Loss = SampledLoss(SemiSymmetricL1Loss)
-SampledSemiSymmetricRMSNormLoss = SampledLoss(SemiSymmetricMeanNormLoss)
+
+SemiSymmetricCosSimLoss = SemiSymmetricLoss(MSCosSimLoss)
+SampledSemiSymmetricCosSimLoss = SampledLoss(SemiSymmetricCosSimLoss)
+
+# SemiHard
+SemiSymmetricSemiHardNELoss = SemiSymmetricLoss(SemiHardSNELoss)
+SampledSemiSymmetricSemiHardSNormLoss = SampledLoss(SemiSymmetricSemiHardNELoss)
 
 
 # REGULARIZATION
 
-class FaceNormalConsistencyLoss(MSCosSimLoss):
+class FaceNormalConsistencyLoss(MSNELoss): # MSCosSimLoss
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -508,7 +511,7 @@ class VertexToVertexAngleLoss(MSCosSimLoss):
         # return loss.mean() # cos, loss,
 
 
-class EdgeLengthVarianceLoss(torch.nn.Module):
+class EdgeLengthVarianceLoss(MSELoss):
     def __init__(self):
         super().__init__()
 
@@ -533,8 +536,8 @@ class EdgeLengthVarianceLoss(torch.nn.Module):
         n = edge_length.shape[1]
         # new mean is 1
         edge_length_mu1 = edge_length * n / edge_length.sum(1)[:, None]
-        # mean squared difference to the mean
-        return torch.mean(torch.sum((edge_length_mu1 - 1) ** 2, 1) / n)
+        # MSE to the mean
+        return super().forward(edge_length_mu1, 1)
 
 
 # OTHER
