@@ -46,9 +46,11 @@ class UNet(torch.nn.Module):
         in_channels: int,
         encoder_channels: list[list[int]],
         decoder_channels: list[list[int]],
-        max_pool_size: int = 2,
         return_encoder_features: (None | list[bool]) = None,
         return_decoder_features: None | list[bool] = None,
+        max_pool_size: int = 2,
+        encoder_post: list[list[int]] | None = None,
+        decoder_post: list[list[int]] | None = None,
     ):
         """_summary_
 
@@ -68,8 +70,21 @@ class UNet(torch.nn.Module):
             The features from the final layer are *always* returned.
         """
         super().__init__()
-
+        d = spatial_dims
         self.num_levels = len(encoder_channels)
+
+        if encoder_post is None:
+            encoder_post = [[None]] * self.num_levels
+        if decoder_post is None:
+            decoder_post = [[None]] * (self.num_levels - 1)
+        assert (
+            isinstance(encoder_post, (list, tuple))
+            and len(encoder_post) == self.num_levels
+        )
+        assert (
+            isinstance(decoder_post, (list, tuple))
+            and len(decoder_post) == self.num_levels - 1
+        )
 
         if return_encoder_features is not None:
             self.return_encoder_features = return_encoder_features
@@ -94,32 +109,40 @@ class UNet(torch.nn.Module):
         # Encoder (downsampling path)
         in_ch = in_channels
         skip_connections = []
-        self.encoder = torch.nn.ModuleList()
+
+        self.encoder = torch.nn.ModuleDict()
+        self.encoder_post = torch.nn.ModuleDict()
         self.encoder_scale = []
-        for i, level in enumerate(encoder_channels):
-            conv_block = torch.nn.ModuleList()
-            for out_ch in level:
-                conv_block.append(ConvBlock(spatial_dims, in_ch, out_ch))
-                in_ch = out_ch
-            self.encoder.append(conv_block)
+        for i, e_chs in enumerate(encoder_channels):
+            self.encoder[f"enc:{i}"], out_ch = self.make_conv_block(d, in_ch, e_chs)
             # Add skip connection
             if i < (self.num_levels - 1):
-                skip_connections.append(in_ch)
+                skip_connections.append(out_ch)
             self.encoder_scale.append(int(max_pool_size**i))
+            in_ch = out_ch
+            # Post processing
+            if self.return_encoder_features[i]:
+                self.encoder_post[f"enc:{i}"], _ = self.make_conv_block(
+                    d, out_ch, encoder_post[i]
+                )
 
         # Decoder (upsampling path)
-        self.decoder = torch.nn.ModuleList()
+        self.decoder = torch.nn.ModuleDict()
+        self.decoder_post = torch.nn.ModuleDict()
         self.decoder_scale = []
         scale = self.encoder_scale[-1]
-        for i, level in enumerate(decoder_channels):
+        for i, d_chs in enumerate(decoder_channels):
+
             in_ch += skip_connections.pop()
-            conv_block = torch.nn.ModuleList()
-            for out_ch in level:
-                conv_block.append(ConvBlock(spatial_dims, in_ch, out_ch))
-                in_ch = out_ch
-            self.decoder.append(conv_block)
+            self.decoder[f"dec:{i}"], out_ch = self.make_conv_block(d, in_ch, d_chs)
             scale /= max_pool_size
             self.decoder_scale.append(int(scale))
+            in_ch = out_ch
+            # Post processing
+            if self.return_decoder_features[i]:
+                self.decoder_post[f"dec:{i}"], _ = self.make_conv_block(
+                    d, out_ch, decoder_post[i]
+                )
 
         self.final_channels = out_ch
 
@@ -131,18 +154,27 @@ class UNet(torch.nn.Module):
             )
             if i
         ]
-        self.num_features = {
-            f"encoder:{i}": n[-1] for i, n in enumerate(encoder_channels)
-        }
-        self.num_features |= {
-            f"decoder:{i}": n[-1] for i, n in enumerate(decoder_channels)
-        }
+        self.num_features = {f"enc:{i}": n[-1] for i, n in enumerate(encoder_channels)}
+        self.num_features |= {f"dec:{i}": n[-1] for i, n in enumerate(decoder_channels)}
 
-        self.encoder_features = [f"encoder:{i}" for i,b in enumerate(self.return_encoder_features) if b]
-        self.decoder_features = [f"decoder:{i}" for i,b in enumerate(self.return_decoder_features) if b]
+        self.encoder_features = [
+            f"enc:{i}" for i, b in enumerate(self.return_encoder_features) if b
+        ]
+        self.decoder_features = [
+            f"dec:{i}" for i, b in enumerate(self.return_decoder_features) if b
+        ]
 
         # self.feature_scales = {f"{self._fm_name['encoder'](i)}": n for i,n in enumerate(self.encoder_scale)}
         # self.feature_scales |= {f"{self._fm_name['decoder'](i)}": n for i,n in enumerate(self.decoder_scale)}
+
+    @staticmethod
+    def make_conv_block(spatial_dims, in_ch, channels: list[int] | tuple | None = None):
+        conv_block = torch.nn.Sequential()
+        if channels[0] is not None:
+            for out_ch in channels:
+                conv_block.append(ConvBlock(spatial_dims, in_ch, out_ch))
+                in_ch = out_ch
+        return conv_block, in_ch
 
     def upsample_feature(self, feature, scale):
         return torch.nn.functional.interpolate(
@@ -185,24 +217,22 @@ class UNet(torch.nn.Module):
 
         # Encoder
         skip_connections = []
-        for i, conv_blocks in enumerate(self.encoder):
-            for block in conv_blocks:
-                features = block(features)
+        for i, (name, conv_blocks) in enumerate(self.encoder.items()):
+            features = conv_blocks(features)
             if self.return_encoder_features[i]:
-                unet_features[f"encoder:{i}"] = features
+                unet_features[name] = self.encoder_post[name](features)
             # Pool
             if i < (self.num_levels - 1):
                 skip_connections.append(features)
                 features = self.pooling(features)
 
         # Decoder
-        for i, conv_blocks in enumerate(self.decoder):
+        for i, (name, conv_blocks) in enumerate(self.decoder.items()):
             features = self.upsampling(features)
             features = torch.cat([features, skip_connections.pop()], dim=1)
-            for block in conv_blocks:
-                features = block(features)
+            features = conv_blocks(features)
             # the last features are returned anyway
             if self.return_decoder_features[i] and not i == (self.num_levels - 1):
-                unet_features[f"decoder:{i}"] = features
+                unet_features[name] = self.decoder_post[name](features)
 
         return unet_features
