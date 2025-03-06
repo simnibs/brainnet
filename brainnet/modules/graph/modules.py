@@ -99,7 +99,7 @@ class SurfaceModule(torch.nn.Module):
 
         # The last feature map has the same spatial dimensions as the input
         # image
-        self.set_image_center(features["decoder:3"])
+        self.set_image_center(tuple(features.values())[-1])
 
         return {
             h: self._forward_hemi(features, v) for h, v in template_vertices.items()
@@ -109,7 +109,7 @@ class SurfaceModule(torch.nn.Module):
         """Predict placement of white matter surface and pial surface.."""
 
         # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
-        # (feature) dimension and normalize
+        # (feature) dimension
         vertices = vertices.mT
 
         white_vertices = self._estimate_white(features, vertices)
@@ -122,31 +122,43 @@ class SurfaceModule(torch.nn.Module):
         return dict(white=white_vertices, pial=pial_vertices)
 
     def _get_features(self, features, maps):
-        return torch.cat([features[m] for m in maps], dim=1)
+        # return (torch.cat([features[m] for m in maps], dim=1), )
+        return tuple(features[m] for m in maps)
 
     def _estimate_white(self, features: dict[str, torch.Tensor], v: torch.Tensor):
         for order in self.active_topologies:
             step_size = self.white_step_size[order]
             deform = self.white_deform[str(order)]
-            fmap = self._get_features(features, self.white_feature_maps[order])
+            fmaps = self._get_features(features, self.white_feature_maps[order])
             for _ in range(self.white_n_steps[order]):
-                v_features = self.grid_sample(fmap, v)
-                v = v + step_size * deform(v_features)
+                v_features = self.grid_sample_features(fmaps, v)
+                v = self.solve_ode_euler(step_size, v, deform(v_features))
             if order < self.out_order:
                 v = self.topologies[order].subdivide_vertices(v)
         return v
 
     def _esimate_pial(self, features: dict[str, torch.Tensor], v: torch.Tensor):
-        fmap = self._get_features(features, self.pial_feature_maps)
+        fmaps = self._get_features(features, self.pial_feature_maps)
         for _ in range(self.pial_n_steps):
-            v_features = self.grid_sample(fmap, v)
-            v = v + self.pial_step_size * self.pial_deform(v_features)
+            v_features = self.grid_sample_features(fmaps, v)
+            v = self.solve_ode_euler(self.pial_step_size, v, self.pial_deform(v_features))
         return v
 
+    def solve_ode_euler(self, h, v, dv):
+        """Solve dv/dt = f(t, v) using Euler's method."""
+        return v + h * dv
+
+    # def solve_ode_RK4(self, h, v, dv):
+    #     k1 = dv
+    #     k2 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k1))
+    #     k3 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k2))
+    #     k4 = self.pial_deform(self.grid_sample_features(fmaps, v + h * k3))
+    #     return v + h/6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
     def grid_sample_features(
-        self, features: list[torch.Tensor], vertices: torch.Tensor
+        self, features: list[torch.Tensor] | tuple, vertices: torch.Tensor
     ):
-        return torch.cat([self.grid_sample(f, vertices) for f in features], dim=1)
+        return torch.cat(tuple(self.grid_sample(f, vertices) for f in features), dim=1)
 
     def grid_sample(self, image, vertices):
         """
@@ -163,15 +175,7 @@ class SurfaceModule(torch.nn.Module):
         samples :
             samples shape (N, C, M)
         """
-
         # vertices are in voxel coordinates
-
-        # Transform vertices from (0, shape) to (-half_shape, half_shape), then
-        # normalize to [-1, 1]
-        # half_shape = (torch.as_tensor(image.shape[-3:], device=image.device) - 1) / 2
-        # points = (vertices.mT - half_shape) / half_shape # N,3,M -> N,M,3
-
-        # points = vertices.mT
         vertices = self.normalize_coordinates(vertices)
 
         # samples is N,C,D,H,W where C is from `image` and D,H,W are from `points`
@@ -183,22 +187,35 @@ class SurfaceModule(torch.nn.Module):
         )
         return samples[..., 0, 0]  # squeeze out H, W
 
+    @staticmethod
+    def get_image_shape(image):
+        return torch.tensor(image.shape[-3:], device=image.device)
+
+    def get_image_center(self, image_shape):
+        return 0.5 * (image_shape[None, :, None] - 1.0)
+
     def set_image_center(self, image):
         """This is used with grid sampling when align_corners=True."""
-        self._image_shape = torch.tensor(image.shape[-3:], device=image.device)
-        center = 0.5 * (self._image_shape - 1.0)
-        self._image_center = center[None, :, None]
+        self._image_shape = self.get_image_shape(image)
+        self._image_center = self.get_image_center(self._image_shape)
 
-    def normalize_coordinates(self, coords):
+    def normalize_coordinates(self, coords, image: None | torch.Tensor = None):
         # vertices are in voxel coordinates
 
         # Transform vertices from (0, shape) to (-half_shape, half_shape), then
         # normalize to [-1, 1]
-        return (coords - self._image_center) / self._image_center
+        if image is None:
+            return (coords - self._image_center) / self._image_center
+        else:
+            center = self.get_image_center(self.get_image_shape(image))
+            return (coords - center) / center
 
-    def unnormalize_coordinates(self, coords):
-        return self._image_center * coords + self._image_center
-
+    def unnormalize_coordinates(self, coords, image: None | torch.Tensor = None):
+        if image is None:
+            return self._image_center * coords + self._image_center
+        else:
+            center = self.get_image_center(self.get_image_shape(image))
+            return center * coords + center
 
 def make_unet_channels(in_channels: int, depth: int, multiplier: int = 2) -> dict:
     """Construct Unet hierarchy"""

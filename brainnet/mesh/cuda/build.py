@@ -36,6 +36,11 @@ sources = [src_dir / f for f in sources]
 # nvcc
 macros = [("WITH_CUDA", None), ("THRUST_IGNORE_CUB_VERSION_CHECK", None)]
 
+# environment variable defining arch to compile for
+# (https://stackoverflow.com/questions/68496906/pytorch-installation-for-different-cuda-architectures)
+# here for Ampere and Ada
+# TORCH_CUDA_ARCH_LIST="8.0 8.6 8.7	8.9"
+
 nvcc_args = [
     "-DCUDA_HAS_FP16=1",
     "-D__CUDA_NO_HALF_OPERATORS__",

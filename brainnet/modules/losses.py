@@ -78,6 +78,9 @@ def SemiHardReduction(Loss):
             self.upper_split = upper_split
 
         def forward(self, y_pred, y_true, weight=None):
+            y_pred = y_pred[None]
+            y_true = y_true[None]
+
             B,N = y_pred.shape[:2]
             n = int(self.upper_split * N)
             ix = torch.arange(B, device=y_pred.device)[:, None]
@@ -85,7 +88,7 @@ def SemiHardReduction(Loss):
             error = super().forward(y_pred, y_true)
             if weight is not None:
                 error = error * weight
-            error, error_index = error.sort(dim=1)
+            error, error_index = error.sort(dim=-1)
 
             low, high = error[:, :-n], error[:, -n:]
             # just sample indices once and reuse for all samples in batch

@@ -150,7 +150,6 @@ def convolution_block(Convolution):
 GraphConvolutionBlock = convolution_block(GraphConvolution)
 EdgeConvolutionBlock = convolution_block(EdgeConvolution)
 
-
 class ResidualGraphConvolution(torch.nn.Module):
     def __init__(
         self,
@@ -182,7 +181,7 @@ class ResidualGraphConvolution(torch.nn.Module):
         return features
 
 
-class GraphConvolutionDeformationBlock(torch.nn.Module):
+class GraphConvolutionDeformationBlock(torch.nn.Sequential):
     def __init__(
         self,
         in_channels: int,
@@ -190,9 +189,10 @@ class GraphConvolutionDeformationBlock(torch.nn.Module):
         out_channels: int,
         reduce_index,
         gather_index,
+        **kwargs,
     ) -> None:
         super().__init__()
-        kw = dict(reduce_index=reduce_index, gather_index=gather_index)
+        kw = dict(reduce_index=reduce_index, gather_index=gather_index, **kwargs)
         # input features -> features
         # features -> features
         for i, (in_ch, out_ch) in enumerate(
@@ -208,7 +208,7 @@ class GraphConvolutionDeformationBlock(torch.nn.Module):
         )
 
 
-class EdgeConvolutionDeformationBlock(torch.nn.Module):
+class EdgeConvolutionDeformationBlock(torch.nn.Sequential):
     def __init__(
         self,
         in_channels: int,
@@ -216,9 +216,10 @@ class EdgeConvolutionDeformationBlock(torch.nn.Module):
         out_channels: int,
         reduce_index,
         gather_index,
+        **kwargs,
     ) -> None:
         super().__init__()
-        kw = dict(reduce_index=reduce_index, gather_index=gather_index)
+        kw = dict(reduce_index=reduce_index, gather_index=gather_index, **kwargs)
         # input features -> features
         # features -> features
         for i, (in_ch, out_ch) in enumerate(
@@ -234,7 +235,7 @@ class EdgeConvolutionDeformationBlock(torch.nn.Module):
         )
 
 
-class ResidualGraphConvolutionDeformationBlock(torch.nn.Module):
+class ResidualGraphConvolutionDeformationBlock(torch.nn.Sequential):
     def __init__(
         self,
         in_channels: int,
