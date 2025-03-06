@@ -14,14 +14,8 @@ class TopoFit(SurfaceModule):
     ) -> None:
         super().__init__(*args, **kwargs)
 
-        white_channels = (
-            dict(
-                encoder=[96, 96, 96, 96],
-                decoder=[96, 96, 96],
-            )
-            if white_channels is None
-            else white_channels
-        )
+        if white_channels is None:
+            white_channels = dict(encoder=[64,64,64,64], decoder=[64,64,64])
         pial_channels = [32] if pial_channels is None else pial_channels
 
         UNetTransform_kwargs = dict(channels=white_channels)

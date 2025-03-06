@@ -77,11 +77,24 @@ def load_checkpoint_from_setup(to_load, train_setup):
         print(f"Loading checkpoint {ckpt_name}")
         ckpt = train_setup.results._from_checkpoint_dir / ckpt_name
         load_checkpoint(to_load, ckpt, train_setup.device)
+    else:
+        state_dict = {}
+        if (ckpt := train_setup.results.load_body_from_checkpoint) is not None:
+            print(f"Loading parameters for body from {ckpt}")
+            checkpoint_obj = torch.load(ckpt, map_location=train_setup.device)["model"]
+            state_dict.update({k:v for k,v in checkpoint_obj.items() if k.startswith("body")})
+        if (ckpt := train_setup.results.load_head_from_checkpoint) is not None:
+            print(f"Loading parameters for heads from {ckpt}")
+            checkpoint_obj = torch.load(ckpt, map_location=train_setup.device)["model"]
+            state_dict.update({k:v for k,v in checkpoint_obj.items() if k.startswith("heads")})
+        # model.load_state_dict(checkpoint_obj, **kwargs)
+        ModelCheckpoint.load_objects(
+            dict(model=to_load["model"]), dict(model=state_dict), strict=False
+        )
 
-
-def load_checkpoint(to_load, ckpt, device):
+def load_checkpoint(to_load, ckpt, device, **kwargs):
     ckpt = torch.load(ckpt, map_location=device)
-    ModelCheckpoint.load_objects(to_load, ckpt)
+    ModelCheckpoint.load_objects(to_load, ckpt, **kwargs)
 
 
 def add_wandb_logger(engine, evaluators, config: brainnet.config.WandbParameters):

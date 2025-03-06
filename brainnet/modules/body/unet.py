@@ -106,6 +106,8 @@ class UNet(torch.nn.Module):
         # Upsampling
         self.upsampling = torch.nn.Upsample(scale_factor=max_pool_size, mode="nearest")
 
+        self.num_features = {}
+
         # Encoder (downsampling path)
         in_ch = in_channels
         skip_connections = []
@@ -122,9 +124,10 @@ class UNet(torch.nn.Module):
             in_ch = out_ch
             # Post processing
             if self.return_encoder_features[i]:
-                self.encoder_post[f"enc:{i}"], _ = self.make_conv_block(
+                self.encoder_post[f"enc:{i}"], out_ch = self.make_conv_block(
                     d, out_ch, encoder_post[i]
                 )
+            self.num_features[f"enc:{i}"] = out_ch
 
         # Decoder (upsampling path)
         self.decoder = torch.nn.ModuleDict()
@@ -132,7 +135,6 @@ class UNet(torch.nn.Module):
         self.decoder_scale = []
         scale = self.encoder_scale[-1]
         for i, d_chs in enumerate(decoder_channels):
-
             in_ch += skip_connections.pop()
             self.decoder[f"dec:{i}"], out_ch = self.make_conv_block(d, in_ch, d_chs)
             scale /= max_pool_size
@@ -140,9 +142,10 @@ class UNet(torch.nn.Module):
             in_ch = out_ch
             # Post processing
             if self.return_decoder_features[i]:
-                self.decoder_post[f"dec:{i}"], _ = self.make_conv_block(
+                self.decoder_post[f"dec:{i}"], out_ch = self.make_conv_block(
                     d, out_ch, decoder_post[i]
                 )
+            self.num_features[f"dec:{i}"] = out_ch
 
         self.final_channels = out_ch
 
@@ -154,8 +157,6 @@ class UNet(torch.nn.Module):
             )
             if i
         ]
-        self.num_features = {f"enc:{i}": n[-1] for i, n in enumerate(encoder_channels)}
-        self.num_features |= {f"dec:{i}": n[-1] for i, n in enumerate(decoder_channels)}
 
         self.encoder_features = [
             f"enc:{i}" for i, b in enumerate(self.return_encoder_features) if b

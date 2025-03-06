@@ -1,3 +1,4 @@
+import copy
 import functools
 import importlib
 import sys
@@ -49,11 +50,10 @@ class SupervisedStep:
             func = functools.partial(torch.unsqueeze, dim=0)
             y_true = recursively_apply_function(y_true, func)
 
-            image = y_true.pop("image")
-            _ = y_true.pop("surface") # unused
-            _ = y_true.pop("initial_vertices") # unused
+            del y_true["surface"]
+            del y_true["initial_vertices"]
 
-            return image, y_true
+            return y_true
 
     def compute_loss(self, y_pred, y_true):
         raw = self.criterion(y_pred, y_true)
@@ -78,18 +78,26 @@ class SupervisedTrainingStep(SupervisedStep):
         self.model.train()
         self.pretrained_model.eval()
 
-        image, y_true = self.prepare_batch(batch)
+        batch = self.prepare_batch(batch)
 
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            y_pred = self.model.body(image)
+            y_pred = self.model.body(batch["image"])
             with torch.no_grad():
-               y_true = self.pretrained_model.body(y_true["t1w"])
+                y_true = self.pretrained_model.body(batch["t1w"])
 
-            # features = {k:v.float() for k,v in features.items()}
+            mask = batch["brain_dist_map"] < 10.0
 
-            loss = self.compute_loss(y_pred, y_true)
+            # a little inaccurate but does not matter so much as it is just
+            # for weighting the losses
+            subsamp = [2**(3-int(k.split(":")[-1])) for k in y_pred]
+            mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_pred, subsamp)}
+
+            y_pred_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_pred.items()}
+            y_true_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_true.items()}
+
+            loss = self.compute_loss(y_pred_masked, y_true_masked)
             total_loss = recursive_dict_sum(loss["weighted"])
             total_loss /= self.gradient_accumulation_steps
 
@@ -114,7 +122,7 @@ class SupervisedTrainingStep(SupervisedStep):
         loss = recursive_itemize(loss)
 
         # these are stored in engine.state.output
-        return loss, image, y_pred, y_true
+        return loss, batch["image"], y_pred, y_true
 
 class EvaluationStep(SupervisedStep):
     def __init__(self, synthesizer, pretrained_model, model, criterion, enable_amp: bool = False):
@@ -124,19 +132,31 @@ class EvaluationStep(SupervisedStep):
 
     def __call__(self, engine, batch):
         self.model.eval()
+        self.pretrained_model.eval()
 
-        image, y_true = self.prepare_batch(batch)
+        batch = self.prepare_batch(batch)
 
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             with torch.inference_mode():
-                y_true = self.pretrained_model.body(y_true["t1w"])
-                y_pred = self.model.body(image)
-                loss = self.compute_loss(y_pred, y_true)
+                y_true = self.pretrained_model.body(batch["image"])
+                y_pred = self.model.body(batch["image"])
+
+                mask = batch["brain_dist_map"] < 10.0
+
+                # a little inaccurate but does not matter so much as it is just
+                # for weighting the losses
+                subsamp = [2**(3-int(k.split(":")[-1])) for k in y_pred]
+                mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_pred, subsamp)}
+
+                y_pred_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_pred.items()}
+                y_true_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_true.items()}
+
+                loss = self.compute_loss(y_pred_masked, y_true_masked)
 
         # we don't need the weighted loss
         loss = recursive_itemize(loss["raw"])
 
-        return loss, image, y_pred, y_true
+        return loss, batch["image"], y_pred, y_true
 
 
 def train(args):
@@ -158,7 +178,8 @@ def train(args):
     print("Setting up training...")
 
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
-    pretrained_model_ckpt = getattr(importlib.import_module(train_setup_file), "pretrained_model_ckpt")
+    cfg_pretrained_model = getattr(importlib.import_module(train_setup_file), "cfg_pretrained_model")
+    ckpt_pretrained_model = getattr(importlib.import_module(train_setup_file), "ckpt_pretrained_model")
 
     sep_line = 79 * "="
 
@@ -174,7 +195,7 @@ def train(args):
     dataloader = brainnet.initializers.init_dataloader(
         train_setup.dataset, train_setup.dataloader
     )
-    pretrained_model = brainnet.initializers.init_model(train_setup.model)
+    pretrained_model = brainnet.initializers.init_model(copy.deepcopy(cfg_pretrained_model))
     model = brainnet.initializers.init_model(train_setup.model)
     optimizer = brainnet.initializers.init_optimizer(train_setup.optimizer, model)
     synth = brainnet.initializers.init_synthesizer(train_setup.synthesizer)
@@ -270,7 +291,7 @@ def train(args):
     brainnet.train.utilities.load_checkpoint_from_setup(to_save, train_setup)
     brainnet.train.utilities.load_checkpoint(
         dict(model=pretrained_model),
-        pretrained_model_ckpt,
+        ckpt_pretrained_model,
         train_setup.device
     )
     print("Setup completed. Starting training at epoch ...")

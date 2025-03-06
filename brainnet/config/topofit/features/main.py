@@ -8,8 +8,7 @@ from brainnet import config
 from brainnet.modules import body, head
 
 # Parameters defined in other files
-from . import losses
-# from . import events_evaluator, events_trainer, losses
+from . import events_trainer, losses # events_evaluator,
 
 """
 
@@ -40,7 +39,7 @@ mode_resolution = "1mm"  # 1mm, random
 tags = []
 
 project: str = "TopoFit-UNet"
-run: str = f"original_{mode_contrast}_{mode_resolution}_UNet"
+run: str = f"{mode_contrast}_{mode_resolution}_UNet_16-dec-same"
 
 run_id: None | str = None  # f"{run}-00"
 resume_from_run: None | str = run # None # run
@@ -68,7 +67,7 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 model_dir = out_dir
 # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
 
-pretrained_model_ckpt = out_dir / "TopoFit" / "original_t1w_1mm_test" / "checkpoint" / "state_checkpoint_00300.pt"
+ckpt_pretrained_model = out_dir / "TopoFit" / "t1w_1mm_16-dec" / "checkpoint" / "state_checkpoint_00400.pt"
 
 # =============================================================================
 # TRAINING MODE
@@ -93,9 +92,10 @@ datasets = [
 # {ds}.exclude.txt
 subject_subset_exclude = "exclude"
 
-images_train = ["generation_labels_dist", "t1w"]
+images_train = ["brain_dist_map", "generation_labels_dist", "t1w"]
 images_train_sel = None
-images_val = ["t1w"]
+images_val = ["brain_dist_map", "generation_labels_dist", "t1w"] # ["t1w"]
+images_val_sel = ["t1w"]
 subject_subset_train = "train"
 subject_subset_val = "validation"
 
@@ -114,9 +114,10 @@ match mode_resolution:
 cfg_train = config.TrainParameters(
     max_epochs=5000,
     epoch_length_train=100,
-    epoch_length_val=50,
+    epoch_length_val=25,
     gradient_accumulation_steps=1,
-    # events_trainer=events_trainer.events,
+    # evaluate_on=Events.EPOCH_COMPLETED(every=1),
+    events_trainer=events_trainer.events,
     # events_evaluators=events_evaluator.events,
     enable_amp=True,
 )
@@ -126,12 +127,12 @@ cfg_train = config.TrainParameters(
 # =============================================================================
 
 builder_contrast = "Synth" if mode_contrast == "synth" else "Select"
-if builder_contrast == "Synth" or not random_skullstrip:
+if builder_contrast == "Synth" or random_skullstrip:
     # synth has skullstrip anyway
     builder_train = f"Only{builder_contrast}{builder_res}"
 else:
-    builder_train = f"Only{builder_contrast}WithSkullstrip{builder_res}"
-builder_validation = f"OnlySelect{builder_res}"
+    builder_train = f"Only{builder_contrast}NoSkullStrip{builder_res}"
+builder_validation = f"OnlySelectNoSkullStrip{builder_res}"
 
 cfg_dataloader = config.DataloaderParameters()
 
@@ -176,29 +177,31 @@ cfg_criterion = config.CriterionParameters(
 # MODEL
 # =============================================================================
 
-# original TopoFit parameters
-# (only return features from the last layer of the decoder)
+# T1w
+pretrained_unet_kwargs = dict(
+    spatial_dims = 3,
+    in_channels = 1,
+    encoder_channels=[[16], [32], [64], [96], [128]],
+    decoder_channels=[[96], [64], [32], [16]],
+    return_encoder_features = None,
+    return_decoder_features = [True, True, True, True],
+)
+
+# synth
 unet_kwargs = dict(
     spatial_dims = 3,
     in_channels = 1,
-    encoder_channels = [[32], [64], [64], [96], [96]],
-    decoder_channels = [[96], [64], [64], [64]],
+    encoder_channels=[[32], [64], [64], [96], [128]],
+    decoder_channels=[[96], [64], [64], [32]],
     return_encoder_features = None,
-    return_decoder_features = None,
+    return_decoder_features = [True, True, True, True],
+    # match the synth features to the T1w features
+    encoder_post = None,
+    decoder_post = [[96], [64], [32], [16]],
 )
 
-# Other parameters
-# (return all features)
-# unet_kwargs = dict(
-#     spatial_dims=3,
-#     in_channels=1,
-#     encoder_channels=[[32], [64], [96], [128], [256]],
-#     decoder_channels=[[128], [96], [64], [32]],
-#     return_encoder_features=[True, True, True, True, True],
-#     return_decoder_features=[True, True, True, True],
-# )
-
 unet = body.UNet(**unet_kwargs)
+pretrained_unet = body.UNet(**pretrained_unet_kwargs)
 
 all_features = unet.encoder_features + unet.decoder_features
 
@@ -209,30 +212,31 @@ topofit_kwargs = dict(
     max_order = 7,
     # Original TopoFit parameters
     white_feature_maps = [
-        all_features,
-        all_features,
-        all_features,
-        all_features,
-        all_features,
-        all_features,
-        all_features,
+        unet.decoder_features,
+        unet.decoder_features,
+        unet.decoder_features,
+        unet.decoder_features,
+        unet.decoder_features,
     ],
     white_channels = dict(
-        encoder=[96, 96, 96, 96],
-        decoder=[96, 96, 96],
+        encoder=[64, 64, 64, 64],
+        decoder=[64, 64, 64],
     ),
-    # white_channels = dict(
-    #     encoder=[64, 64, 64, 64],
-    #     decoder=[64, 64, 64],
-    # ),
-    pial_feature_maps = all_features,
+    # pial_feature_maps = unet.decoder_features,
+    pial_feature_maps = [unet.decoder_features[3]],
     pial_channels = [32],
-    pial_deform_module = "LinearDeformationBlock", # EdgeConvolutionDeformationBlock
+    pial_deform_module = "LinearDeformationBlock",
 )
 
 cfg_model = config.BrainNetParameters(
     device=device,
     body=unet,
+    heads=dict(surface=head.TopoFit(**topofit_kwargs, device=device)),
+)
+
+cfg_pretrained_model = config.BrainNetParameters(
+    device=device,
+    body=pretrained_unet,
     heads=dict(surface=head.TopoFit(**topofit_kwargs, device=device)),
 )
 
@@ -251,7 +255,6 @@ cfg_results = config.ResultsParameters(
     load_from_dir=model_dir / project / resume_from_run
     if resume_from_run is not None
     else None,
-    save_example_on=Events.EPOCH_COMPLETED(every=10),
 )
 
 # =============================================================================
@@ -278,7 +281,7 @@ cfg_synth = config.SynthesizerParameters(
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        selectable_images=images_val,  # ["t1w", "t2w", "flair"],
+        selectable_images=images_val_sel,  # images_val
         device=device,
     ),
 )

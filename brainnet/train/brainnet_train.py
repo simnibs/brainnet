@@ -1,4 +1,5 @@
 import copy
+import functools
 import importlib
 import sys
 import torch
@@ -7,6 +8,7 @@ from ignite.engine import Engine
 
 import brainsynth
 
+from brainnet.utilities import recursively_apply_function
 import brainnet.config
 import brainnet.train.utilities
 from brainnet import event_handlers
@@ -53,7 +55,9 @@ class SupervisedStep:
         # topology = module.get_prediction_topology()
         topology = module.out_topology
         topology = dict(lh=topology, rh=copy.deepcopy(topology))
-        topology["rh"].reverse_face_orientation()
+
+        # only with andrew's template!
+        # topology["rh"].reverse_face_orientation()
 
         return {
             h: {
@@ -82,32 +86,21 @@ class SupervisedStep:
         else:
             images, surfaces, init_verts = batch
 
-            # REMOVE BATCH DIMENSION
-            for k, v in images.items():
-                images[k] = v.squeeze(0)
-            for k, v in surfaces.items():
-                for kk, vv in v.items():
-                    surfaces[k][kk] = vv.squeeze(0)
-            for k, v in init_verts.items():
-                init_verts[k] = v.squeeze(0)
+            # Remove batch dim
+            func = functools.partial(torch.squeeze, dim=0)
+            images = recursively_apply_function(images, func)
+            surfaces = recursively_apply_function(surfaces, func)
+            init_verts = recursively_apply_function(init_verts, func)
 
             with torch.no_grad():
                 y_true = self.synthesizer(images, surfaces, init_verts, unpack=False)
 
+            # Add batch dim
+            func = functools.partial(torch.unsqueeze, dim=0)
+            y_true = recursively_apply_function(y_true, func)
+
             image = y_true.pop("image")
             init_verts = y_true.pop("initial_vertices")
-
-            # ADD BATCH DIMENSION
-            image = image.unsqueeze(0)
-            for k, v in y_true.items():
-                if k == "surface":
-                    for k2, v2 in v.items():
-                        for k3, v3 in v2.items():
-                            y_true[k][k2][k3] = v3.unsqueeze(0)
-                else:
-                    y_true[k] = v.unsqueeze(0)
-            for k, v in init_verts.items():
-                init_verts[k] = v.unsqueeze(0)
 
             return image, y_true, init_verts
 
@@ -207,6 +200,14 @@ def train(args):
     train_setup_file = "brainnet.config.topofit.mri.main"
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
     train_setup.wandb.enable = False
+
+    args = brainnet.train.utilities.parse_args(
+        "brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --max-epochs 100 --no-wandb".split()
+    )
+
+    args = brainnet.train.utilities.parse_args(
+        "brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-checkpoint 100 --max-epochs 200 --no-wandb".split()
+    )
 
     """
 
@@ -320,7 +321,7 @@ def train(args):
 
     brainnet.train.utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
     brainnet.train.utilities.write_example_to_disk(trainer, evaluators, train_setup.results)
-    brainnet.train.utilities.load_checkpoint(to_save, train_setup)
+    brainnet.train.utilities.load_checkpoint_from_setup(to_save, train_setup)
 
     print("Setup completed. Starting training at epoch ...")
 

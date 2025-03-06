@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import torch
+from ignite.engine import Events
 
 import brainsynth.config
-
 from brainnet import config
 from brainnet.modules import body, head
 
@@ -13,9 +13,11 @@ from . import events_evaluator, events_trainer, losses
 """
 
 # Stage 1:
-# - surface resolution 4
+# - surface resolution 6
 # - add chamfer at 500
 python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --max-epochs 800
+
+python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-checkpoint 500 --max-epochs 1000
 
 # Stage 2:
 # - increase target surface resolution to 5
@@ -34,17 +36,18 @@ python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-
 
 mode_contrast = "t1w"  # synth, t1w, t2w, flair
 mode_resolution = "1mm"  # 1mm, random
+tags = []
 
 project: str = "TopoFit"
-run: str = f"original_{mode_contrast}_{mode_resolution}"
+run: str = f"{mode_contrast}_{mode_resolution}_16-dec"
 
 run_id: None | str = None  # f"{run}-00"
-resume_from_run: None | str = run  # None # run
-tags = [mode_contrast, mode_resolution]
+resume_from_run: None | str = run # None # run
+tags += [mode_contrast, mode_resolution]
 device: str | torch.device = torch.device("cuda:0")
 
-in_order = 1
-out_order = 6
+in_order = 3
+out_order = 7
 template_surface = dict(resolution=in_order, name="template")
 target_surface = dict(resolution=out_order, name="target")
 
@@ -59,10 +62,10 @@ out_center_str = "brain"
 
 random_skullstrip = True
 
-root_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
+data_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
 out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
-# model_dir = out_dir
-model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
+model_dir = out_dir
+# model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
 
 # =============================================================================
 # TRAINING MODE
@@ -135,6 +138,7 @@ cfg_train = config.TrainParameters(
     epoch_length_train=100,
     epoch_length_val=50,
     gradient_accumulation_steps=1,
+    # evaluate_on=Events.EPOCH_COMPLETED(every=1),
     events_trainer=events_trainer.events,
     events_evaluators=events_evaluator.events,
     enable_amp=True,
@@ -145,12 +149,12 @@ cfg_train = config.TrainParameters(
 # =============================================================================
 
 builder_contrast = "Synth" if mode_contrast == "synth" else "Select"
-if builder_contrast == "Synth" or not random_skullstrip:
+if builder_contrast == "Synth" or random_skullstrip:
     # synth has skullstrip anyway
     builder_train = f"Only{builder_contrast}{builder_res}"
 else:
-    builder_train = f"Only{builder_contrast}WithSkullstrip{builder_res}"
-builder_validation = f"OnlySelect{builder_res}"
+    builder_train = f"Only{builder_contrast}NoSkullStrip{builder_res}"
+builder_validation = f"OnlySelectNoSkullStrip{builder_res}"
 
 cfg_dataloader = config.DataloaderParameters()
 
@@ -160,23 +164,23 @@ cfg_dataloader = config.DataloaderParameters()
 
 cfg_dataset = config.DatasetParameters(
     train=brainsynth.config.DatasetConfig(
-        root_dir=root_dir / "full",
-        subject_dir=root_dir / "subject_splits",
+        root_dir=data_dir / "full",
+        subject_dir=data_dir / "subject_splits",
         subject_subset=subject_subset_train,
         datasets=datasets,
         images=images_train,
         target_surface=target_surface,
-        initial_surface=template_surface,
+        template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
     validation=brainsynth.config.DatasetConfig(
-        root_dir=root_dir / "full",
-        subject_dir=root_dir / "subject_splits",
+        root_dir=data_dir / "full",
+        subject_dir=data_dir / "subject_splits",
         subject_subset=subject_subset_val,
         datasets=datasets,
         images=images_val,
         target_surface=target_surface,
-        initial_surface=template_surface,
+        template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
 )
@@ -200,10 +204,21 @@ cfg_criterion = config.CriterionParameters(
 unet_kwargs = dict(
     spatial_dims = 3,
     in_channels = 1,
-    encoder_channels = [[32], [64], [64], [96], [96]],
-    decoder_channels = [[96], [64], [64], [64]],
-    return_encoder_features = None,
-    return_decoder_features = None,
+    # Original
+    # encoder_channels = [[32], [64], [64], [96], [96]],
+    # decoder_channels = [[96], [64], [64], [64]],
+    # T1w
+    encoder_channels=[[16], [32], [64], [96], [128]],
+    decoder_channels=[[96], [64], [32], [16]],
+    # Synth
+    # encoder_channels=[[32], [64], [64], [96], [128]],
+    # decoder_channels=[[96], [64], [64], [32]],
+    # return_encoder_features = None,
+    # return_decoder_features = None,
+    return_encoder_features = None, #[True, True, True, True, None],
+    return_decoder_features = [True, True, True, True],
+    # encoder_post = [[16], [32], [None], [None], [None]],
+    # decoder_post = [[None], [None], [32], [16]],
 )
 
 # Other parameters
@@ -211,10 +226,12 @@ unet_kwargs = dict(
 # unet_kwargs = dict(
 #     spatial_dims=3,
 #     in_channels=1,
-#     encoder_channels=[[32], [64], [96], [128], [256]],
-#     decoder_channels=[[128], [96], [64], [32]],
-#     return_encoder_features=[True, True, True, True, True],
-#     return_decoder_features=[True, True, True, True],
+#     # encoder_channels=[[16], [32], [64], [96], [128]],
+#     # decoder_channels=[[96], [64], [32], [16]],
+#     # return_encoder_features=[True, True, True, True, True],
+#     # return_decoder_features=[True, True, True, True],
+#     return_encoder_features = None,
+#     return_decoder_features = None,
 # )
 
 unet = body.UNet(**unet_kwargs)
@@ -228,25 +245,42 @@ topofit_kwargs = dict(
     max_order = 7,
     # Original TopoFit parameters
     white_feature_maps = [
-        all_features,
-        all_features,
-        all_features,
-        all_features,
-        all_features,
-        all_features,
-        all_features,
+        # all_features, # 3
+        # all_features, #
+        # all_features, #
+        # all_features, #
+        # all_features, # 7
+        # [unet.encoder_features[3], unet.decoder_features[0]],
+        # [unet.encoder_features[2], unet.decoder_features[1]],
+        # [unet.encoder_features[1], unet.decoder_features[2]],
+        # [unet.encoder_features[0], unet.decoder_features[3]],
+        # [unet.encoder_features[0], unet.decoder_features[3]],
+        # [unet.decoder_features[0]],
+        # [unet.decoder_features[1]],
+        # [unet.decoder_features[2]],
+        # [unet.decoder_features[3]],
+        # [unet.decoder_features[3]],
+        unet.decoder_features,
+        unet.decoder_features,
+        unet.decoder_features,
+        unet.decoder_features,
+        unet.decoder_features,
     ],
-    white_channels = dict(
-        encoder=[96, 96, 96, 96],
-        decoder=[96, 96, 96],
-    ),
     # white_channels = dict(
-    #     encoder=[64, 64, 64, 64],
-    #     decoder=[64, 64, 64],
+    #     encoder=[96, 96, 96, 96],
+    #     decoder=[96, 96, 96],
     # ),
-    pial_feature_maps = all_features,
+    white_channels = dict(
+        encoder=[64, 64, 64, 64],
+        decoder=[64, 64, 64],
+    ),
+    # pial_feature_maps = all_features,
+    # pial_feature_maps = [unet.encoder_features[0], unet.decoder_features[3]],
+    pial_feature_maps = [unet.decoder_features[3]],
     pial_channels = [32],
     pial_deform_module = "LinearDeformationBlock", # EdgeConvolutionDeformationBlock
+    # pial_channels = [32],
+    # pial_deform_module = "EdgeConvolutionDeformationBlock"
 )
 
 cfg_model = config.BrainNetParameters(
@@ -270,6 +304,7 @@ cfg_results = config.ResultsParameters(
     load_from_dir=model_dir / project / resume_from_run
     if resume_from_run is not None
     else None,
+    # save_example_on=Events.EPOCH_COMPLETED(every=10),
 )
 
 # =============================================================================

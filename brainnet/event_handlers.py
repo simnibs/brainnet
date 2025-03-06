@@ -347,4 +347,6 @@ def write_example(
                     if k == "surface":
                         write_surface(v, vol_info, config.examples_dir, st, k, label)
                     else:
+                        v = v[:, :5] if "dec:" in k else v
+                        k = k.replace(":","-")
                         write_volume(v, affine, config.examples_dir, st, k, label)
