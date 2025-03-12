@@ -13,9 +13,14 @@ functions = dict(
         # encoder_2=SupervisedLoss(torch.nn.MSELoss(), "encoder:2", "encoder:2"),
         # encoder_3=SupervisedLoss(torch.nn.MSELoss(), "encoder:3", "encoder:3"),
     ),
+    # SR = dict(
+    #     SR_1 = SupervisedLoss(torch.nn.MSELoss(), "sr1", "sr1"),
+    # )
 )
 
 head_weights = dict(features=1.0)
+# head_weights = dict(features=1.0, SR = 1.0)
+
 loss_weights = dict(
     features=dict(
         decoder_3 = 1.0,
@@ -23,6 +28,7 @@ loss_weights = dict(
         decoder_1 = 1.0,
         decoder_0 = 1.0,
     ),
+    # SR = dict(SR_1 = 5.0)
 )
 
 cfg_loss = LossParameters(functions, head_weights, loss_weights)

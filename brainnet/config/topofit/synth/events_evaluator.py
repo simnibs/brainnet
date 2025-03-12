@@ -15,7 +15,7 @@ from brainnet.event_handlers import set_loss_weight
 loss_events = [
     # Turn on losses
     config.EventAction(
-        event=Events.EPOCH_STARTED(once=51),
+        event=Events.EPOCH_STARTED(once=110),
         handler=set_loss_weight,
         kwargs=dict(weights={
             # ("white", "chamfer"):   1.0, # new
@@ -26,18 +26,18 @@ loss_events = [
             ("pial", "sif"):        1.0,
         }),
     ),
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=210),
-        handler=set_loss_weight,
-        kwargs=dict(weights={
-            # ("white", "chamfer"):       0.0,
-            # ("pial", "chamfer"):        0.0,
-            # ("white", "hardchamfer"):   1.0,
-            # ("pial", "hardchamfer"):    1.0,
-            ("white", "curv"):       1.0,
-            ("pial", "curv"):        1.0,
-        }),
-    ),
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=210),
+    #     handler=set_loss_weight,
+    #     kwargs=dict(weights={
+    #         # ("white", "chamfer"):       0.0,
+    #         # ("pial", "chamfer"):        0.0,
+    #         # ("white", "hardchamfer"):   1.0,
+    #         # ("pial", "hardchamfer"):    1.0,
+    #         # ("white", "curv"):       1.0,
+    #         # ("pial", "curv"):        1.0,
+    #     }),
+    # ),
 ]
 
 events = loss_events

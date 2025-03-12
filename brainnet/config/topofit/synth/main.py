@@ -39,7 +39,7 @@ mode_resolution = "1mm"  # 1mm, random
 tags = []
 
 project: str = "TopoFit"
-run: str = f"{mode_contrast}_{mode_resolution}_16-dec_UNET"
+run: str = f"{mode_contrast}_{mode_resolution}_16-dec_UNET_synthT1w"
 
 run_id: None | str = None  # f"{run}-00"
 resume_from_run: None | str = run # None # run
@@ -49,11 +49,11 @@ device: str | torch.device = torch.device("cuda:0")
 in_order = 3
 out_order = 6
 template_surface = dict(resolution=in_order, name="template")
-target_surface = dict(resolution=out_order, name="target")
+target_vertices = dict(resolution=out_order, name="target")
 
 # Single hemisphere
 # target_surface_hemisphere: str = "lh"
-# out_size = [128, 224, 160]
+# out_size = [128, 224, 176]
 # out_center_str = "lh"
 
 # Full brain
@@ -67,7 +67,9 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 model_dir = out_dir
 # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
 
-load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_1mm_UNet_16-dec" / "checkpoint" / "state_checkpoint_00400.pt"
+# load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_1mm_UNet_16-dec" / "checkpoint" / "state_checkpoint_00400.pt"
+load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_random_UNet_16-dec_64" / "checkpoint" / "state_checkpoint_00200.pt"
+load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_1mm_UNet_16-dec_synthT1w" / "checkpoint" / "state_checkpoint_00200.pt"
 load_head_from_checkpoint = None # out_dir / "TopoFit" / "t1w_1mm_16-dec" / "checkpoint" / "state_checkpoint_00400.pt"
 
 # =============================================================================
@@ -176,7 +178,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset=subject_subset_train,
         datasets=datasets,
         images=images_train,
-        target_surface=target_surface,
+        target_vertices=target_vertices,
         template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
@@ -186,7 +188,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset=subject_subset_val,
         datasets=datasets,
         images=images_val,
-        target_surface=target_surface,
+        target_vertices=target_vertices,
         template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
@@ -212,6 +214,8 @@ unet_kwargs = dict(
     in_channels = 1,
     encoder_channels=[[32], [64], [64], [96], [128]],
     decoder_channels=[[96], [64], [64], [32]],
+    # encoder_channels=[[64], [96], [128], [256], [512]],
+    # decoder_channels=[[256], [128], [96], [64]],
     return_encoder_features = None,
     return_decoder_features = [True, True, True, True],
     # match the synth features to the T1w features

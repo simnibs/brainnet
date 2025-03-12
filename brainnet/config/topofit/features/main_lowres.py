@@ -35,11 +35,11 @@ python brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-
 # =============================================================================
 
 mode_contrast = "synth"  # synth, t1w, t2w, flair
-mode_resolution = "1mm"  # 1mm, random
+mode_resolution = "random"  # 1mm, random
 tags = []
 
 project: str = "TopoFit-UNet"
-run: str = f"{mode_contrast}_{mode_resolution}_UNet_16-dec_synthT1w"
+run: str = f"{mode_contrast}_{mode_resolution}_UNet_16-dec"
 
 run_id: None | str = None  # f"{run}-00"
 resume_from_run: None | str = run # None # run
@@ -49,7 +49,7 @@ device: str | torch.device = torch.device("cuda:0")
 in_order = 3
 out_order = 6
 template_surface = dict(resolution=in_order, name="template")
-target_vertices = None # dict(resolution=out_order, name="target")
+target_surface = None # dict(resolution=out_order, name="target")
 
 # Single hemisphere
 # target_surface_hemisphere: str = "lh"
@@ -147,7 +147,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset=subject_subset_train,
         datasets=datasets,
         images=images_train,
-        target_vertices=target_vertices,
+        target_surface=target_surface,
         template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
@@ -157,7 +157,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset=subject_subset_val,
         datasets=datasets,
         images=images_val,
-        target_vertices=target_vertices,
+        target_surface=target_surface,
         template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
@@ -177,20 +177,6 @@ cfg_criterion = config.CriterionParameters(
 # MODEL
 # =============================================================================
 
-match mode_contrast, mode_resolution:
-    case ("t1w", "1mm"):
-        encoder_channels=[[16], [32], [64], [96], [128]]
-        decoder_channels=[[96], [64], [32], [16]]
-    case ("synth", "1mm"):
-        encoder_channels=[[32], [64], [64], [96], [128]]
-        decoder_channels=[[96], [64], [64], [32]]
-    case ("synth", "random"):
-        encoder_channels=[[64], [96], [128], [256], [512]]
-        decoder_channels=[[256], [128], [96], [64]]
-    case _:
-        NotImplementedError
-
-
 # T1w
 pretrained_unet_kwargs = dict(
     spatial_dims = 3,
@@ -207,8 +193,6 @@ unet_kwargs = dict(
     in_channels = 1,
     encoder_channels=[[32], [64], [64], [96], [128]],
     decoder_channels=[[96], [64], [64], [32]],
-    # encoder_channels=[[64], [96], [128], [256], [512]],
-    # decoder_channels=[[256], [128], [96], [64]],
     return_encoder_features = None,
     return_decoder_features = [True, True, True, True],
     # match the synth features to the T1w features
@@ -247,20 +231,7 @@ topofit_kwargs = dict(
 cfg_model = config.BrainNetParameters(
     device=device,
     body=unet,
-    heads=dict(
-        surface=head.TopoFit(**topofit_kwargs, device=device),
-        # sr1=head.HeadModule(
-        #     feature=unet.decoder_features[3],
-        #     channels=[unet.num_features[unet.decoder_features[3]], 1],
-        #     norm=False, activation=False,
-        # ),
-        # sr8=head.HeadModule(
-        #     feature_maps=unet.decoder_features[0],
-        #     channels=[unet.num_features[unet.decoder_features[0]], 1],
-        #     norm=False, activation=False, device=device),
-        # sr4=head.HeadModule(feature_maps=unet.decoder_features[1], channels=[unet.num_features[unet.decoder_features[1]], 1], norm=False, activation=False, device=device),
-        # sr2=head.HeadModule(feature_maps=unet.decoder_features[2], channels=[unet.num_features[unet.decoder_features[2]], 1], norm=False, activation=False, device=device),
-    ),
+    heads=dict(surface=head.TopoFit(**topofit_kwargs, device=device)),
 )
 
 cfg_pretrained_model = config.BrainNetParameters(

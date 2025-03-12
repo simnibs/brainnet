@@ -10,11 +10,11 @@ from brainnet.event_handlers import (
 loss_events = []
 
 optimizer_events = [
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=401),
-        handler=optimizer_multiply_lr,
-        kwargs=dict(factor=0.5),
-    ),
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=401),
+    #     handler=optimizer_multiply_lr,
+    #     kwargs=dict(factor=0.5),
+    # ),
     # config.EventAction(
     #     event=Events.EPOCH_STARTED(once=751),
     #     handler=optimizer_reset,

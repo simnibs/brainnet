@@ -40,10 +40,10 @@ loss_events = [
                 # ("pial", "chamfer"):        0.0,
                 # ("white", "hardchamfer"):   1.0,
                 # ("pial", "hardchamfer"):    1.0,
-                ("white", "curv"):       1.0,
-                ("pial", "curv"):        1.0,
-                ("white", "spring"):    0.1,  # / 5
-                ("pial", "spring"):     0.1,  # / 5
+                # ("white", "curv"):       1.0,
+                # ("pial", "curv"):        1.0,
+                # ("white", "spring"):    0.1,  # / 5
+                # ("pial", "spring"):     0.1,  # / 5
             }
         ),
     ),

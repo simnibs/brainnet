@@ -86,31 +86,31 @@ functions = dict(
 
 head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 
-loss_weights = dict(
-    white=dict(
-        matched=0.0,
-        spring=2.0,
-        edge=2.0,
-        chamfer=1.0,
-        hardchamfer=0.0,
-        curv=0.0,
-        sif=0.0,
-    ),
-    pial=dict(
-        matched=0.0,
-        spring=2.0,
-        edge=2.0,
-        chamfer=1.0,
-        hardchamfer=0.0,
-        curv=0.0,
-        sif=0.0,
-    ),
-    thickness=dict(angle=5.0),
-)
 # loss_weights = dict(
-#     white=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
-#     pial=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
-#     thickness=dict(angle = 5.0),
+#     white=dict(
+#         matched=0.0,
+#         spring=2.0,
+#         edge=2.0,
+#         chamfer=1.0,
+#         hardchamfer=0.0,
+#         curv=0.0,
+#         sif=0.0,
+#     ),
+#     pial=dict(
+#         matched=0.0,
+#         spring=2.0,
+#         edge=2.0,
+#         chamfer=1.0,
+#         hardchamfer=0.0,
+#         curv=0.0,
+#         sif=0.0,
+#     ),
+#     thickness=dict(angle=5.0),
 # )
+loss_weights = dict(
+    white=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
+    pial=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
+    thickness=dict(angle = 5.0),
+)
 
 cfg_loss = LossParameters(functions, head_weights, loss_weights)
