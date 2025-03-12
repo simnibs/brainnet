@@ -1,6 +1,6 @@
 import torch
 
-from brainnet.modules.blocks import ConvBlock
+from brainnet.modules.blocks import ConvolutionBlock
 
 
 def make_unet_path(channels, levels, convs=1, multiplier=2):
@@ -173,7 +173,7 @@ class UNet(torch.nn.Module):
         conv_block = torch.nn.Sequential()
         if channels[0] is not None:
             for out_ch in channels:
-                conv_block.append(ConvBlock(spatial_dims, in_ch, out_ch))
+                conv_block.append(ConvolutionBlock(spatial_dims, in_ch, out_ch))
                 in_ch = out_ch
         return conv_block, in_ch
 
