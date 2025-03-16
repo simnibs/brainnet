@@ -5,7 +5,7 @@ import torch
 from torch.utils.data import default_collate
 
 from brainsynth.utilities import apply_affine
-from brainnet.utilities import recursively_apply_function
+from brainnet.dict_utils import recursively_apply_function
 
 from brainnet.modules.head import surface_modules
 

@@ -1,7 +1,6 @@
 import torch
 
-from brainnet.modules.blocks import ConvBlock
-# from brainnet.modules.cortexnet import CortexThing
+from brainnet.modules.blocks import ConvolutionBlock
 from brainnet.modules.topofit import TopoFit#, TopoReg
 
 """
@@ -17,8 +16,8 @@ and returns a prediction.
 #     return module.postprocess(*args, **kwargs) if hasattr(module, "postprocess") else
 
 
-class HeadModule(torch.nn.Module):
-    def __init__(self, channels: tuple | list[int], init_zeros: bool = False) -> None:
+class HeadModule(torch.nn.Sequential):
+    def __init__(self, feature: str ,channels: tuple | list[int], **kwargs) -> None:
         """_summary_
 
         Parameters
@@ -29,16 +28,13 @@ class HeadModule(torch.nn.Module):
             layers: 64 -> 64 and 64 -> 3.
         """
         super().__init__()
-
-        self.convs = torch.nn.Sequential(
-            *[
-                ConvBlock(3, in_ch, out_ch, init_zeros=init_zeros)
-                for in_ch, out_ch in zip(channels[:-1], channels[1:])
-            ]
-        )
+        self.feature = feature
+        for in_ch, out_ch in zip(channels[:-1], channels[1:]):
+            self.append(ConvolutionBlock(3, in_ch, out_ch, **kwargs))
 
     def forward(self, features):
-        return self.convs(features)
+        return super().forward(features[self.feature])
+
 
 
 class SVFModule(torch.nn.Module):
@@ -51,7 +47,7 @@ class SVFModule(torch.nn.Module):
 
         self.convs = torch.nn.Sequential(
             *[
-                ConvBlock(3, in_ch, out_ch, init_zeros=iz)
+                ConvolutionBlock(3, in_ch, out_ch, init_zeros=iz)
                 for in_ch, out_ch, iz in zip(channels[:-1], channels[1:], izs)
             ]
         )

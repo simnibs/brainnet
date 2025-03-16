@@ -50,34 +50,21 @@ class GraphConvolution(torch.nn.Module):
             if bias:
                 torch.nn.init.zeros_(self.conv_self.bias)
                 torch.nn.init.zeros_(self.conv_other.bias)
-        # else:
-        #     std = 1e-5
-        #     torch.nn.init.normal_(self.conv_v.weight, std=std)
-        #     torch.nn.init.normal_(self.conv_n.weight, std=std)
-        #     if bias:
-        #         torch.nn.init.normal_(self.conv_v.bias, std=std)
-        #         torch.nn.init.normal_(self.conv_n.bias, std=std)
 
     def forward(self, features):
         features_self = self.conv_self(features)  # W0
         features_other = self.conv_other(features)  # W1
 
         # aggregate (neighbors)
-        out = torch.zeros_like(features_self)
-        # out.index_reduce_(
-        #     dim=2,
-        #     index=self.reduce_index,
-        #     source=F_n[..., self.gather_index],
-        #     reduce="mean",
-        #     include_self=False,
-        # )
-        out.index_add_(
-            dim=-1,
-            index=self.reduce_index,
-            source=features_other[..., self.gather_index],
+        out = torch.index_add(
+            torch.zeros_like(features_self),
+            -1,
+            self.reduce_index,
+            features_other[..., self.gather_index]
         )
+
         # merge (self and neighbors)
-        return out + features_self
+        return features_self + out
 
 
 class EdgeConvolution(GraphConvolution):
@@ -85,15 +72,15 @@ class EdgeConvolution(GraphConvolution):
         features_self = self.conv_self(features)  # W0
         features_other = self.conv_other(features)  # W1
 
-        out = torch.zeros_like(features_other)
-        out.index_reduce_(
-            dim=-1,
-            index=self.reduce_index,
-            source=features_other[..., self.gather_index],
-            reduce="mean",
+        out = torch.index_reduce(
+            torch.zeros_like(features_other),
+            -1,
+            self.reduce_index,
+            features_other[..., self.gather_index],
+            "mean",
             include_self=False,
         )
-        return features_self - features_other + out
+        return features_self + out - features_other
 
 
 def convolution_block(Convolution):
@@ -165,20 +152,16 @@ class ResidualGraphConvolution(torch.nn.Module):
         self.convs = torch.nn.Sequential()
         for in_ch, out_ch in zip(channels[:-2], channels[1:-1]):
             self.convs.append(GraphConvolutionBlock(in_ch, out_ch, **kwargs))
-        self.last_conv = GraphConvolutionBlock(
+        self.convs.append(GraphConvolutionBlock(
             channels[-2], channels[-1], activation=None, **kwargs
-        )
+        ))
         self.norm = torch.nn.InstanceNorm1d(
             channels[0], affine=False, track_running_stats=False
         )
-        self.last_activation = torch.nn.PReLU()
+        self.activation = torch.nn.PReLU()
 
     def forward(self, features):
-        residual = features
-        for conv in self.convs:
-            features = conv(features)
-        features = self.last_activation(self.last_conv(features) + self.norm(residual))
-        return features
+        return self.activation(self.convs(features) + self.norm(features))
 
 
 class GraphConvolutionDeformationBlock(torch.nn.Sequential):
@@ -199,11 +182,11 @@ class GraphConvolutionDeformationBlock(torch.nn.Sequential):
             zip([in_channels] + graph_channels[:-1], graph_channels)
         ):
             self.add_module(
-                f"GraphConvolution:{i}", GraphConvolutionBlock(in_ch, out_ch, **kw)
+                f"GraphConvolution_{i}", GraphConvolutionBlock(in_ch, out_ch, **kw)
             )
         # features -> deformation field
         self.add_module(
-            f"GraphConvolution:{i + 1}",
+            f"GraphConvolution_{i+1}",
             GraphConvolution(graph_channels[-1], out_channels, **kw, init_zeros=True),
         )
 
@@ -226,11 +209,11 @@ class EdgeConvolutionDeformationBlock(torch.nn.Sequential):
             zip([in_channels] + graph_channels[:-1], graph_channels)
         ):
             self.add_module(
-                f"GraphConvolution:{i}", EdgeConvolutionBlock(in_ch, out_ch, **kw)
+                f"GraphConvolution_{i}", EdgeConvolutionBlock(in_ch, out_ch, **kw)
             )
         # features -> deformation field
         self.add_module(
-            f"GraphConvolution:{i + 1}",
+            f"GraphConvolution_{i+1}",
             EdgeConvolution(graph_channels[-1], out_channels, **kw, init_zeros=True),
         )
 
@@ -249,17 +232,17 @@ class ResidualGraphConvolutionDeformationBlock(torch.nn.Sequential):
         kw = dict(reduce_index=reduce_index, gather_index=gather_index)
         # input features -> features
         self.add_module(
-            "GraphConvolution:0", GraphConvolution(in_channels, graph_channels[0], **kw)
+            "GraphConvolution_0", GraphConvolution(in_channels, graph_channels[0], **kw)
         )
         # features -> features
         for i in range(n_residual_blocks):
             self.add_module(
-                f"ResidualGraphConvolution:{i}",
+                f"ResidualGraphConvolution_{i}",
                 ResidualGraphConvolution(graph_channels, **kw),
             )
         # features -> deformation field
         self.add_module(
-            "GraphConvolution:1",
+            "GraphConvolution_1",
             GraphConvolution(graph_channels[-1], out_channels, **kw, init_zeros=True),
         )
 
@@ -324,16 +307,27 @@ class LinearDeformationBlock(torch.nn.Sequential):
         # we might as well use linear layers but use 1D convolutions instead as
         # that expects tensors of the format (N, C)
 
-        for out_ch in linear_channels:
-            self.add_module("Convolution", torch.nn.Conv1d(in_channels, out_ch, 1))
+        # for out_ch in linear_channels:
+        #     self.add_module("Convolution", torch.nn.Conv1d(in_channels, out_ch, 1))
+        #     if batch_norm:
+        #         self.add_module.append("BatchNorm", torch.nn.BatchNorm1d(out_ch))
+        #     self.add_module("Activation", torch.nn.PReLU())
+        #     in_channels = out_ch
+
+        # # Final convolution to predict deformation vector
+        # self.add_module(
+        #     "Convolution[out]", torch.nn.Conv1d(in_channels, out_channels, 1)
+        # )
+        for i,out_ch in enumerate(linear_channels):
+            self.add_module(f"Convolution_{i}", torch.nn.Conv1d(in_channels, out_ch, 1))
             if batch_norm:
-                self.add_module.append("BatchNorm", torch.nn.BatchNorm1d(out_ch))
-            self.add_module("Activation", torch.nn.PReLU())
+                self.add_module.append(f"BatchNorm_{i}", torch.nn.BatchNorm1d(out_ch))
+            self.add_module(f"Activation_{i}", torch.nn.PReLU())
             in_channels = out_ch
 
         # Final convolution to predict deformation vector
         self.add_module(
-            "Convolution[out]", torch.nn.Conv1d(in_channels, out_channels, 1)
+            f"Convolution_{i+1}", torch.nn.Conv1d(in_channels, out_channels, 1)
         )
 
 

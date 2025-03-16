@@ -1,5 +1,5 @@
 def recursively_apply_function(d, fn, out=None):
-    """Recursively call .item() on values."""
+    """Recursively call a function on values."""
     if out is None:
         out = {}
     for k,v in d.items():
@@ -9,6 +9,19 @@ def recursively_apply_function(d, fn, out=None):
         else:
             out[k] = fn(v)
     return out
+
+def recursively_apply_method(d, method, method_kwargs=None, out=None):
+    """Recursively call .method(**method_kwargs) on values."""
+    out = {} if out is None else out
+    method_kwargs = {} if method_kwargs is None else method_kwargs
+    for k, v in d.items():
+        if isinstance(v, dict):
+            out[k] = {}
+            recursively_apply_method(v, method, method_kwargs, out[k])
+        else:
+            out[k] = getattr(v, method)(**method_kwargs)
+    return out
+
 
 def recursive_dict_update_(d0, d1):
     """`d1` is a subset of `d0`."""
@@ -122,16 +135,3 @@ def divide_dict(a: dict, b: dict):
         else:
             a[k] /= b[k]
     return a
-
-
-def recursive_itemize(d, out=None):
-    """Recursively call .item() on values."""
-    if out is None:
-        out = {}
-    for k, v in d.items():
-        if isinstance(v, dict):
-            out[k] = {}
-            recursive_itemize(v, out[k])
-        else:
-            out[k] = v.item()
-    return out

@@ -23,6 +23,33 @@ class SuperResolution(torch.nn.Module):
         subpixel = self.subpixel_conv(features)
         return subpixel
 
+# class DenseConvolution(torch.nn.Module):
+#     def __init__(self, in_channels: int = 1,*args, **kwargs):
+#         super().__init__(*args, **kwargs)
+
+#         n_levels = 5
+#         out_channels = 16
+
+#         self.image_to_feature = ConvolutionBlock(3, in_channels, out_channels, norm=False)
+#         self.transform = torch.nn.ModuleList()
+#         in_channels = out_channels
+#         for i in range(1,n_levels+1):
+#             in_channels *= i
+#             self.transform.append(ConvolutionBlock(3, in_channels, out_channels, norm=False))
+
+
+#         ConvolutionBlock(3, 1, 16, norm=False)
+
+#         ConvolutionBlock(3, 16, 16, norm=False)
+#         ConvolutionBlock(3, 32, 16, norm=False)
+#         ConvolutionBlock(3, 48, 16, norm=False)
+#         ConvolutionBlock(3, 64, 16, norm=False)
+
+#     def forward(self, image):
+#         all_features = self.image_to_feature(image)
+#         for conv in self.transform:
+#             all_features = torch.cat((all_features, conv(all_features)), dim=1)
+
 class SubpixelConvolution(torch.nn.Module):
     def __init__(self, up_factor: int = 2, spatial_dims: int = 3, up_dims: int | None = None, *args, **kwargs) -> None:
         """Sub-pixel convolution from Shi (2016).
@@ -81,7 +108,16 @@ class SubpixelConvolution(torch.nn.Module):
         ----------
         Shi (2016). Real-Time Single Image and Video Super-Resolution Using an
             Efficient Sub-Pixel Convolutional Neural Network.
+            https://arxiv.org/pdf/1609.05158
+        Georgescu (2023). Convolutional Neural Networks with Intermediate Loss
+            for 3D Super-Resolution of CT and MRI Scans.
+            https://arxiv.org/pdf/2001.01330
 
+        Bouter (2022). Deep learning-based single image super-resolution for
+            low-field MR brain images.
+            https://www.nature.com/articles/s41598-022-10298-6
+        Tong (2017). Image Super-Resolution Using Dense Skip Connections.
+            https://openaccess.thecvf.com/content_ICCV_2017/papers/Tong_Image_Super-Resolution_Using_ICCV_2017_paper.pdf
         """
         super().__init__(*args, **kwargs)
         up_dims = spatial_dims if up_dims is None else up_dims

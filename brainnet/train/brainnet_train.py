@@ -8,17 +8,19 @@ from ignite.engine import Engine
 
 import brainsynth
 
-from brainnet.utilities import recursively_apply_function
+from brainnet.dict_utils import recursively_apply_function, recursively_apply_method, recursive_dict_sum
 import brainnet.config
 import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
 from brainnet.mesh.surface import TemplateSurfaces
 from brainnet.modules.head import surface_modules
-from brainnet.utilities import recursive_dict_sum, recursive_itemize
 
 # from brainnet.resources.loss_weights import WeightsFromCurvatureProb
-# from brainnet.loss_weights import WeightsMedialWall
+import brainnet.loss_weights
+
+SEP_LINE = 79 * "="
+
 
 class SupervisedStep:
     def __init__(
@@ -47,7 +49,7 @@ class SupervisedStep:
         module = [i for i in self.model.heads.values() if isinstance(i, surface_modules)]
 
         if len(module) == 0:
-            return None
+            return {}
 
         assert len(module) == 1
         module = module[0]
@@ -133,17 +135,19 @@ class SupervisedTrainingStep(SupervisedStep):
     def __call__(self, engine, batch) -> tuple:
         self.model.train()
 
-        image, y_true, init_verts = self.prepare_batch(batch)
+        image, y_true, template = self.prepare_batch(batch)
 
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            # y_pred = self.model(image, init_verts)
+            # do loss calculations in float32
+            # y_pred = self.model(image, template)
+            # y_pred = recursively_apply_method(y_pred, "float")
 
+            # with torch.no_grad():
             features = self.model.body(image)
-            features = {k:v.float() for k,v in features.items()}
-
-            y_pred = self.model.forward_heads(features, init_verts)
+            features = recursively_apply_method(features, "float")
+            y_pred = self.model.forward_heads(features, template)
 
             loss = self.compute_loss(y_pred, y_true)
             total_loss = recursive_dict_sum(loss["weighted"])
@@ -167,7 +171,7 @@ class SupervisedTrainingStep(SupervisedStep):
                 # accumulate across multiple passes (whenever .backward is
                 # called)
                 self.optimizer.zero_grad()
-        loss = recursive_itemize(loss)
+        loss = recursively_apply_method(loss, "item")
 
         # these are stored in engine.state.output
         return loss, image, y_pred, y_true
@@ -185,10 +189,11 @@ class EvaluationStep(SupervisedStep):
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, init_verts)
+                y_pred = recursively_apply_method(y_pred, "float")
                 loss = self.compute_loss(y_pred, y_true)
 
         # we don't need the weighted loss
-        loss = recursive_itemize(loss["raw"])
+        loss = recursively_apply_method(loss["raw"], "item")
 
         return loss, image, y_pred, y_true
 
@@ -197,16 +202,12 @@ def train(args):
 
     """
 
-    train_setup_file = "brainnet.config.topofit.mri.main"
-    train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
-    train_setup.wandb.enable = False
-
     args = brainnet.train.utilities.parse_args(
         "brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --max-epochs 100 --no-wandb".split()
     )
 
     args = brainnet.train.utilities.parse_args(
-        "brainnet/train/brainnet_train.py brainnet.config.topofit.mri.main --load-checkpoint 100 --max-epochs 200 --no-wandb".split()
+        "brainnet/train/brainnet_train.py brainnet.config.topofit.synth.main --load-checkpoint 300 --max-epochs 300 --no-wandb".split()
     )
 
     """
@@ -216,8 +217,8 @@ def train(args):
     print("Setting up training...")
 
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
+    md_weights = getattr(importlib.import_module(train_setup_file), "medial_wall_weights")
 
-    sep_line = 79 * "="
 
     # Overwrite args from command line if provided
     if args.load_checkpoint is not None:
@@ -247,18 +248,28 @@ def train(args):
         train_setup.train_params.gradient_accumulation_steps,
         enable_amp=train_setup.train_params.enable_amp,
     )
+    eval_step = EvaluationStep(
+        synth["validation"],
+        model,
+        criterion["validation"],
+        train_setup.train_params.enable_amp,
+    )
     trainer = Engine(train_step)
 
     # Set medial wall weights
-    # False = 0 = non-MD
-    # True = 1 = MD
-    # weights = torch.tensor([1.0, 0.25], device=model.device)
-    # medial_wall_weights = WeightsMedialWall(weights).get_weights()
-    # medial_wall_weights = medial_wall_weights[
-    #     :train_step.surface_template["y_true"]["lh"]["white"].topology.n_vertices
-    # ][None]
-    # criterion["train"].set_weights_medial_wall(medial_wall_weights)
-    # criterion["validation"].set_weights_medial_wall(medial_wall_weights)
+    if md_weights is not None:
+        n_vertices = train_step.surface_template["y_pred"]["lh"]["white"].topology.n_vertices
+        md_weights = torch.tensor(md_weights, device=model.device)
+        medial_wall = brainnet.loss_weights.MedialWall(md_weights, n_vertices)
+
+        for h,v in train_step.surface_template["y_true"].items():
+            w = medial_wall.weights[h]
+            for s in v:
+                train_step.surface_template["y_true"][h][s].vertex_data["medial_wall"] = w
+                train_step.surface_template["y_pred"][h][s].vertex_data["medial_wall"] = w
+
+                eval_step.surface_template["y_true"][h][s].vertex_data["medial_wall"] = w
+                eval_step.surface_template["y_pred"][h][s].vertex_data["medial_wall"] = w
 
     # The order in which the events are added to the engine is important!
 
@@ -286,12 +297,7 @@ def train(args):
         #     **kwargs,
         # ),
         validation=brainnet.train.utilities.add_evaluation_event(
-            EvaluationStep(
-                synth["validation"],
-                model,
-                criterion["validation"],
-                train_setup.train_params.enable_amp,
-            ),
+            eval_step,
             dataloader=dataloader["validation"],
             logger=event_handlers.MetricLogger(key="loss", name="validation"),
             **kwargs,
@@ -324,14 +330,13 @@ def train(args):
     brainnet.train.utilities.load_checkpoint_from_setup(to_save, train_setup)
 
     print("Setup completed. Starting training at epoch ...")
-
-    print(sep_line)
+    print(SEP_LINE)
     print(f"Config file     {train_setup_file}")
     print(f"Project         {train_setup.project:30s}")
     print(f"Run             {train_setup.run:30s}")
     print(f"Output dir      {train_setup.results.out_dir}")
     print(f"Wandb enabled   {train_setup.wandb.enable}")
-    print(sep_line)
+    print(SEP_LINE)
 
     # Start the training
     epoch_length = train_setup.train_params.epoch_length_train or len(iter(dataloader["train"]))

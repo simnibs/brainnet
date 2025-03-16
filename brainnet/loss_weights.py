@@ -2,7 +2,7 @@ import torch
 
 from brainnet import resources_dir
 
-class WeightsMedialWall:
+class MedialWall:
     def __init__(self, weights: torch.Tensor, n_vertices: int | None = None):
         """_summary_
 
@@ -11,16 +11,12 @@ class WeightsMedialWall:
         weights : torch.Tensor
             Tensor with two elements where the first and second gives the
             weight of non-medial wall and medial wall vertices, respectively.
-        device : str | torch.device, optional
-            _description_, by default "cpu"
         """
-        medial_wall = torch.load(resources_dir / "medial-wall.pt", map_location=weights.device)
-        if n_vertices is not None:
-            medial_wall = medial_wall[:n_vertices]
-        self.weights = weights[medial_wall.int()]
-
-    def get_weights(self):
-        return self.weights
+        self.weights = {}
+        for h in ("lh", "rh"):
+            mw = torch.load(resources_dir / f"{h}.medial_wall.pt", map_location=weights.device)
+            mw = mw[:n_vertices] if n_vertices is not None else mw
+            self.weights[h] = weights[mw.int()][None] # add a batch dimension
 
 
 class WeightsFromCurvatureProb:

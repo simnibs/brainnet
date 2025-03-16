@@ -8,12 +8,12 @@ from ignite.engine import Engine
 
 import brainsynth
 
-from brainnet.utilities import recursively_apply_function
+from brainnet.dict_utils import recursively_apply_function
 import brainnet.config
 import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
-from brainnet.utilities import recursive_dict_sum, recursive_itemize
+from brainnet.dict_utils import recursive_dict_sum, recursive_itemize
 
 
 class SupervisedStep:
@@ -87,12 +87,16 @@ class SupervisedTrainingStep(SupervisedStep):
             with torch.no_grad():
                 y_true = self.pretrained_model.body(batch["t1w"])
 
+            # y_true["sr1"] = batch["image_hires"]
+            # y_pred["sr1"] = self.model.heads["sr1"](y_pred)
+
             mask = batch["brain_dist_map"] < 10.0
 
             # a little inaccurate but does not matter so much as it is just
             # for weighting the losses
-            subsamp = [2**(3-int(k.split(":")[-1])) for k in y_pred]
-            mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_pred, subsamp)}
+            subsamp = [2**(3-int(k.split(":")[-1])) for k in y_true if "dec:" in k]
+            mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_true, subsamp)}
+            # mask["sr1"] = mask["dec:3"]
 
             y_pred_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_pred.items()}
             y_true_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_true.items()}
@@ -138,15 +142,19 @@ class EvaluationStep(SupervisedStep):
 
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             with torch.inference_mode():
-                y_true = self.pretrained_model.body(batch["image"])
+                y_true = self.pretrained_model.body(batch["t1w"])
                 y_pred = self.model.body(batch["image"])
+
+                # y_true["sr1"] = batch["image_hires"]
+                # y_pred["sr1"] = self.model.heads["sr1"](y_pred)
 
                 mask = batch["brain_dist_map"] < 10.0
 
                 # a little inaccurate but does not matter so much as it is just
                 # for weighting the losses
-                subsamp = [2**(3-int(k.split(":")[-1])) for k in y_pred]
-                mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_pred, subsamp)}
+                subsamp = [2**(3-int(k.split(":")[-1])) for k in y_true if "dec:" in k]
+                mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_true, subsamp)}
+                # mask["sr1"] = mask["dec:3"]
 
                 y_pred_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_pred.items()}
                 y_true_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_true.items()}
@@ -168,7 +176,7 @@ def train(args):
     train_setup.wandb.enable = False
 
     args = brainnet.train.utilities.parse_args(
-        "brainnet/train/brainnet_train.py brainnet.config.topofit.features.main --max-epochs 50 --no-wandb".split()
+        "brainnet/train/features_train.py brainnet.config.topofit.features.main --max-epochs 50 --no-wandb".split()
     )
 
     """

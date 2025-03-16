@@ -5,21 +5,22 @@ from brainnet import sphere_utils
 
 from brainnet.modules.losses import L1Loss, MSELoss, MSNELoss, MSCosSimLoss, SemiHardSNELoss
 
+from brainnet.utils import unsqueeze_and_expand
 
 # DECORATORS
 
 
-def SemiSymmetricLoss(Loss):
+def wrap_semi_symmetric(cls):
     """Decorator to compute symmetric loss of inputs."""
 
-    class SemiSymmetricLoss(Loss):
+    class SemiSymmetric(cls):
         def __init__(
             self,
             sym_weights: list[float] | tuple[float, float] = (0.5, 0.5),
             *args,
             **kwargs,
         ) -> None:
-            """_summary_
+            """Compute semi (weighted) symmetric loss of inputs.
 
             Parameters
             ----------
@@ -58,36 +59,47 @@ def SemiSymmetricLoss(Loss):
             -------
 
             """
+            i_pred = unsqueeze_and_expand(i_pred, y_true)
+            i_true = unsqueeze_and_expand(i_true, y_pred)
 
-            if (batch_size := y_pred.shape[0]) > 1:
-                batch_index = torch.arange(batch_size)[:, None]
-                return self.w[0] * super().forward(
-                    y_pred, y_true[batch_index, i_pred], w_pred
-                ) + self.w[1] * super().forward(
-                    y_pred[batch_index, i_true], y_true, w_true
-                )
-            else:
-                p = y_pred.squeeze(0)
-                t = y_true.squeeze(0)
-                w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
-                w_true = w_true.squeeze(0) if w_true is not None else w_true
-                return self.w[0] * super().forward(
-                    p, t[i_pred.squeeze(0)], w_pred
-                ) + self.w[1] * super().forward(p[i_true.squeeze(0)], t, w_true)
+            pt = super().forward(y_pred, y_true.gather(1, i_pred), w_pred)
+            tp = super().forward(y_pred.gather(1, i_true), y_true, w_true)
 
-    return SemiSymmetricLoss
+            return self.w[0] * pt + self.w[1] * tp
+
+            # if (batch_size := y_pred.shape[0]) > 1:
+            #     batch_index = torch.arange(batch_size)[:, None]
+            #     return self.w[0] * super().forward(
+            #         y_pred, y_true[batch_index, i_pred], w_pred
+            #     ) + self.w[1] * super().forward(
+            #         y_pred[batch_index, i_true], y_true, w_true
+            #     )
+
+            # else:
+            #     p = y_pred.squeeze(0)
+            #     t = y_true.squeeze(0)
+            #     w_pred = w_pred.squeeze(0) if w_pred is not None else w_pred
+            #     w_true = w_true.squeeze(0) if w_true is not None else w_true
+            #     return self.w[0] * super().forward(
+            #         p, t[i_pred.squeeze(0)], w_pred
+            #     ) + self.w[1] * super().forward(p[i_true.squeeze(0)], t, w_true)
+
+    return SemiSymmetric
 
 
-def SampledLoss(Loss):
-    class SampledLoss(Loss):
+def wrap_index_matched_data(cls):
+    class IndexMatchedData(cls):
         def __init__(
             self,
-            value_key: str,
-            index_key="sampled_index",
+            value_key: str = "points",
+            index_key: str = "chamfer_index",
             weight_key: str | None = None,
             *args,
             **kwargs,
         ) -> None:
+            """Compute loss using (precomputed) data stored in the surface
+            instance.
+            """
             super().__init__(*args, **kwargs)
             self.value_key = value_key
             self.index_key = index_key
@@ -98,109 +110,29 @@ def SampledLoss(Loss):
             y_pred: TemplateSurfaces,
             y_true: TemplateSurfaces,
         ):
+            if self.value_key == "points":
+                p = y_pred.interpolated["points"]
+                t = y_true.interpolated["points"]
+            else:
+                p = y_pred.interpolated["data"][self.value_key]
+                t = y_true.interpolated["data"][self.value_key]
             if self.weight_key is None:
                 return super().forward(
-                    y_pred.vertex_data[self.value_key],
-                    y_true.vertex_data[self.value_key],
-                    y_pred.vertex_data[self.index_key],
-                    y_true.vertex_data[self.index_key],
+                    p,
+                    t,
+                    y_pred.interpolated["data"][self.index_key],
+                    y_true.interpolated["data"][self.index_key],
                 )
-
             else:
                 return super().forward(
-                    y_pred.vertex_data[self.value_key],
-                    y_true.vertex_data[self.value_key],
-                    y_pred.vertex_data[self.index_key],
-                    y_true.vertex_data[self.index_key],
-                    y_pred.vertex_data[self.weight_key],
-                    y_true.vertex_data[self.weight_key],
+                    p,
+                    t,
+                    y_pred.interpolated["data"][self.index_key],
+                    y_true.interpolated["data"][self.index_key],
+                    y_pred.interpolated["data"][self.weight_key],
+                    y_true.interpolated["data"][self.weight_key],
                 )
-
-    return SampledLoss
-
-# class MSELoss(torch.nn.Module):
-#     def __init__(self) -> None:
-#         super().__init__()
-
-#     def forward(self, a, b, w=None):
-#         if w is None:
-#             return torch.mean((a - b) ** 2)
-#         else:
-#             return torch.sum(w * (a - b) ** 2) / w.sum()
-
-
-# class L1Loss(torch.nn.Module):
-#     def __init__(self) -> None:
-#         super().__init__()
-
-#     def forward(self, a, b, w=None):
-#         if w is None:
-#             return torch.abs(a - b).mean()
-#         else:
-#             return torch.sum(w * torch.abs(a - b)) / w.sum()
-
-# class RMSELoss(MSELoss):
-#     def forward(self, *args, **kwargs):
-#         return super().forward(*args, **kwargs).sqrt()
-
-
-# class MSNormLoss(torch.nn.Module):
-#     def __init__(self, dim=-1) -> None:
-#         super().__init__()
-#         self.dim = dim
-#         # reduction="mean"
-#         # self.reduction = reduction
-
-#     def forward(self, a, b, w=None):
-#         if w is None:
-#             return torch.sum((a - b) ** 2, self.dim).mean()
-#         else:
-#             return torch.sum(w * torch.sum((a - b) ** 2, self.dim)) / w.sum()
-
-# class MSNormLossv2(torch.nn.Module):
-#     def __init__(self, dim=-1) -> None:
-#         super().__init__()
-#         self.dim = dim
-#         # reduction="mean"
-#         # self.reduction = reduction
-
-#     def forward(self, a, b, w=None):
-#         n = int(0.2 * a.shape[0])
-
-#         error = torch.sum((a - b) ** 2, self.dim)
-#         error = error.sort().values
-#         low, high = error[:-n], error[-n:]
-#         index = low.multinomial(num_samples=n, replacement=False)
-#         low = low[index]
-
-#         return 0.5 * low.mean() + 0.5 * high.mean()
-
-# class MeanNormLoss(torch.nn.Module):
-#     def __init__(self, dim=-1) -> None:
-#         super().__init__()
-#         self.dim = dim
-#         # reduction="mean"
-#         # self.reduction = reduction
-
-#     def forward(self, a, b, w=None):
-#         # getattr(T, reduction)()
-#         if w is None:
-#             return torch.linalg.vec_norm(a - b, dim=self.dim).mean()
-#         else:
-#             return torch.sum(w * torch.linalg.vec_norm(a - b, dim=self.dim)) / w.sum()
-
-
-# class RMSNormLoss(MSNormLoss):
-#     def forward(self, *args, **kwargs):
-#         return super().forward(*args, **kwargs).sqrt()
-
-
-# class CosineSimilarityLoss(torch.nn.CosineSimilarity):
-#     def __init__(self, dim: int = -1, eps: float = 1e-8) -> None:
-#         super().__init__(dim, eps)
-
-#     def forward(self, a, b):
-#         return torch.mean((1 - super().forward(a, b)) ** 2)
+    return IndexMatchedData
 
 
 class MatchedDistanceLoss(MSNELoss):
@@ -390,21 +322,21 @@ class SphericalNormalLoss(MSNELoss):
         return super().forward(n, bc)
 
 
-SemiSymmetricMSELoss = SemiSymmetricLoss(MSELoss)
-SampledSemiSymmetricMSELoss = SampledLoss(SemiSymmetricMSELoss)
+SemiSymmetricMSELoss = wrap_semi_symmetric(MSELoss)
+SampledSemiSymmetricMSELoss = wrap_index_matched_data(SemiSymmetricMSELoss)
 
-SemiSymmetricMSNELoss = SemiSymmetricLoss(MSNELoss)
-SampledSemiSymmetricMSNormLoss = SampledLoss(SemiSymmetricMSNELoss)
+SemiSymmetricMSNELoss = wrap_semi_symmetric(MSNELoss)
+SampledSemiSymmetricMSNormLoss = wrap_index_matched_data(SemiSymmetricMSNELoss)
 
-SemiSymmetricL1Loss = SemiSymmetricLoss(L1Loss)
-SampledSemiSymmetricL1Loss = SampledLoss(SemiSymmetricL1Loss)
+SemiSymmetricL1Loss = wrap_semi_symmetric(L1Loss)
+SampledSemiSymmetricL1Loss = wrap_index_matched_data(SemiSymmetricL1Loss)
 
-SemiSymmetricCosSimLoss = SemiSymmetricLoss(MSCosSimLoss)
-SampledSemiSymmetricCosSimLoss = SampledLoss(SemiSymmetricCosSimLoss)
+SemiSymmetricCosSimLoss = wrap_semi_symmetric(MSCosSimLoss)
+SampledSemiSymmetricCosSimLoss = wrap_index_matched_data(SemiSymmetricCosSimLoss)
 
 # SemiHard
-SemiSymmetricSemiHardNELoss = SemiSymmetricLoss(SemiHardSNELoss)
-SampledSemiSymmetricSemiHardSNormLoss = SampledLoss(SemiSymmetricSemiHardNELoss)
+SemiSymmetricSemiHardNELoss = wrap_semi_symmetric(SemiHardSNELoss)
+SampledSemiSymmetricSemiHardSNormLoss = wrap_index_matched_data(SemiSymmetricSemiHardNELoss)
 
 
 # REGULARIZATION

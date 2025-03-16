@@ -99,7 +99,11 @@ class SurfaceModule(torch.nn.Module):
 
         # The last feature map has the same spatial dimensions as the input
         # image
-        self.set_image_center(tuple(features.values())[-1])
+        last_feature_map = tuple(features.values())[-1]
+        self.set_image_center(last_feature_map)
+
+        dtype = last_feature_map.dtype
+        template_vertices = {k: v.to(dtype) for k,v in template_vertices.items()}
 
         return {
             h: self._forward_hemi(features, v) for h, v in template_vertices.items()
@@ -185,11 +189,11 @@ class SurfaceModule(torch.nn.Module):
             vertices.mT[:, :, None, None],
             align_corners=True,
         )
-        return samples[..., 0, 0]  # squeeze out H, W
+        return samples[..., 0, 0] # squeeze out H, W
 
     @staticmethod
     def get_image_shape(image):
-        return torch.tensor(image.shape[-3:], device=image.device)
+        return torch.tensor(image.shape[-3:], dtype=image.dtype, device=image.device)
 
     def get_image_center(self, image_shape):
         return 0.5 * (image_shape[None, :, None] - 1.0)
@@ -228,143 +232,6 @@ def make_unet_channels(in_channels: int, depth: int, multiplier: int = 2) -> dic
     encoder = [in_channels * multiplier**i for i in range(m + 1)]
     decoder = encoder[:-1][::-1]
     return dict(encoder=encoder, decoder=decoder)
-
-
-# class UNet(torch.nn.Module):
-#     def __init__(
-#         self,
-#         in_channels: int,
-#         topologies: list[topology.Topology],
-#         conv_module: torch.nn.Module,
-#         reduce: str = "amax",
-#         channels: int | dict = 32,
-#         max_depth: int = 4,
-#         n_conv: int = 1,
-#     ):
-#         """Similar to a conventional UNet achitecture but on a graph. We
-#         exploit the fact that the topologies represent a hierarchy of
-#         recursive subdivision. Consequently, we can move up and down this
-#         hierarchy to obtain different mesh resolutions.
-
-
-#         Parameters
-#         ----------
-#         in_channels : int
-#         topologies :
-#         conv_module
-#         reduce: str
-#         channels: int | dict
-#         max_depth: int
-#         multiplier: int
-#         n_conv: int
-
-
-#         """
-#         # The UNet architecture and naming
-#         #
-#         # ENCODER                         DECODER   Hierarchy level (example)
-#         #
-#         # I C C ------------------------- I C C     4
-#         #     P                           U
-#         #     I C C ----------------- I C C         3
-#         #         P                   U
-#         #         I C C --------- I C C             2
-#         #             P           U
-#         #             I C C - I C C                 1
-#         #                 P   U
-#         #                 I C C                     0
-#         #                 U-bend
-#         #
-#         # I : input
-#         # C : conv
-#         # P : pooling
-#         # U : unpooling
-#         # - : skip connection
-#         #
-#         # Encoder unit: (I-)C-C-P
-#         # Decoder unit: U(-I)-C-C
-#         # U-bend: (I-)C-C
-#         super().__init__()
-
-#         max_depth = min(max_depth, len(topologies))
-#         self.topologies = topologies[-max_depth:]
-
-#         unet_channels = (
-#             make_unet_channels(channels, max_depth)
-#             if isinstance(channels, int)
-#             else channels
-#         )
-#         assert isinstance(unet_channels, dict)
-
-#         # Encoder
-#         in_ch = in_channels
-
-#         enc_topologies = self.topologies[1:][::-1]
-#         # get only the first channels if `topologies` is smaller than unet levels
-#         enc_channels = unet_channels["encoder"][::-1][: max_depth - 1][::-1]
-
-#         self.encoder_conv = torch.nn.ModuleList()
-#         self.encoder_pool = torch.nn.ModuleList()
-#         for out_ch, topo in zip(enc_channels, enc_topologies):
-#             self.encoder_conv.append(
-#                 layers.nConv(in_ch, out_ch, conv_module, topo, n_conv)
-#             )
-#             self.encoder_pool.append(layers.Pool(topo, reduce))
-#             in_ch = out_ch
-
-#         # U bend
-#         self.ubend_conv = layers.nConv(
-#             in_ch,
-#             out_ch := unet_channels["ubend"],
-#             conv_module,
-#             self.topologies[0],
-#             n_conv,
-#         )
-#         in_ch = out_ch
-
-#         # Decoder
-#         unpool_topologies = self.topologies[:-1]
-#         conv_topologies = self.topologies[1:]
-#         skip_channels = enc_channels[::-1]
-#         # get only the first channels if `topologies` is smaller than unet levels
-#         dec_channels = unet_channels["decoder"][: max_depth - 1]
-
-#         self.decoder_unpool = torch.nn.ModuleList()
-#         self.decoder_conv = torch.nn.ModuleList()
-#         for out_ch, skip_ch, unpool_topology, conv_topology in zip(
-#             dec_channels, skip_channels, unpool_topologies, conv_topologies
-#         ):
-#             self.decoder_unpool.append(layers.Unpool(unpool_topology, reduce))
-#             self.decoder_conv.append(
-#                 layers.nConv(
-#                     in_ch + skip_ch, out_ch, conv_module, conv_topology, n_conv
-#                 )
-#             )
-#             in_ch = out_ch
-#         self.out_ch = out_ch
-
-#     def get_prediction_topology(self):
-#         return self.topologies[-1]
-
-#     def forward(self, features):
-#         # Encoder
-#         skip_features = []
-#         for conv, pool in zip(self.encoder_conv, self.encoder_pool):
-#             features = conv(features)
-#             skip_features.append(features)
-#             features = pool(features)
-
-#         features = self.ubend_conv(features)
-
-#         # Decoder
-#         for conv, unpool, sf in zip(
-#             self.decoder_conv, self.decoder_unpool, skip_features[::-1]
-#         ):
-#             features = unpool(features)
-#             features = torch.concat((features, sf), dim=1)
-#             features = conv(features)
-
-#         return features
 
 
 class UNet(torch.nn.Module):

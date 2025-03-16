@@ -187,17 +187,26 @@ class Topology:
         # target vertices (subsampled) to the source vertices
         # (from the upsampling procedure)
 
-        own_features = self.subsample_array(features)
-        pooled = torch.zeros_like(own_features).copy_(own_features)
-        pooled.index_reduce_(
+        return torch.index_reduce(
+            self.subsample_array(features),
             -1,
             self.pool_index_reduce,
             features[..., self.pool_index_gather],
-            reduce=reduce,
+            reduce,
             include_self=True,
         )
 
-        return pooled
+        # own_features = self.subsample_array(features)
+        # pooled = torch.zeros_like(own_features).copy_(own_features)
+        # pooled.index_reduce_(
+        #     -1,
+        #     self.pool_index_reduce,
+        #     features[..., self.pool_index_gather],
+        #     reduce=reduce,
+        #     include_self=True,
+        # )
+        # return pooled
+
 
     def subsample_array(self, arr: torch.Tensor, dim: int = -1):
         """ """

@@ -218,6 +218,77 @@ class WeightedGradientLoss(torch.nn.Module):
 #         return self._gradient_loss(grad)
 
 
+def rand_masked_patch_loss(Loss):
+    class RandMaskedPatchLoss(Loss):
+        def __init__(
+            self,
+            patch_size: None | list[int] | tuple = None,
+            spatial_size: None | list[int] | tuple | torch.Size = None,
+            *args,
+            **kwargs,
+        ):
+            super().__init__(*args, **kwargs)
+
+            if patch_size is not None:
+                assert spatial_size is not None
+                assert all(
+                    i % 2 == 0 for i in patch_size
+                )  # for now we only accept even sized sub-volumes
+                self.patch_halfsize = tuple(int(i / 2) for i in patch_size)
+                self.patch_limits = [
+                    (j, i - j) for i, j in zip(spatial_size, self.patch_halfsize)
+                ]
+
+
+        def sample_patch_slices(self):
+            patch_center = tuple(torch.randint(i[0], i[1], (1,), device=self.device) for i in self.patch_limits)
+            return tuple(
+                slice(c - h, c + h) for c, h in zip(patch_center, self.patch_halfsize)
+            )
+
+        # def forward(self,
+        #     y_pred: torch.Tensor,
+        #     y_true: torch.Tensor,
+        #     y_pred_valid: torch.Tensor | None = None,
+        #     y_true_valid: torch.Tensor | None = None,
+        # ):
+        #     if self.use_patch:
+        #         slicer = self.sample_patch_slices()
+        #         x = y_pred[..., *slicer]
+        #         y = y_true[..., *slicer]
+        #     else:
+        #         x = y_pred
+        #         y = y_true
+
+        #     if y_pred_valid is not None and y_true_valid is not None:
+        #         if self.use_patch:
+        #             valid = y_pred_valid[..., *slicer] & y_true_valid[..., *slicer]
+        #         else:
+        #             valid = y_pred_valid & y_true_valid
+        #         x = x[valid]
+        #         y = y[valid]
+
+        def forward(self,
+            y_pred: torch.Tensor,
+            y_true: torch.Tensor,
+            mask: torch.Tensor | None = None,
+            *args,
+            **kwargs,
+        ):
+            slicer = self.sample_patch_slices()
+            x = y_pred[..., *slicer]
+            y = y_true[..., *slicer]
+
+            if mask is not None:
+                mask = mask[..., *slicer]
+                x = x[mask]
+                y = y[mask]
+            return super().forward(x, y, *args, **kwargs)
+
+    return RandMaskedPatchLoss()
+
+RandPatchMSE = rand_masked_patch_loss(torch.nn.MSELoss)
+
 class NormalizedCrossCorrelationLoss(torch.nn.Module):
     def __init__(
         self,

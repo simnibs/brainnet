@@ -1,8 +1,6 @@
 import torch
 
-
 # ERROR FUNCTIONS
-
 
 class SquaredError(torch.nn.Module):
     def __init__(self) -> None:
@@ -55,8 +53,8 @@ class SquaredCosineSimilarityError(torch.nn.CosineSimilarity):
 # DECORATORS
 
 
-def MeanReduction(Loss):
-    class MeanReduction(Loss):
+def wrap_mean_reduction(cls):
+    class MeanReduction(cls):
         def __init__(self, *args, **kwargs) -> None:
             super().__init__(*args, **kwargs)
 
@@ -70,24 +68,18 @@ def MeanReduction(Loss):
     return MeanReduction
 
 
-def SemiHardReduction(Loss):
-    class SemiHardReduction(Loss):
-        def __init__(self, upper_split: float, *args, **kwargs) -> None:
+def wrap_semi_hard_reduction(cls):
+    class SemiHardReduction(cls):
+        def __init__(self, hard_fraction: float, *args, **kwargs) -> None:
             super().__init__(*args, **kwargs)
-            assert 0 <= upper_split <= 0.5
-            self.upper_split = upper_split
+            assert 0 <= hard_fraction <= 0.5
+            self.hard_fraction = hard_fraction
 
         def forward(self, y_pred, y_true, weight=None):
-            y_pred = y_pred[None]
-            y_true = y_true[None]
-
-            B,N = y_pred.shape[:2]
-            n = int(self.upper_split * N)
-            ix = torch.arange(B, device=y_pred.device)[:, None]
+            n = int(self.hard_fraction * y_pred.shape[1])
 
             error = super().forward(y_pred, y_true)
-            if weight is not None:
-                error = error * weight
+            error = error if weight is None else error * weight
             error, error_index = error.sort(dim=-1)
 
             low, high = error[:, :-n], error[:, -n:]
@@ -96,16 +88,15 @@ def SemiHardReduction(Loss):
             low = low[:, index]
 
             if weight is None:
-                loss = 0.5 * low.mean() + 0.5 * high.mean()
+                low_reduc = low.mean()
+                high_reduc = high.mean()
             else:
-                weight_low = weight[ix, error_index[:, :-n][:, index]]
-                weight_high = weight[ix, error_index[:, -n:]]
-                loss = (
-                    0.5 * torch.sum(low * weight_low) / weight_low.sum()
-                    + 0.5 * torch.sum(high * weight_high) / weight_high.sum()
-                )
+                weight_low = weight.gather(1, error_index[:, :-n][:, index])
+                weight_high = weight.gather(1, error_index[:, -n:])
+                low_reduc = torch.sum(low * weight_low) / weight_low.sum()
+                high_reduc = torch.sum(high * weight_high) / weight_high.sum()
 
-            return loss
+            return 0.5 * low_reduc + 0.5 * high_reduc
 
     return SemiHardReduction
 
@@ -113,11 +104,11 @@ def SemiHardReduction(Loss):
 # LOSSES
 
 
-MSELoss = MeanReduction(SquaredError)
-L1Loss = MeanReduction(AbsoluteError)
-MSNELoss = MeanReduction(SquaredNormError)
-MSCosSimLoss = MeanReduction(SquaredCosineSimilarityError)
+MSELoss = wrap_mean_reduction(SquaredError)
+L1Loss = wrap_mean_reduction(AbsoluteError)
+MSNELoss = wrap_mean_reduction(SquaredNormError)
+MSCosSimLoss = wrap_mean_reduction(SquaredCosineSimilarityError)
 
-SemiHardSELoss = SemiHardReduction(SquaredError)
-SemiHardL1Loss = SemiHardReduction(AbsoluteError)
-SemiHardSNELoss = SemiHardReduction(SquaredNormError)
+SemiHardSELoss = wrap_semi_hard_reduction(SquaredError)
+SemiHardL1Loss = wrap_semi_hard_reduction(AbsoluteError)
+SemiHardSNELoss = wrap_semi_hard_reduction(SquaredNormError)

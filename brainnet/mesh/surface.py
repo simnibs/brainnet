@@ -1,6 +1,7 @@
 import torch
 
 from brainnet.mesh.topology import Topology
+from brainnet.utils import atleast_nd_append, atleast_nd_prepend
 
 try:
     from brainnet.mesh.cuda import extensions as cuda_extensions
@@ -15,18 +16,7 @@ smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, cu
 """
 
 
-def atleast_nd_prepend(t, n):
-    if t.ndim >= n:
-        return t
-    else:
-        return atleast_nd_prepend(t[None], n)
 
-
-def atleast_nd_append(t, n):
-    if t.ndim >= n:
-        return t
-    else:
-        return atleast_nd_append(t[..., None], n)
 
 
 class TemplateSurfaces:
@@ -51,6 +41,7 @@ class TemplateSurfaces:
         self.vertices = vertices
         self.vertex_data = {}
         self.face_data = {}
+        self.interpolated = dict(points=None, face_index=None, baricenter=None, data={})
 
     @property
     def topology(self):
@@ -606,6 +597,8 @@ class TemplateSurfaces:
         # Vector from point to triangle origin (if reverse, the negative
         # determinant must be used)
         w = v0[self.batch_ix, tris_per_point] - points[:, :, None]
+
+        # assert torch.allclose(v0[self.batch_ix, tris_per_point], v0.gather(1, tris_per_point))
 
         a = torch.sum(e0**2, -1)[self.batch_ix, tris_per_point]
         b = torch.sum(e0 * e1, -1)[self.batch_ix, tris_per_point]

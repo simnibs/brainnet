@@ -72,6 +72,7 @@ class UNet(torch.nn.Module):
         super().__init__()
         d = spatial_dims
         self.num_levels = len(encoder_channels)
+        assert len(decoder_channels) == self.num_levels - 1
 
         if encoder_post is None:
             encoder_post = [[None]] * self.num_levels
