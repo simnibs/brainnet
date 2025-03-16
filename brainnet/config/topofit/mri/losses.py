@@ -21,6 +21,9 @@ from brainnet.modules.losses_surface import (
 kw_white = dict(y_pred="white", y_true="white")
 kw_pial = dict(y_pred="pial", y_true="pial")
 
+kw_semisym = dict(weight_key="medial_wall", sym_weights=(0.5, 0.5))
+# kw_semisym = dict(weight_key=None, sym_weights=(0.5, 0.5))
+
 functions = dict(
     white=dict(
         matched=SurfaceSupervisedLoss(
@@ -30,15 +33,15 @@ functions = dict(
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss("sampled_P", sym_weights=(0.5, 0.5)),
+            SampledSemiSymmetricMSNormLoss(**kw_semisym),
             **kw_white,
         ),
         hardchamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricSemiHardSNormLoss("sampled_P", sym_weights=(0.5, 0.5), upper_split=0.2),
+            SampledSemiSymmetricSemiHardSNormLoss(**kw_semisym, hard_fraction=0.25),
             **kw_white,
         ),
         curv=SurfaceSupervisedLoss(
-            SampledSemiSymmetricL1Loss("sampled_H"),
+            SampledSemiSymmetricL1Loss("H", **kw_semisym),
             **kw_white,
         ),
         sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="white"),
@@ -55,15 +58,15 @@ functions = dict(
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss("sampled_P", sym_weights=(0.5, 0.5)),
+            SampledSemiSymmetricMSNormLoss(**kw_semisym),
             **kw_pial,
         ),
         hardchamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricSemiHardSNormLoss("sampled_P", sym_weights=(0.5, 0.5), upper_split=0.2),
+            SampledSemiSymmetricSemiHardSNormLoss(**kw_semisym, hard_fraction=0.25),
             **kw_pial,
         ),
         curv=SurfaceSupervisedLoss(
-            SampledSemiSymmetricL1Loss("sampled_H"),
+            SampledSemiSymmetricL1Loss("H", **kw_semisym),
             **kw_pial,
         ),
         sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="pial"),
@@ -74,8 +77,8 @@ functions = dict(
     ),
     thickness=dict(
         angle=SurfaceRegularizationLoss(
-            VertexToVertexAngleLoss(), # cutoff=0.866
-            y_pred = None, # pass everything through, i.e., both white and pial
+            VertexToVertexAngleLoss(),  # cutoff=0.866
+            y_pred=None,  # pass everything through, i.e., both white and pial
         ),
     ),
 )
@@ -87,21 +90,26 @@ head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 #     pial=dict(matched=1.0, hinge=100.0, edge=5.0, chamfer=0.0, curv=0.0, sif=0.0),#, normals=0.0),
 #     # thickness=dict(angle = 1.0),
 # )
-
 loss_weights = dict(
-    white=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
-    pial=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
-    thickness=dict(angle = 5.0),
+    white=dict(
+        matched=0.0,
+        spring=25.0,
+        edge=10.0,
+        chamfer=1.0,
+        hardchamfer=0.0,
+        curv=0.0,
+        sif=0.0,
+    ),
+    pial=dict(
+        matched=0.0,
+        spring=25.0,
+        edge=10.0,
+        chamfer=1.0,
+        hardchamfer=0.0,
+        curv=0.0,
+        sif=0.0,
+    ),
+    thickness=dict(angle=5.0),
 )
-
-#           1     200     400     600     800     1000    1200    1400    ... 1800
-# pred res  4     4       4       4       4       5       5       5       5
-# ----------------------------------------------------------------------------------
-# matched   1.0   1.0     1.0     0.01    0.01    0.001            0.0        0.0
-# hinge   100.0  10.0    10.0     0.1     0.1     0.01             0.0        0.0
-# edge     10.0  10.0    10.0    10.0    10.0     10.0             5.0        2.5
-# chamfer                         1.0     1.0     1.0      1.0     1.0        1.0
-# curv                           50.0    50.0    10.0     10.0    10.0        5.0/2.5
-#
 
 cfg_loss = LossParameters(functions, head_weights, loss_weights)

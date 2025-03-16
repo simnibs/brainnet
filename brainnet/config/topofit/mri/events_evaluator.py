@@ -22,16 +22,18 @@ loss_events = [
             ("pial", "sif"):        1.0,
         }),
     ),
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=210),
-        handler=set_loss_weight,
-        kwargs=dict(weights={
-            ("white", "chamfer"):       0.0,
-            ("pial", "chamfer"):        0.0,
-            ("white", "hardchamfer"):   1.0,
-            ("pial", "hardchamfer"):    1.0,
-        }),
-    ),
+
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=310),
+    #     handler=set_loss_weight,
+    #     kwargs=dict(weights={
+    #         ("white", "chamfer"):       0.0,
+    #         ("pial", "chamfer"):        0.0,
+    #         ("white", "hardchamfer"):   1.0,
+    #         ("pial", "hardchamfer"):    1.0,
+    #     }),
+    # ),
+
     # Remove losses
     # config.EventAction(
     #     event=Events.EPOCH_STARTED(once=1110),

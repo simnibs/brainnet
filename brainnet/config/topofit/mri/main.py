@@ -39,17 +39,17 @@ mode_resolution = "1mm"  # 1mm, random
 tags = []
 
 project: str = "TopoFit"
-run: str = f"{mode_contrast}_{mode_resolution}_16-dec"
+run: str = f"{mode_contrast}_{mode_resolution}"
 
 run_id: None | str = None  # f"{run}-00"
-resume_from_run: None | str = run # None # run
+resume_from_run: None | str = run  # None # run
 tags += [mode_contrast, mode_resolution]
 device: str | torch.device = torch.device("cuda:0")
 
 in_order = 3
 out_order = 7
 template_surface = dict(resolution=in_order, name="template")
-target_surface = dict(resolution=out_order, name="target")
+target_vertices = dict(resolution=out_order, name="target")
 
 # Single hemisphere
 # target_surface_hemisphere: str = "lh"
@@ -94,19 +94,22 @@ match mode_contrast:
     case "synth":
         images_train = ["generation_labels_dist"]
         images_train_sel = None
-        images_val = ["t1w"]
+        images_val = ["generation_labels_dist", "t1w"]
+        images_val_sel = ["t1w"]
         subject_subset_train = "train"
         subject_subset_val = "validation"
     case "t1w":
         images_train = ["generation_labels_dist", "t1w"]
         images_train_sel = ["t1w"]
-        images_val = ["t1w"]
+        images_val = ["generation_labels_dist", "t1w"]
+        images_val_sel = ["t1w"]
         subject_subset_train = "train"
         subject_subset_val = "validation"
     case "t2w":
         images_train = ["generation_labels_dist", "t2w"]
         images_train_sel = ["t2w"]
-        images_val = ["t2w"]
+        images_val = ["generation_labels_dist", "t2w"]
+        images_val_sel = ["t2w"]
         # HCP sub-059 excluded: T2w is just zeros!
         subject_subset_train = "train.t2"
         subject_subset_val = "validation.t2"
@@ -114,7 +117,8 @@ match mode_contrast:
     case "flair":
         images_train = ["generation_labels_dist", "flair"]
         images_train_sel = ["flair"]
-        images_val = ["flair"]
+        images_val = ["generation_labels_dist", "flair"]
+        images_val_sel = ["flair"]
         subject_subset_train = "train.flair"
         subject_subset_val = "validation.flair"
         datasets = ["ADNI3", "AIBL"]
@@ -169,7 +173,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset=subject_subset_train,
         datasets=datasets,
         images=images_train,
-        target_surface=target_surface,
+        target_vertices=target_vertices,
         template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
@@ -179,7 +183,7 @@ cfg_dataset = config.DatasetParameters(
         subject_subset=subject_subset_val,
         datasets=datasets,
         images=images_val,
-        target_surface=target_surface,
+        target_vertices=target_vertices,
         template_surface=template_surface,
         exclude_subjects=subject_subset_exclude,
     ),
@@ -195,92 +199,66 @@ cfg_criterion = config.CriterionParameters(
     validation=losses.cfg_loss,  # could/should be different...
 )
 
+# medial_wall_weights = None
+medial_wall_weights = (1.0, 0.1) # non-MD/MD
+
 # =============================================================================
 # MODEL
 # =============================================================================
 
-# original TopoFit parameters
-# (only return features from the last layer of the decoder)
-unet_kwargs = dict(
-    spatial_dims = 3,
-    in_channels = 1,
-    # Original
-    # encoder_channels = [[32], [64], [64], [96], [96]],
-    # decoder_channels = [[96], [64], [64], [64]],
-    # T1w
-    encoder_channels=[[16], [32], [64], [96], [128]],
-    decoder_channels=[[96], [64], [32], [16]],
-    # Synth
-    # encoder_channels=[[32], [64], [64], [96], [128]],
-    # decoder_channels=[[96], [64], [64], [32]],
-    # return_encoder_features = None,
-    # return_decoder_features = None,
-    return_encoder_features = None, #[True, True, True, True, None],
-    return_decoder_features = [True, True, True, True],
-    # encoder_post = [[16], [32], [None], [None], [None]],
-    # decoder_post = [[None], [None], [32], [16]],
-)
+# fmt: off
+encoder_channels = {
+    ("t1w", "1mm"):         [[16], [32], [64], [128], [256]],
+    ("synth", "1mm"):       [[32], [64], [96], [128], [256]],
+    ("synth", "random"):    [[64], [96], [96], [128], [256]],
+}
+decoder_channels = {
+    ("t1w", "1mm"):         [[128], [64], [32], [16]],
+    ("synth", "1mm"):       [[128], [96], [64], [32]],
+    ("synth", "random"):    [[128], [96], [96], [64]],
+}
+decoder_post = {
+    ("t1w", "1mm"):         None,
+    ("synth", "1mm"):       decoder_channels["t1w","1mm"],
+    ("synth", "random"):    decoder_channels["t1w","1mm"],
+}
+# fmt: on
 
-# Other parameters
-# (return all features)
-# unet_kwargs = dict(
-#     spatial_dims=3,
-#     in_channels=1,
-#     # encoder_channels=[[16], [32], [64], [96], [128]],
-#     # decoder_channels=[[96], [64], [32], [16]],
-#     # return_encoder_features=[True, True, True, True, True],
-#     # return_decoder_features=[True, True, True, True],
-#     return_encoder_features = None,
-#     return_decoder_features = None,
-# )
+# synth
+unet_kwargs = dict(
+    spatial_dims=3,
+    in_channels=1,
+    encoder_channels=encoder_channels[mode_contrast, mode_resolution],
+    decoder_channels=decoder_channels[mode_contrast, mode_resolution],
+    return_encoder_features=None,
+    return_decoder_features=[True, True, True, True],
+    # match the synth features to the T1w features
+    encoder_post=None,
+    decoder_post=decoder_post[mode_contrast, mode_resolution],
+)
 
 unet = body.UNet(**unet_kwargs)
 
-all_features = unet.encoder_features + unet.decoder_features
-
 topofit_kwargs = dict(
-    in_channels = unet.num_features,
-    in_order = in_order,
-    out_order = out_order,
-    max_order = 7,
-    # Original TopoFit parameters
-    white_feature_maps = [
-        # all_features, # 3
-        # all_features, #
-        # all_features, #
-        # all_features, #
-        # all_features, # 7
-        # [unet.encoder_features[3], unet.decoder_features[0]],
-        # [unet.encoder_features[2], unet.decoder_features[1]],
-        # [unet.encoder_features[1], unet.decoder_features[2]],
-        # [unet.encoder_features[0], unet.decoder_features[3]],
-        # [unet.encoder_features[0], unet.decoder_features[3]],
-        # [unet.decoder_features[0]],
-        # [unet.decoder_features[1]],
-        # [unet.decoder_features[2]],
-        # [unet.decoder_features[3]],
-        # [unet.decoder_features[3]],
+    in_channels=unet.num_features,
+    in_order=in_order,
+    out_order=out_order,
+    max_order=7,
+    white_feature_maps=[
         unet.decoder_features,
         unet.decoder_features,
         unet.decoder_features,
         unet.decoder_features,
         unet.decoder_features,
     ],
-    # white_channels = dict(
-    #     encoder=[96, 96, 96, 96],
-    #     decoder=[96, 96, 96],
-    # ),
-    white_channels = dict(
+    white_channels=dict(
         encoder=[64, 64, 64, 64],
         decoder=[64, 64, 64],
     ),
-    # pial_feature_maps = all_features,
-    # pial_feature_maps = [unet.encoder_features[0], unet.decoder_features[3]],
-    pial_feature_maps = [unet.decoder_features[3]],
-    pial_channels = [32],
-    pial_deform_module = "LinearDeformationBlock", # EdgeConvolutionDeformationBlock
-    # pial_channels = [32],
-    # pial_deform_module = "EdgeConvolutionDeformationBlock"
+    # pial_feature_maps = unet.decoder_features,
+    pial_feature_maps=[unet.decoder_features[3]],
+    pial_channels=[32],
+    pial_deform_module="LinearDeformationBlock",
 )
 
 cfg_model = config.BrainNetParameters(
@@ -331,7 +309,7 @@ cfg_synth = config.SynthesizerParameters(
         # photo_mode = False
         # photo_spacing_range = [2.0, 7.0]
         # photo_thickness = 0.001
-        selectable_images=images_val,  # ["t1w", "t2w", "flair"],
+        selectable_images=images_val_sel,  # ["t1w", "t2w", "flair"],
         device=device,
     ),
 )
