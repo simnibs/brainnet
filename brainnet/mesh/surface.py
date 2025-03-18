@@ -276,90 +276,7 @@ class TemplateSurfaces:
 
     #     return cot, area
 
-    def voronoi_area(
-        self, cotangents: torch.Tensor | None = None, apply_correction: bool = True
-    ):
-        """Calculate Voronoi area (eq. 7) of each vertex or, if
-        `apply_correction` is True, calculcate "A_mixed" (fig. 4) from Meyer
-        (2003).
-
-        Parameters
-        ----------
-
-        References
-        ----------
-        Meyer (2003). Discrete Differential-Geometry Operator for Triangulated
-            2-Manifolds.
-        """
-
-        cotangents = self.compute_cotangents() if cotangents is None else cotangents
-
-        EI = self.topology.edge_pairs
-
-        face_area = self.compute_face_areas()
-        face_area = face_area[..., None].expand_as(cotangents).reshape(self.n_batch, -1)
-
-        m = self.as_mesh()
-        edge_vec = torch.stack([m[:, :, i] - m[:, :, j] for i, j in EI], 2)
-        edge_len_sq = edge_vec.pow(2).sum(-1).reshape(self.n_batch, -1)
-
-        cotangents = cotangents.reshape(self.n_batch, -1)
-
-        # The two contributions to the Voronoi area
-        # A = (cot_alpha_ij + cot_beta_ij) * (x_i - x_j)
-        #   = cot_alpha_ij * (x_i - x_j) + cot_beta_ij * (x_i - x_j)
-        cot_x_E2_0 = cotangents * edge_len_sq
-
-        if apply_correction:
-            # Each cot_ij * (x_i - x_j) is collected into both x_i and x_j,
-            # however, the angle might be obtuse at x_i but not x_j (or vice
-            # versa). Hence, we need to duplicate the array: one where x_i is the
-            # source vertex and one where x_j is the source vertex
-            cot_x_E2_1 = cot_x_E2_0.clone()
-
-            # The Voronoi areas are not valid for obtuse triangles (i.e., triangles
-            # with any angle larger than pi/2). Apply correction (fig. 4)
-            is_obtuse_angle = face_angles > torch.pi / 2.0
-            is_obtuse_triangle = is_obtuse_angle.any(-1)
-
-            # Get obtuse-ness at each vertex (related to source vertex in last dim)
-            obtuse = is_obtuse_angle[..., EI].reshape(self.n_batch, -1, 2)
-            obtuse_tri = (
-                is_obtuse_triangle[..., None]
-                .expand_as(face_angles)
-                .reshape(self.n_batch, -1)
-            )
-
-            # If angle is obtuse at x (vertex of interest), use face_area / 2.0
-            # instead of Voronoi area contribution
-            # (The factor 4.0 is to compensate for 1.0 / 8.0 later)
-            cot_x_E2_0[obtuse[..., 0]] = 0.5 * face_area[obtuse[..., 0]] * 4.0
-            cot_x_E2_1[obtuse[..., 1]] = 0.5 * face_area[obtuse[..., 1]] * 4.0
-
-            # If not obtuse at x but triangle is obtuse at any vertex, use
-            # face_area / 4.0 instead of Voronoi area contribution
-            m = obtuse_tri & ~obtuse[..., 0]
-            cot_x_E2_0[m] = 0.25 * face_area[m] * 4.0
-            m = obtuse_tri & ~obtuse[..., 1]
-            cot_x_E2_1[m] = 0.25 * face_area[m] * 4.0
-        else:
-            cot_x_E2_1 = cot_x_E2_0
-
-        edges = self.topology.edges_from_faces().T
-
-        A_mixed = torch.zeros(
-            (self.n_batch, self.topology.n_vertices), device=self.device
-        )
-        # without correction cot_x_E2_0 == cot_x_E2_1
-        A_mixed = torch.index_add(A_mixed, 1, edges[0], cot_x_E2_0)
-        A_mixed = torch.index_add(A_mixed, 1, edges[1], cot_x_E2_1)
-        A_mixed = A_mixed / 8.0
-
-        return A_mixed
-
-    def compute_angles(
-        self, integrate_vertex_angles: bool = False, edge_length_tol=1e-6
-    ):
+    def compute_angles(self, edge_length_tol=1e-6):
         """For each face, compute the angle at each vertex. Optionally,
         integrate the total angle at each vertex
 
@@ -396,28 +313,117 @@ class TemplateSurfaces:
             -1,
         ).acos()
 
+        # Triangles with edges of zero length (!)
         invalid = torch.any(EN < edge_length_tol, 0)
-        face_angles[:, invalid] = torch.pi / 3.0
+        # replace zeros and NaNs
+        min_angle = torch.tensor(1e-3, device=self.device)
+        nan_angle = 0.5 * torch.pi - 1e-3 * torch.pi
+        tmp = torch.maximum(face_angles[invalid], min_angle)
+        tmp = torch.nan_to_num(tmp, nan=nan_angle)
+        face_angles[invalid] = tmp * torch.pi / tmp.sum(-1, keepdim=True)
+        # face_angles[invalid] = torch.pi / 3.0
 
-        if integrate_vertex_angles:
-            vertex_angles = torch.scatter_add(
-                torch.zeros(
-                    (self.n_batch, self.topology.n_vertices), device=self.device
-                ),
-                1,
-                self.faces[:, self.topology.vertex_opposite_edge]
-                .long()
-                .reshape(1, -1)
-                .expand(self.n_batch, -1),
-                face_angles.reshape(self.n_batch, -1),
-            )
-            return face_angles, vertex_angles
-        else:
-            return face_angles
+        return face_angles
+
+    def integrate_face_angles(self, face_angles: torch.Tensor):
+        """Integrate face angles to compute the sum of the angles incident on a
+        particular vertex.
+        """
+
+        return torch.scatter_add(
+            torch.zeros((self.n_batch, self.topology.n_vertices), device=self.device),
+            1,
+            self.faces[:, self.topology.vertex_opposite_edge]
+            .long()
+            .reshape(1, -1)
+            .expand(self.n_batch, -1),
+            face_angles.reshape(self.n_batch, -1),
+        )
 
     def compute_cotangents(self, face_angles: torch.Tensor | None = None):
         face_angles = self.compute_angles() if face_angles is None else face_angles
         return 1.0 / face_angles.tan()
+
+    def voronoi_area(
+        self, face_angles: torch.Tensor | None = None, apply_correction: bool = True
+    ):
+        """Calculate Voronoi area (eq. 7) of each vertex or, if
+        `apply_correction` is True, calculcate "A_mixed" (fig. 4) from Meyer
+        (2003).
+
+
+
+        Parameters
+        ----------
+
+        References
+        ----------
+        Meyer (2003). Discrete Differential-Geometry Operator for Triangulated
+            2-Manifolds.
+        """
+        face_angles = self.compute_angles() if face_angles is None else face_angles
+        cotangents = self.compute_cotangents(face_angles).reshape(self.n_batch, -1)
+
+        edges = self.topology.edges_from_faces().T
+        edge_vec = self.vertices[:, edges].diff(dim=1).squeeze(1)
+        edge_len_sq = edge_vec.pow(2).sum(-1)
+
+        # The two contributions to the Voronoi area
+        # A = (cot_alpha_ij + cot_beta_ij) * (x_i - x_j)
+        #   = cot_alpha_ij * (x_i - x_j) + cot_beta_ij * (x_i - x_j)
+        cot_x_E2_0 = cotangents * edge_len_sq
+
+        if apply_correction:
+            # Each cot_ij * (x_i - x_j) is collected into both x_i and x_j,
+            # however, the angle might be obtuse at x_i but not x_j (or vice
+            # versa). Hence, we need to duplicate the array: one where x_i is the
+            # source vertex and one where x_j is the source vertex
+            cot_x_E2_1 = cot_x_E2_0.clone()
+
+            # The Voronoi areas are not valid for obtuse triangles (i.e., triangles
+            # with any angle larger than pi/2). Apply correction (fig. 4)
+            is_obtuse_angle = face_angles > torch.pi / 2.0
+            is_obtuse_triangle = is_obtuse_angle.any(-1)
+
+            # Get obtuse-ness at each vertex (related to source vertex in last dim)
+            obtuse = is_obtuse_angle[..., self.topology.edge_pairs].reshape(
+                self.n_batch, -1, 2
+            )
+            obtuse_tri = (
+                is_obtuse_triangle[..., None]
+                .expand_as(face_angles)
+                .reshape(self.n_batch, -1)
+            )
+
+            face_area = self.compute_face_areas()
+            face_area = (
+                face_area[..., None].expand_as(cotangents).reshape(self.n_batch, -1)
+            )
+
+            # If angle is obtuse at x (vertex of interest), use face_area / 2.0
+            # instead of Voronoi area contribution
+            # (The factor 4.0 is to compensate for 1.0 / 8.0 later)
+            cot_x_E2_0[obtuse[..., 0]] = 0.5 * face_area[obtuse[..., 0]] * 4.0
+            cot_x_E2_1[obtuse[..., 1]] = 0.5 * face_area[obtuse[..., 1]] * 4.0
+
+            # If not obtuse at x but triangle is obtuse at any vertex, use
+            # face_area / 4.0 instead of Voronoi area contribution
+            m = obtuse_tri & ~obtuse[..., 0]
+            cot_x_E2_0[m] = 0.25 * face_area[m] * 4.0
+            m = obtuse_tri & ~obtuse[..., 1]
+            cot_x_E2_1[m] = 0.25 * face_area[m] * 4.0
+        else:
+            cot_x_E2_1 = cot_x_E2_0
+
+        A_mixed = torch.zeros(
+            (self.n_batch, self.topology.n_vertices), device=self.device
+        )
+        # without correction cot_x_E2_0 == cot_x_E2_1
+        A_mixed = torch.index_add(A_mixed, 1, edges[0], cot_x_E2_0)
+        A_mixed = torch.index_add(A_mixed, 1, edges[1], cot_x_E2_1)
+        A_mixed = A_mixed / 8.0
+
+        return A_mixed
 
     @staticmethod
     def bool_to_sign(b: bool | torch.Tensor):
@@ -426,21 +432,27 @@ class TemplateSurfaces:
     def view_faces_as_vertices(self):
         return self.faces[None].expand((self.n_batch, *self.faces.shape))
 
-    def compute_laplace_beltrami_operator(self):
-        """Computes a discrete estimate of the mean curvature at each vertex.
+    def compute_laplace_beltrami_operator(self, f: torch.Tensor | None = None):
+        """Computes an estimate of the mean curvature over a function at each
+        vertex using discrete Laplace-Beltrami operator. If `f` is None, we
+        compute the curvature of the surface itself (i.e., using the vertex
+        positions).
 
-        Using discrete Laplace-Beltrami operator
+        The Laplace-Beltrami operator (also known as the mean curvature
+        normal operator)
 
-        Here we compute the curvature of the surface itself but we could also
-        do so for a function defined on the surface.
+            K(i) = 2 * H(i) * n(i)
+            K(i) = 0.5 * 1.0 / area * sum_{j in N(i)} [ cot(a_ij) + cot(b_ij) ] * (f_i - f_j)
 
+        where N(i) is the neighborhood of i, n(i) is the normal at i, and H(i)
+        is the mean curvature. The latter is therefore given by
+
+          H(i) = 0.5 * n(i).T * K(i)  # signed
+               = 0.5 * |K(i)|         # unsigned
 
         Parameters
         ----------
-        y_pred : _type_
-            _description_
-        order : _type_
-            _description_
+        f : Tensor | None
 
         Returns
         -------
@@ -454,86 +466,39 @@ class TemplateSurfaces:
         https://computergraphics.stackexchange.com/questions/1718/what-is-the-simplest-way-to-compute-principal-curvature-for-a-mesh-triangle
 
         """
-        bv_shape = (self.n_batch, self.topology.n_vertices)
+        f = self.vertices if f is None else f
+        assert f.shape[0] == self.n_batch
+        assert f.shape[1] == self.topology.n_vertices
 
-        # Compute area per vertex
-        cot = self.compute_cotangents()
-        vertex_area = self.voronoi_area(cot)
-
-        # face_area = face_area / 3.0
-        # face_area = face_area[..., None].expand((self.n_batch, *self.faces.shape))
-
-        # vertex_area = torch.index_add(
-        #     torch.zeros(bv_shape, device=self.device),
-        #     1,
-        #     self.faces.ravel(),
-        #     face_area.reshape(self.n_batch, -1),
-        # )
-
-        inv_vertex_area = 1.0 / vertex_area
-
-        # The edges corresponding to the values of `cotangent`
-        # edge0 = faces[:, (1, 0, 0)].ravel()
-        # edge1 = faces[:, (2, 2, 1)].ravel()
-        # edge0 = edge0[None].expand(n_batch, -1)
-        # edge1 = edge0[None].expand(n_batch, -1)
+        angles = self.compute_angles()
+        vertex_area = self.voronoi_area(angles)
+        cot = self.compute_cotangents(angles)
 
         edges = self.topology.edges_from_faces().T
-        n_edges = edges.shape[1]
+        edge_vec = f[:, edges].diff(dim=1).squeeze(1)
+        cot_vec_sum = torch.zeros_like(f)
+        cot_vec_sum = torch.index_add(cot_vec_sum, 1, edges[0], cot * edge_vec)
+        cot_vec_sum = torch.index_add(cot_vec_sum, 1, edges[1], -cot * edge_vec)
+        return 0.5 * 1.0 / atleast_nd_append(vertex_area, f.ndim) * cot_vec_sum
 
-        # for each vertex, sum the cotangents of all of its edges weighted by
-        # the vertex itself, i.e.,
-        #
-        #   sum_{j in N(i)} (cot(a_ij) + cot(b_ij)) * f(vi)
-        #   = f(vi) * sum_{j in N(i)} cot(a_ij) + cot(b_ij)
-        #
-        # where N(i) is the 1-ring neighbors of vertex i.
-        cot_ab_sum = torch.zeros(bv_shape, device=self.device)
-        cot_ab_sum = torch.index_add(
-            cot_ab_sum, 1, edges[0], cot.reshape(self.n_batch, n_edges),
-        )
-        cot_ab_sum = torch.index_add(
-            cot_ab_sum, 1, edges[1], cot.reshape(self.n_batch, n_edges)
-        )
-        cot_ab_vi = cot_ab_sum[..., None] * self.vertices
-
-        # for each vertex, again compute the sum of cotangents of each edge,
-        # but this time weigh by the opposite vertex and sum over all edges,
-        # i.e.
-        #
-        #   sum_{j in N(i)} (cot(a_ij) + cot(b_ij) * f(vj)
-
-        cot = cot.reshape(self.n_batch, -1, 1)
-
-        # NOTE mind the opposite edge indexing!
-        cot_ab_vj = torch.index_add(
-            torch.zeros_like(self.vertices),
-            1,
-            edges[..., 0],
-            cot * self.vertices[:, edges[..., 1]],
-        )
-        cot_ab_vj = torch.index_add(
-            cot_ab_vj, 1, edges[..., 1], cot * self.vertices[:, edges[..., 0]]
-        )
-
-        # Finally, the Laplace-Beltrami operator (also known as the mean
-        # curvature normal operator)
-        #
-        #   K(v) = 2 * H(v) * n(v)
-        #   K(v) = 0.5 * 1/area * sum_{j in N(i)} [cot(a_ij))+cot(b_ij)] * (v_j - v_i)
-        #
-        # where H(v) is the mean curvature and n(v) are the normals at v, thus
-        #
-        #   H(v) = 0.5 * n(v).T * K(v)  # signed
-        #        = 0.5 * |K(v)|         # unsigned
-        #
-        return 0.5 * inv_vertex_area[..., None] * (cot_ab_vj - cot_ab_vi)
-
-    def compute_mean_curvature(self, K, signed=True):
+    def compute_mean_curvature(self, K: torch.Tensor | None = None, signed=True):
+        K = self.compute_laplace_beltrami_operator() if K is None else K
         if signed:
             return 0.5 * torch.sum(self.compute_vertex_normals() * K, -1)
         else:
             return 0.5 * K.norm(dim=-1)
+
+    def compute_gaussian_curvature(self):
+        angles = self.compute_angles()
+        vertex_area = self.voronoi_area(angles)
+        angles = self.integrate_face_angles(angles)
+        return (2 * torch.pi - angles) / vertex_area
+
+    def compute_principal_curvatures(self, H, G, tol=1e-6):
+        delta = torch.clamp(H**2 - G, tol).sqrt()
+        k1 = H + delta
+        k2 = H - delta
+        return k1, k2
 
     def mean_curvature_flow(self, step_size=1.0, n_iter=1, smooth_iter=10):
         v = self.vertices
@@ -543,34 +508,6 @@ class TemplateSurfaces:
                 K = self.compute_iterative_spatial_smoothing(K)
             v = v + step_size * K
         return v
-
-    # def compute_curvatures(self, K):
-
-    #     # Mean curvature
-    #     H = 0.5 * K.norm(dim=-1)
-
-    #     # Gaussian curvature
-    #     # angles of each face as incident on a particular vertex
-    #     vertex_angles = ...
-    #     G = (2 * torch.pi - vertex_angles) / face_area
-
-    #     # Principal curvatures
-    #     eps = 1e-8
-    #     sq_factor = np.sqrt(torch.clamp(H**2 - G, min=eps))
-    #     k1 = H + sq_factor
-    #     k2 = H - sq_factor
-
-    #     # elif method == "sphere-approx":
-    #     # # Edge curvature
-    #     # nn = compute_normals(y_pred, self.topology[order]["faces"])
-    #     # edge_vec = y_pred[reduce_idx] - y_pred[edge_idx]
-    #     # norm_vec = nn[reduce_idx] - nn[edge_idx]
-    #     # curv_edge = norm_vec @ edge_vec / edge_vec.pow(2).sum(-1)
-
-    #     # # Vertex curvature
-    #     # curv = torch.zeros(len(y_pred))
-    #     # curv = curv.index_reduce(0, reduce_idx, curv_edge, reduce="mean", include_self=False)
-    #     # # curv.scatter_reduce(-1, reduce_idx, curv_edge, reduce="mean")
 
     def compute_iterative_spatial_smoothing(
         self, buffer, iterations=1, dim=1, inplace=False
