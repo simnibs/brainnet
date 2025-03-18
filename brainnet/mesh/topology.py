@@ -80,7 +80,7 @@ class Topology:
     def __init__(
         self,
         faces: torch.Tensor,
-        edge_pairs: str | torch.Tensor | None = None,
+        edge_pairs: torch.Tensor | None = None,
         retain_edge_order: bool = True,
         device: str | torch.device | None = None,
     ):
@@ -101,11 +101,10 @@ class Topology:
         self.n_vertices = self.n_faces_to_n_vertices(self.n_faces)
         self._reversed_face_order = (0, 2, 1)
 
-        self.edge_pairs = (
-            torch.tensor([[1, 2], [2, 0], [0, 1]], dtype=self.dtype, device=self.device)
-            if edge_pairs is None
-            else edge_pairs
-        )
+        if edge_pairs is None:
+            self.edge_pairs = torch.tensor([[1, 2], [2, 0], [0, 1]], dtype=self.dtype, device=self.device)
+        else:
+            self.edge_pairs = edge_pairs
 
         self.set_topology_information(retain_edge_order)
 
@@ -137,25 +136,6 @@ class Topology:
             edges[:, 0] = edge0
             edges[:, 1] = edges[edge0_index, 1]
         return edges
-
-    def get_convolution_indices(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-
-
-        Parameters
-        ----------
-        a :
-            Array on which the convolution is to be applied.
-            shape = (batch size, # vertices, # channels)
-
-        Returns
-        -------
-        reduce_index, gather_index : torch.Tensor, torch.Tensor
-        """
-        reduce_index = self.vertex_adjacency.ravel()
-        gather_index = self.vertex_adjacency.flip(1).ravel()
-
-        return reduce_index, gather_index
 
     def unpool(self, features, reduce="amax"):
         assert (
@@ -195,18 +175,6 @@ class Topology:
             reduce,
             include_self=True,
         )
-
-        # own_features = self.subsample_array(features)
-        # pooled = torch.zeros_like(own_features).copy_(own_features)
-        # pooled.index_reduce_(
-        #     -1,
-        #     self.pool_index_reduce,
-        #     features[..., self.pool_index_gather],
-        #     reduce=reduce,
-        #     include_self=True,
-        # )
-        # return pooled
-
 
     def subsample_array(self, arr: torch.Tensor, dim: int = -1):
         """ """
@@ -280,6 +248,14 @@ class Topology:
         edges : torch.Tensor
             shape (# edges, 2)
         """
+        vs = torch.arange(self.vertices_per_face, device=self.device)
+        self.vertex_opposite_edge = torch.cat(
+            [vs[torch.isin(vs, e, assume_unique=True, invert=True)] for e in self.edge_pairs]
+        )
+        # indices of edge pairs associated with vertex_opposite_edge
+        self.vertex_edges = torch.stack(
+            [torch.where(v == self.edge_pairs)[0] for v in self.vertex_opposite_edge]
+        )
 
         # Vertex adjacency and face-to-edge mapping
         # -----------------------------------------

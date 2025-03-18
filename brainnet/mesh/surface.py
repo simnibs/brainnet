@@ -1,6 +1,6 @@
 import torch
 
-from brainnet.mesh.topology import Topology
+import brainnet.mesh.topology
 from brainnet.utils import atleast_nd_append, atleast_nd_prepend
 
 try:
@@ -16,14 +16,12 @@ smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, cu
 """
 
 
-
-
-
 class TemplateSurfaces:
     def __init__(
         self,
         vertices: torch.Tensor,
-        topology: Topology | torch.Tensor,
+        topology: brainnet.mesh.topology.Topology | torch.Tensor,
+        topology_class: str = "FsAverageTopology",
     ) -> None:
         """A batch of surfaces (vertices) that share a common topology.
 
@@ -37,7 +35,9 @@ class TemplateSurfaces:
         """
         self.device = vertices.device
 
+        self._topology_class = getattr(brainnet.mesh.topology, topology_class)
         self.topology = topology
+
         self.vertices = vertices
         self.vertex_data = {}
         self.face_data = {}
@@ -49,7 +49,11 @@ class TemplateSurfaces:
 
     @topology.setter
     def topology(self, value):
-        self._topology = value if isinstance(value, Topology) else Topology(value)
+        self._topology = (
+            value
+            if isinstance(value, brainnet.mesh.topology.Topology)
+            else self._topology_class(value)
+        )
         self.faces = self._topology.faces
 
     @property
@@ -151,10 +155,18 @@ class TemplateSurfaces:
         """Sample a set of features (B, N[, C]) onto the barycentric coordinates
         defined in `barycentric_coords` (B, N_SAMPLES, 3) each of which refers
         to the faces defined in `faces` (B, N_SAMPLES).
+
+        if `x` is not floating point, use nearest neighbor interpolation
         """
         ix = atleast_nd_append(self.batch_ix, 3)
         uv = atleast_nd_append(barycentric_coords, x.ndim + 1)
-        return torch.sum(x[ix, self.faces[faces]] * uv, dim=2)
+
+        vi = self.faces[faces]
+        if not x.is_floating_point():
+            # select the value(s) associated with the closest vertex
+            vi = vi.gather(1, uv.argmin(2, keep_dims=True))
+        v = x[ix, vi]
+        return torch.sum(v * uv, dim=2) if x.is_floating_point() else v.squeeze(2)
 
     def vertex_feature_to_face_feature(self, x: torch.Tensor):
         """Compute face features from vertex features by averaging."""
@@ -206,54 +218,210 @@ class TemplateSurfaces:
         buffer.index_add_(1, self.faces[:, 1], values)
         buffer.index_add_(1, self.faces[:, 2], values)
 
-    def compute_cotangents(self, eps=1e-8):
-        """
+    # def compute_cotangents(self, eps=1e-8):
+    #     """
 
-        We use Heron's formula for area and
+    #     We use Heron's formula for area and
 
-        cot a = (B^2 + C^2 - A^2) / (4 * area)
-        cot b = (A^2 + C^2 - B^2) / (4 * area)
-        cot c = (A^2 + B^2 - C^2) / (4 * area)
+    #     cot a = (B^2 + C^2 - A^2) / (4 * area)
+    #     cot b = (A^2 + C^2 - B^2) / (4 * area)
+    #     cot c = (A^2 + B^2 - C^2) / (4 * area)
 
+    #     Parameters
+    #     ----------
+
+    #     Returns
+    #     -------
+    #     cot :
+    #         Cotangents [batch_size, n_triangles, 3] of v0, v1, and v2 in
+    #         columns 0, 1, and 2, respectively.
+
+    #     Notes
+    #     -----
+    #     This function is very similar to pytorch3d.ops.laplacian_matrices.cot_laplacian
+    #     """
+    #     # mesh  [batch, triangle, 3, coordinates]
+    #     # E     [batch, triangle, edge]
+    #     # area  [batch, triangle]
+    #     # cot   [batch, triangle, cot]
+
+    #     EP = self.topology.edge_pairs
+    #     VP = self.topology.vertex_opposite_edge
+
+    #     m = self.as_mesh()
+
+    #     edge_length = torch.stack([m[:, :, i] - m[:, :, j] for i, j in EP], -2).norm(
+    #         dim=-1
+    #     )
+    #     # Heron's formula
+    #     s = 0.5 * edge_length.sum(-1)
+    #     area = torch.clamp(
+    #         s * torch.prod(s[..., None] - edge_length, dim=-1), min=eps
+    #     ).sqrt()
+
+    #     # area = self.compute_face_areas()
+
+    #     # cotangents
+    #     edge_length_sq = edge_length**2
+    #     # cot = torch.stack(
+    #     #     [E2[..., i] + E2[..., j] - E2[..., k] for i, j, k in cot_index], -1
+    #     # ) / (4 * area[..., None])
+    #     cot = torch.stack(
+    #         [
+    #             edge_length_sq[..., i] + edge_length_sq[..., j] - edge_length_sq[..., k]
+    #             for (i, j), k in zip(EP, VP)
+    #         ],
+    #         -1,
+    #     ) / (4 * area[..., None])
+
+    #     return cot, area
+
+    def voronoi_area(
+        self, cotangents: torch.Tensor | None = None, apply_correction: bool = True
+    ):
+        """Calculate Voronoi area (eq. 7) of each vertex or, if
+        `apply_correction` is True, calculcate "A_mixed" (fig. 4) from Meyer
+        (2003).
 
         Parameters
         ----------
 
-
-        Returns
-        -------
-        cot :
-            Cotangents [batch_size, n_triangles, 3] of v0, v1, and v2 in
-            columns 0, 1, and 2, respectively.
-
-        Notes
-        -----
-        This function is very similar to pytorch3d.ops.laplacian_matrices.cot_laplacian
+        References
+        ----------
+        Meyer (2003). Discrete Differential-Geometry Operator for Triangulated
+            2-Manifolds.
         """
-        edge_index = ((1, 2), (0, 2), (0, 1))  # opposite v0, v1, v2, respectively
-        cot_index = ((1, 2, 0), (0, 2, 1), (0, 1, 2))
 
-        # mesh  [batch, triangle, 3, coordinates]
-        # E     [batch, triangle, edge]
-        # area  [batch, triangle]
-        # cot   [batch, triangle, cot]
+        cotangents = self.compute_cotangents() if cotangents is None else cotangents
 
-        mesh = self.vertices[:, self.faces]
+        EI = self.topology.edge_pairs
 
-        # edge lengths
-        E = torch.stack(
-            [mesh[..., i, :] - mesh[..., j, :] for i, j in edge_index], -2
-        ).norm(dim=-1)
-        # Heron's formula
-        s = 0.5 * E.sum(-1)
-        area = torch.clamp(s * torch.prod(s[..., None] - E, dim=-1), min=eps).sqrt()
-        # cotangents
-        E2 = E**2
-        cot = torch.stack(
-            [E2[..., i] + E2[..., j] - E2[..., k] for i, j, k in cot_index], -1
-        ) / (4 * area[..., None])
+        face_area = self.compute_face_areas()
+        face_area = face_area[..., None].expand_as(cotangents).reshape(self.n_batch, -1)
 
-        return cot, area
+        m = self.as_mesh()
+        edge_vec = torch.stack([m[:, :, i] - m[:, :, j] for i, j in EI], 2)
+        edge_len_sq = edge_vec.pow(2).sum(-1).reshape(self.n_batch, -1)
+
+        cotangents = cotangents.reshape(self.n_batch, -1)
+
+        # The two contributions to the Voronoi area
+        # A = (cot_alpha_ij + cot_beta_ij) * (x_i - x_j)
+        #   = cot_alpha_ij * (x_i - x_j) + cot_beta_ij * (x_i - x_j)
+        cot_x_E2_0 = cotangents * edge_len_sq
+
+        if apply_correction:
+            # Each cot_ij * (x_i - x_j) is collected into both x_i and x_j,
+            # however, the angle might be obtuse at x_i but not x_j (or vice
+            # versa). Hence, we need to duplicate the array: one where x_i is the
+            # source vertex and one where x_j is the source vertex
+            cot_x_E2_1 = cot_x_E2_0.clone()
+
+            # The Voronoi areas are not valid for obtuse triangles (i.e., triangles
+            # with any angle larger than pi/2). Apply correction (fig. 4)
+            is_obtuse_angle = face_angles > torch.pi / 2.0
+            is_obtuse_triangle = is_obtuse_angle.any(-1)
+
+            # Get obtuse-ness at each vertex (related to source vertex in last dim)
+            obtuse = is_obtuse_angle[..., EI].reshape(self.n_batch, -1, 2)
+            obtuse_tri = (
+                is_obtuse_triangle[..., None]
+                .expand_as(face_angles)
+                .reshape(self.n_batch, -1)
+            )
+
+            # If angle is obtuse at x (vertex of interest), use face_area / 2.0
+            # instead of Voronoi area contribution
+            # (The factor 4.0 is to compensate for 1.0 / 8.0 later)
+            cot_x_E2_0[obtuse[..., 0]] = 0.5 * face_area[obtuse[..., 0]] * 4.0
+            cot_x_E2_1[obtuse[..., 1]] = 0.5 * face_area[obtuse[..., 1]] * 4.0
+
+            # If not obtuse at x but triangle is obtuse at any vertex, use
+            # face_area / 4.0 instead of Voronoi area contribution
+            m = obtuse_tri & ~obtuse[..., 0]
+            cot_x_E2_0[m] = 0.25 * face_area[m] * 4.0
+            m = obtuse_tri & ~obtuse[..., 1]
+            cot_x_E2_1[m] = 0.25 * face_area[m] * 4.0
+        else:
+            cot_x_E2_1 = cot_x_E2_0
+
+        edges = self.topology.edges_from_faces().T
+
+        A_mixed = torch.zeros(
+            (self.n_batch, self.topology.n_vertices), device=self.device
+        )
+        # without correction cot_x_E2_0 == cot_x_E2_1
+        A_mixed = torch.index_add(A_mixed, 1, edges[0], cot_x_E2_0)
+        A_mixed = torch.index_add(A_mixed, 1, edges[1], cot_x_E2_1)
+        A_mixed = A_mixed / 8.0
+
+        return A_mixed
+
+    def compute_angles(
+        self, integrate_vertex_angles: bool = False, edge_length_tol=1e-6
+    ):
+        """For each face, compute the angle at each vertex. Optionally,
+        integrate the total angle at each vertex
+
+        Theta in Fig. 3 (c) of Meyer (2003).
+
+        Parameters
+        ----------
+        integrate_vertex_angles
+            For each vertex, integrate the corresponding angles for all faces
+            which it is part of.
+
+
+        """
+        EI = self.topology.edge_pairs
+        VI = self.topology.vertex_edges
+        V = self.topology.vertex_opposite_edge
+
+        m = self.as_mesh()
+        E = torch.stack([m[:, :, i] - m[:, :, j] for i, j in EI])
+        EN = E.norm(dim=-1)
+
+        face_angles = torch.stack(
+            [
+                torch.sum(
+                    self.bool_to_sign(EI[ej, 0] == vi)
+                    * E[ej]
+                    * self.bool_to_sign(EI[ek, 0] == vi)
+                    * E[ek],
+                    -1,
+                )
+                / (EN[ej] * EN[ek])
+                for vi, (ej, ek) in zip(V, VI)
+            ],
+            -1,
+        ).acos()
+
+        invalid = torch.any(EN < edge_length_tol, 0)
+        face_angles[:, invalid] = torch.pi / 3.0
+
+        if integrate_vertex_angles:
+            vertex_angles = torch.scatter_add(
+                torch.zeros(
+                    (self.n_batch, self.topology.n_vertices), device=self.device
+                ),
+                1,
+                self.faces[:, self.topology.vertex_opposite_edge]
+                .long()
+                .reshape(1, -1)
+                .expand(self.n_batch, -1),
+                face_angles.reshape(self.n_batch, -1),
+            )
+            return face_angles, vertex_angles
+        else:
+            return face_angles
+
+    def compute_cotangents(self, face_angles: torch.Tensor | None = None):
+        face_angles = self.compute_angles() if face_angles is None else face_angles
+        return 1.0 / face_angles.tan()
+
+    @staticmethod
+    def bool_to_sign(b: bool | torch.Tensor):
+        return 1.0 if b else -1.0
 
     def view_faces_as_vertices(self):
         return self.faces[None].expand((self.n_batch, *self.faces.shape))
@@ -286,18 +454,23 @@ class TemplateSurfaces:
         https://computergraphics.stackexchange.com/questions/1718/what-is-the-simplest-way-to-compute-principal-curvature-for-a-mesh-triangle
 
         """
-        cotangent, face_area = self.compute_cotangents()
+        bv_shape = (self.n_batch, self.topology.n_vertices)
 
         # Compute area per vertex
-        face_area = face_area / 3.0
-        face_area = face_area[..., None].expand((self.n_batch, *self.faces.shape))
-        vertex_area = torch.zeros(
-            (self.n_batch, self.topology.n_vertices), device=self.device
-        )
-        vertex_area.index_add_(
-            1, self.faces.ravel(), face_area.reshape(self.n_batch, -1)
-        )
-        inv_vertex_area = 1 / vertex_area
+        cot = self.compute_cotangents()
+        vertex_area = self.voronoi_area(cot)
+
+        # face_area = face_area / 3.0
+        # face_area = face_area[..., None].expand((self.n_batch, *self.faces.shape))
+
+        # vertex_area = torch.index_add(
+        #     torch.zeros(bv_shape, device=self.device),
+        #     1,
+        #     self.faces.ravel(),
+        #     face_area.reshape(self.n_batch, -1),
+        # )
+
+        inv_vertex_area = 1.0 / vertex_area
 
         # The edges corresponding to the values of `cotangent`
         # edge0 = faces[:, (1, 0, 0)].ravel()
@@ -305,8 +478,8 @@ class TemplateSurfaces:
         # edge0 = edge0[None].expand(n_batch, -1)
         # edge1 = edge0[None].expand(n_batch, -1)
 
-        n_edges = 3 * self.topology.n_faces
-        edges = self.topology.edges_from_faces()
+        edges = self.topology.edges_from_faces().T
+        n_edges = edges.shape[1]
 
         # for each vertex, sum the cotangents of all of its edges weighted by
         # the vertex itself, i.e.,
@@ -315,20 +488,13 @@ class TemplateSurfaces:
         #   = f(vi) * sum_{j in N(i)} cot(a_ij) + cot(b_ij)
         #
         # where N(i) is the 1-ring neighbors of vertex i.
-        cot_ab_sum = torch.zeros(
-            (self.n_batch, self.topology.n_vertices), device=self.device
+        cot_ab_sum = torch.zeros(bv_shape, device=self.device)
+        cot_ab_sum = torch.index_add(
+            cot_ab_sum, 1, edges[0], cot.reshape(self.n_batch, n_edges),
         )
-        cot_ab_sum.index_add_(
-            1,
-            edges[:, 0],
-            cotangent.reshape(self.n_batch, n_edges),
+        cot_ab_sum = torch.index_add(
+            cot_ab_sum, 1, edges[1], cot.reshape(self.n_batch, n_edges)
         )
-        cot_ab_sum.index_add_(
-            1,
-            edges[:, 1],
-            cotangent.reshape(self.n_batch, n_edges),
-        )
-
         cot_ab_vi = cot_ab_sum[..., None] * self.vertices
 
         # for each vertex, again compute the sum of cotangents of each edge,
@@ -337,15 +503,17 @@ class TemplateSurfaces:
         #
         #   sum_{j in N(i)} (cot(a_ij) + cot(b_ij) * f(vj)
 
-        cotangent = cotangent.reshape(self.n_batch, -1, 1)
+        cot = cot.reshape(self.n_batch, -1, 1)
 
         # NOTE mind the opposite edge indexing!
-        cot_ab_vj = torch.zeros_like(self.vertices)
-        cot_ab_vj.index_add_(
-            1, edges[..., 0], cotangent * self.vertices[:, edges[..., 1]]
+        cot_ab_vj = torch.index_add(
+            torch.zeros_like(self.vertices),
+            1,
+            edges[..., 0],
+            cot * self.vertices[:, edges[..., 1]],
         )
-        cot_ab_vj.index_add_(
-            1, edges[..., 1], cotangent * self.vertices[:, edges[..., 0]]
+        cot_ab_vj = torch.index_add(
+            cot_ab_vj, 1, edges[..., 1], cot * self.vertices[:, edges[..., 0]]
         )
 
         # Finally, the Laplace-Beltrami operator (also known as the mean
@@ -407,20 +575,17 @@ class TemplateSurfaces:
     def compute_iterative_spatial_smoothing(
         self, buffer, iterations=1, dim=1, inplace=False
     ):
-        reduce_index, gather_index = self.topology.get_convolution_indices()
-        if inplace:
-            out = buffer
-        else:
-            out = torch.zeros_like(buffer, device=self.vertices.device)
-            out.copy_(buffer)
+        out = buffer if inplace else buffer.clone()
+
         for _ in range(iterations):
             out.index_reduce_(
                 dim,
-                reduce_index,
-                out.index_select(dim, gather_index),
+                self.topology.conv_index_reduce,
+                out.index_select(dim, self.topology.conv_index_gather),
                 "mean",
                 include_self=True,
             )
+
         return out
 
     def smooth_taubin(
@@ -429,45 +594,27 @@ class TemplateSurfaces:
         # assert 0.0 <= a <= 1.0, f"a should be in 0 <= a <= 1 (got {a})"
         # assert b <= -a, f"b should be <= -a (got a = {a} and b = {b})"
 
-        reduce_index, gather_index = self.topology.get_convolution_indices()
-
         buffer = self.vertices if buffer is None else buffer
-
-        if inplace:
-            out = buffer
-        else:
-            out = torch.zeros_like(buffer, device=self.vertices.device)
-            out.copy_(buffer)
+        out = buffer if inplace else buffer.clone()
 
         for _ in range(n_iter):
             # Gauss step
-            out = self._smooth_gauss_step(out, a, dim, reduce_index, gather_index)
+            out = self._smooth_gauss_step(out, a, dim)
             # Taubin step
-            out = self._smooth_gauss_step(out, b, dim, reduce_index, gather_index)
+            out = self._smooth_gauss_step(out, b, dim)
 
         return out
-
-    # for i in (0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99,0.999,1):
-    #     print(f"{i:3f} : {H[0].quantile(i)}")
 
     def smooth_gauss(self, buffer, a=0.8, n_iter=1, dim=1, inplace=False):
         # assert 0.0 <= a <= 1.0, f"a should be in 0 <= a <= 1 (got {a})"
 
-        reduce_index, gather_index = self.topology.get_convolution_indices()
-
-        if inplace:
-            out = buffer
-        else:
-            out = torch.zeros_like(buffer, device=buffer.device)
-            out.copy_(buffer)
-
+        out = buffer if inplace else buffer.clone()
         for _ in range(n_iter):
-            out = self._smooth_gauss_step(out, a, dim, reduce_index, gather_index)
+            out = self._smooth_gauss_step(out, a, dim)
 
         return out
 
-    @staticmethod
-    def _smooth_gauss_step(x, a, dim, reduce_index, gather_index):
+    def _smooth_gauss_step(self, x, a, dim):
         """Perform the following update
 
             x_i = x_i + a * sum_j (w_ij * (x_j - x_i))  where j in neighborhood of i
@@ -475,11 +622,11 @@ class TemplateSurfaces:
         using w_ij = 1/|N_i| where |N_i| is the number of neighbors of i.
         """
         # Compute average over neighbors
-        buffer = torch.zeros_like(x, device=x.device)
-        buffer.index_reduce_(
+        buffer = torch.index_reduce(
+            torch.zeros_like(x),
             dim,
-            reduce_index,
-            x.index_select(dim, gather_index),
+            self.topology.conv_index_reduce,
+            x.index_select(dim, self.topology.conv_index_gather),
             "mean",
             include_self=False,
         )
@@ -494,12 +641,6 @@ class TemplateSurfaces:
             .squeeze(-2)
             .norm(dim=-1)
         )
-
-    # def matched_distance(self, other: "BatchedSurfaces", index=None):
-    #     other_vertices = other.vertices
-    #     if index is not None:
-    #         other_vertices = other_vertices[index]
-    #     return torch.norm(self.vertices - other_vertices, dim=-1)
 
     @staticmethod
     def nearest_neighbor_tensors(a: torch.Tensor, b: torch.Tensor):
@@ -804,7 +945,9 @@ class TemplateSurfaces:
         res = (
             self.vertices * cos_angle
             + torch.cross(self.vertices, k_as_v) * alpha.sin()
-            + torch.sum(self.vertices * k_as_v, dim=-1, keepdim=True) * k_as_v * (1 - cos_angle)
+            + torch.sum(self.vertices * k_as_v, dim=-1, keepdim=True)
+            * k_as_v
+            * (1 - cos_angle)
         )
         if inplace:
             self.vertices = res
