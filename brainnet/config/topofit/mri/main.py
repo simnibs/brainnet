@@ -39,15 +39,16 @@ mode_resolution = "1mm"  # 1mm, random
 tags = []
 
 project: str = "TopoFit"
-run: str = f"{mode_contrast}_{mode_resolution}"
+run: str = f"{mode_contrast}_{mode_resolution}-taubin_16"
 
 run_id: None | str = None  # f"{run}-00"
 resume_from_run: None | str = run  # None # run
 tags += [mode_contrast, mode_resolution]
-device: str | torch.device = torch.device("cuda:0")
+device: str | torch.device = torch.device("cuda")
 
-in_order = 3
-out_order = 7
+in_order = 0
+out_order = 6
+max_order = 6
 template_surface = dict(resolution=in_order, name="template")
 target_vertices = dict(resolution=out_order, name="target")
 
@@ -66,6 +67,12 @@ data_dir: Path = Path("/mnt/projects/CORTECH/nobackup/training_data")
 out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 model_dir = out_dir
 # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
+
+# from brainnet.config.topofit.init.main import cfg_model as topoinit_cfg_model
+# from brainnet.config.topofit.init.main import out_order as refined_in_order
+# ckpt_topoinit_model = out_dir / "TopoInit" / "synth_random" / "checkpoint" / "state_checkpoint_00400.pt"
+
+refined_in_order = in_order
 
 # =============================================================================
 # TRAINING MODE
@@ -142,7 +149,7 @@ cfg_train = config.TrainParameters(
     epoch_length_train=100,
     epoch_length_val=50,
     gradient_accumulation_steps=1,
-    # evaluate_on=Events.EPOCH_COMPLETED(every=1),
+    # evaluate_on=Events.EPOCH_COMPLETED(every=5),
     events_trainer=events_trainer.events,
     events_evaluators=events_evaluator.events,
     enable_amp=True,
@@ -199,8 +206,8 @@ cfg_criterion = config.CriterionParameters(
     validation=losses.cfg_loss,  # could/should be different...
 )
 
-# medial_wall_weights = None
-medial_wall_weights = (1.0, 0.1) # non-MD/MD
+medial_wall_weights = None
+# medial_wall_weights = (1.0, 0.1) # non-MD/MD
 
 # =============================================================================
 # MODEL
@@ -209,12 +216,13 @@ medial_wall_weights = (1.0, 0.1) # non-MD/MD
 # fmt: off
 encoder_channels = {
     ("t1w", "1mm"):         [[16], [32], [64], [128], [256]],
-    ("synth", "1mm"):       [[32], [64], [96], [128], [256]],
-    ("synth", "random"):    [[64], [96], [96], [128], [256]],
+    ("synth", "1mm"):       [[16], [32], [64], [128], [256]],
+    ("synth", "random"):    [[16], [32], [64], [128], [256]],
 }
 decoder_channels = {
     ("t1w", "1mm"):         [[128], [64], [32], [16]],
-    ("synth", "1mm"):       [[128], [96], [64], [32]],
+    # ("t1w", "1mm"):         [[128], [64], [32], [32]],
+    ("synth", "1mm"):       [[128], [96], [64], [64]],
     ("synth", "random"):    [[128], [96], [96], [64]],
 }
 decoder_post = {
@@ -241,22 +249,15 @@ unet = body.UNet(**unet_kwargs)
 
 topofit_kwargs = dict(
     in_channels=unet.num_features,
-    in_order=in_order,
+    in_order=refined_in_order,
     out_order=out_order,
-    max_order=7,
-    white_feature_maps=[
-        unet.decoder_features,
-        unet.decoder_features,
-        unet.decoder_features,
-        unet.decoder_features,
-        unet.decoder_features,
-    ],
+    max_order=max_order,
+    white_feature_maps=[unet.decoder_features] * (max_order-refined_in_order+1),
     white_channels=dict(
-        encoder=[64, 64, 64, 64],
-        decoder=[64, 64, 64],
+        encoder=[96, 96, 96, 96],
+        decoder=[96, 96, 96],
     ),
-    # pial_feature_maps = unet.decoder_features,
-    pial_feature_maps=[unet.decoder_features[3]],
+    pial_feature_maps=unet.decoder_features,
     pial_channels=[32],
     pial_deform_module="LinearDeformationBlock",
 )
@@ -282,7 +283,8 @@ cfg_results = config.ResultsParameters(
     load_from_dir=model_dir / project / resume_from_run
     if resume_from_run is not None
     else None,
-    # save_example_on=Events.EPOCH_COMPLETED(every=10),
+    # save_example_on=Events.EPOCH_COMPLETED(every=5),
+    # save_checkpoint_on=Events.EPOCH_COMPLETED(every=5),
 )
 
 # =============================================================================
@@ -294,10 +296,6 @@ cfg_synth = config.SynthesizerParameters(
         builder=builder_train,
         out_size=out_size,
         out_center_str=out_center_str,
-        # segmentation_labels = "brainseg"
-        # photo_mode = False
-        # photo_spacing_range = [2.0, 7.0]
-        # photo_thickness = 0.001
         selectable_images=images_train_sel,
         device=device,
     ),
@@ -305,11 +303,7 @@ cfg_synth = config.SynthesizerParameters(
         builder=builder_validation,
         out_size=out_size,
         out_center_str=out_center_str,
-        # segmentation_labels = "brainseg"
-        # photo_mode = False
-        # photo_spacing_range = [2.0, 7.0]
-        # photo_thickness = 0.001
-        selectable_images=images_val_sel,  # ["t1w", "t2w", "flair"],
+        selectable_images=images_val_sel,
         device=device,
     ),
 )

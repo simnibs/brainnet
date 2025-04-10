@@ -39,15 +39,16 @@ mode_resolution = "1mm"  # 1mm, random
 tags = []
 
 project: str = "TopoFit"
-run: str = f"{mode_contrast}_{mode_resolution}_16-dec_UNET_synthT1w"
+run: str = f"{mode_contrast}_{mode_resolution}-taubin_16-nograd"
 
 run_id: None | str = None  # f"{run}-00"
-resume_from_run: None | str = run # None # run
+resume_from_run: None | str = run  # None # run
 tags += [mode_contrast, mode_resolution]
 device: str | torch.device = torch.device("cuda:0")
 
-in_order = 3
-out_order = 6
+in_order = 0
+out_order = 4
+max_order = 6
 template_surface = dict(resolution=in_order, name="template")
 target_vertices = dict(resolution=out_order, name="target")
 
@@ -67,10 +68,25 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 model_dir = out_dir
 # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
 
-# load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_1mm_UNet_16-dec" / "checkpoint" / "state_checkpoint_00400.pt"
-load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_random_UNet_16-dec_64" / "checkpoint" / "state_checkpoint_00200.pt"
-load_body_from_checkpoint = out_dir / "TopoFit-UNet" / "synth_1mm_UNet_16-dec_synthT1w" / "checkpoint" / "state_checkpoint_00200.pt"
-load_head_from_checkpoint = None # out_dir / "TopoFit" / "t1w_1mm_16-dec" / "checkpoint" / "state_checkpoint_00400.pt"
+ckpt_body = 400
+load_body_from_checkpoint = (
+    out_dir
+    / "TopoFit-UNet"
+    / f"{mode_contrast}_{mode_resolution}"
+    / "checkpoint"
+    / f"state_checkpoint_{ckpt_body:05d}.pt"
+)
+ckpt_head = None # 600
+if ckpt_head is None:
+    load_head_from_checkpoint = None
+else:
+    load_head_from_checkpoint = (
+        out_dir
+        / "TopoFit"
+        / "t1w_1mm-taubin_16"
+        / "checkpoint"
+        / f"state_checkpoint_{ckpt_head:05d}.pt"
+    )
 
 # =============================================================================
 # TRAINING MODE
@@ -204,47 +220,60 @@ cfg_criterion = config.CriterionParameters(
     validation=losses.cfg_loss,  # could/should be different...
 )
 
+medial_wall_weights = None
+
 # =============================================================================
 # MODEL
 # =============================================================================
 
+# fmt: off
+encoder_channels = {
+    ("t1w", "1mm"):         [[16], [32], [64], [128], [256]],
+    ("synth", "1mm"):       [[16], [32], [64], [128], [256]],
+    ("synth", "random"):    [[16], [32], [64], [128], [256]],
+}
+decoder_channels = {
+    ("t1w", "1mm"):         [[128], [64], [32], [16]],
+    # ("t1w", "1mm"):         [[128], [64], [32], [32]],
+    ("synth", "1mm"):       [[128], [96], [64], [64]],
+    ("synth", "random"):    [[128], [96], [64], [64]],
+}
+decoder_post = {
+    ("t1w", "1mm"):         None,
+    ("synth", "1mm"):       decoder_channels["t1w","1mm"],
+    ("synth", "random"):    decoder_channels["t1w","1mm"],
+}
+# fmt: on
+
 # synth
 unet_kwargs = dict(
-    spatial_dims = 3,
-    in_channels = 1,
-    encoder_channels=[[32], [64], [64], [96], [128]],
-    decoder_channels=[[96], [64], [64], [32]],
-    # encoder_channels=[[64], [96], [128], [256], [512]],
-    # decoder_channels=[[256], [128], [96], [64]],
-    return_encoder_features = None,
-    return_decoder_features = [True, True, True, True],
+    spatial_dims=3,
+    in_channels=1,
+    encoder_channels=encoder_channels[mode_contrast, mode_resolution],
+    decoder_channels=decoder_channels[mode_contrast, mode_resolution],
+    return_encoder_features=None,
+    return_decoder_features=[True, True, True, True],
     # match the synth features to the T1w features
-    encoder_post = None,
-    decoder_post = [[96], [64], [32], [16]],
+    encoder_post=None,
+    decoder_post=decoder_post[mode_contrast, mode_resolution],
 )
 
 unet = body.UNet(**unet_kwargs)
 
 topofit_kwargs = dict(
-    in_channels = unet.num_features,
-    in_order = in_order,
-    out_order = out_order,
-    max_order = 7,
-    white_feature_maps = [
-        unet.decoder_features,
-        unet.decoder_features,
-        unet.decoder_features,
-        unet.decoder_features,
-        unet.decoder_features,
-    ],
-    white_channels = dict(
-        encoder=[64, 64, 64, 64],
-        decoder=[64, 64, 64],
+    in_channels=unet.num_features,
+    in_order=in_order,
+    out_order=out_order,
+    max_order=max_order,
+    white_feature_maps=[unet.decoder_features] * (max_order - in_order + 1),
+    white_channels=dict(
+        encoder=[96, 96, 96, 96],
+        decoder=[96, 96, 96],
     ),
     # pial_feature_maps = unet.decoder_features,
-    pial_feature_maps = [unet.decoder_features[3]],
-    pial_channels = [32],
-    pial_deform_module = "LinearDeformationBlock",
+    pial_feature_maps=unet.decoder_features,
+    pial_channels=[32],
+    pial_deform_module="LinearDeformationBlock",
 )
 
 cfg_model = config.BrainNetParameters(
@@ -257,8 +286,7 @@ cfg_model = config.BrainNetParameters(
 # OPTIMIZER
 # =============================================================================
 
-cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=1.0e-4))
-# cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=5.0e-5))
+cfg_optimizer = config.OptimizerParameters("AdamW", dict(lr=5.0e-5))
 
 # =============================================================================
 # RESULTS
@@ -270,8 +298,8 @@ cfg_results = config.ResultsParameters(
     if resume_from_run is not None
     else None,
     # save_example_on=Events.EPOCH_COMPLETED(every=10),
-    load_body_from_checkpoint = load_body_from_checkpoint,
-    load_head_from_checkpoint = load_head_from_checkpoint,
+    load_body_from_checkpoint=load_body_from_checkpoint,
+    load_head_from_checkpoint=load_head_from_checkpoint,
 )
 
 # =============================================================================

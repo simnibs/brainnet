@@ -92,7 +92,7 @@ class ResultsParameters:
     # Which images/surfaces to write when writing examples
     # The image used for prediction is called "x". None -> write everything
     examples_keys: list[str] | None = None
-    save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=50)
+    save_checkpoint_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
     save_example_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
     checkpoint_filename_pattern: str = "{filename_prefix}_{name}_{global_step:05d}.pt"
     require_empty: bool = False # require that checkpoints do not already exist

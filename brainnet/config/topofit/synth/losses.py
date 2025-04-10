@@ -5,12 +5,17 @@ from brainnet.modules.loss_wrappers import (
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
-    FaceNormalConsistencyLoss,
+    EdgeNormLoss,
+    LaplacianLoss,
+    TaubinLoss,
     MatchedDistanceLoss,
+    FaceNormalConsistencyLoss,
     SampledSemiSymmetricL1Loss,
+    SampledSemiSymmetricNL1Loss,
     SampledSemiSymmetricMSNormLoss,
-    SampledSemiSymmetricSemiHardSNormLoss,
+    SampledSemiSymmetricCosSimLoss,
     SelfIntersectionCount,
+    TriangleQualityLoss,
     VertexToVertexAngleLoss,
 )
 
@@ -21,60 +26,60 @@ from brainnet.modules.losses_surface import (
 kw_white = dict(y_pred="white", y_true="white")
 kw_pial = dict(y_pred="pial", y_true="pial")
 
+# kw_semisym = dict(weight_key="medial_wall", sym_weights=(0.5, 0.5))
+kw_semisym = dict(weight_key=None, sym_weights=(0.1, 0.9))
+
 functions = dict(
     white=dict(
-        matched=SurfaceSupervisedLoss(
-            MatchedDistanceLoss(),
-            **kw_white,
-        ),
+        # matched=SurfaceSupervisedLoss(MatchedDistanceLoss(n_vertices=62), **kw_white),
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
-        edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
+        edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
+        tri_Q=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="white"),
+        taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="white"),
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss("sampled_P", sym_weights=(0.5, 0.5)),
-            **kw_white,
-        ),
-        hardchamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricSemiHardSNormLoss(
-                "sampled_P", sym_weights=(0.5, 0.5), upper_split=0.25
+            SampledSemiSymmetricMSNormLoss(
+                value_key=("interpolated", "points"), sym_weights=(0.5, 0.5),
             ),
             **kw_white,
         ),
-        curv=SurfaceSupervisedLoss(
-            SampledSemiSymmetricL1Loss("sampled_H"),
-            **kw_white,
-        ),
-        sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="white"),
-        # normals=SurfaceSupervisedLoss(
-        #     SymmetricSampledMSELoss("normals_sampled"),
+        # normal=SurfaceSupervisedLoss(
+        #     SampledSemiSymmetricCosSimLoss(
+        #         value_key=("interpolated", "normal"),
+        #     ),
         #     **kw_white,
         # ),
+        # curv=SurfaceSupervisedLoss(
+        #     SampledSemiSymmetricNL1Loss(value_key=("interpolated", "H")),
+        #     # SampledSemiSymmetricNSELoss("H", **kw_semisym),
+        #     **kw_white,
+        # ),
+        sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="white"),
     ),
     pial=dict(
-        matched=SurfaceSupervisedLoss(
-            MatchedDistanceLoss(),
-            **kw_pial,
-        ),
+        # matched=SurfaceSupervisedLoss(MatchedDistanceLoss(n_vertices=62), **kw_pial),
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
-        edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
+        taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="pial"),
+        edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
+        tri_Q=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="pial"),
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss("sampled_P", sym_weights=(0.5, 0.5)),
-            **kw_pial,
-        ),
-        hardchamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricSemiHardSNormLoss(
-                "sampled_P", sym_weights=(0.5, 0.5), upper_split=0.25
+            SampledSemiSymmetricMSNormLoss(
+                value_key=("interpolated", "points"), sym_weights=(0.5, 0.5),
             ),
             **kw_pial,
         ),
-        curv=SurfaceSupervisedLoss(
-            SampledSemiSymmetricL1Loss("sampled_H"),
-            **kw_pial,
-        ),
-        sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="pial"),
-        # normals=SurfaceSupervisedLoss(
-        #     SymmetricSampledMSELoss("normals_sampled"),
+        # normal=SurfaceSupervisedLoss(
+        #     SampledSemiSymmetricCosSimLoss(
+        #         value_key=("interpolated", "normal"),
+        #     ),
         #     **kw_pial,
         # ),
+        # smoothness_vertex_chamfer = SurfaceSupervisedLoss(IndexedSmoothnessLoss(),**kw_pial),
+        # curv=SurfaceSupervisedLoss(
+        #     SampledSemiSymmetricNL1Loss(value_key=("interpolated", "H")),
+        #     # SampledSemiSymmetricNSELoss("H", **kw_semisym),
+        #     **kw_pial,
+        # ),
+        sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="pial"),
     ),
     thickness=dict(
         angle=SurfaceRegularizationLoss(
@@ -86,31 +91,34 @@ functions = dict(
 
 head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 
-# loss_weights = dict(
-#     white=dict(
-#         matched=0.0,
-#         spring=2.0,
-#         edge=2.0,
-#         chamfer=1.0,
-#         hardchamfer=0.0,
-#         curv=0.0,
-#         sif=0.0,
-#     ),
-#     pial=dict(
-#         matched=0.0,
-#         spring=2.0,
-#         edge=2.0,
-#         chamfer=1.0,
-#         hardchamfer=0.0,
-#         curv=0.0,
-#         sif=0.0,
-#     ),
-#     thickness=dict(angle=5.0),
-# )
+# fmt: off
 loss_weights = dict(
-    white=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
-    pial=dict(matched=0.0, spring=25.0, edge=10.0, chamfer=1.0, hardchamfer=0.0, curv=0.0, sif=0.0),
-    thickness=dict(angle = 5.0),
+    white = dict(
+        # normal   =   0.0,
+        # matched  =    1.0,
+        chamfer  =    1.0,
+        # curv     =    0.0,
+        sif      =    0.0,
+        # spring   =   40.0,
+        taubin   =  100.0,
+        edge_var =    5.0, # 10
+        tri_Q  =      2.5, # 5
+    ),
+    pial = dict(
+        # normal   =   0.0,
+        # matched  =    1.0,
+        chamfer  =    1.0,
+        curv     =    0.0,
+        sif      =    0.0,
+        # spring   =   40.0,
+        taubin   =  100.0,
+        edge_var =    2.5, # 5
+        tri_Q  =      2.5, # 5
+    ),
+    thickness = dict(
+        angle    =    1.0,
+    ),
 )
+# fmt: on
 
 cfg_loss = LossParameters(functions, head_weights, loss_weights)
