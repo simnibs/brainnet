@@ -1,7 +1,7 @@
 import torch
 
 from brainnet.modules.blocks import ConvolutionBlock
-from brainnet.modules.topofit import TopoFit#, TopoReg
+from brainnet.modules.topofit import TopoFit, TopoInit #, TopoReg
 
 """
 image -> feature extractor -> task nets -> prediction
@@ -34,7 +34,6 @@ class HeadModule(torch.nn.Sequential):
 
     def forward(self, features):
         return super().forward(features[self.feature])
-
 
 
 class SVFModule(torch.nn.Module):
@@ -107,5 +106,5 @@ class ContrastiveModule(torch.nn.Module):
 
 
 # surface_modules = (CortexThing, TopoFit)
-surface_modules = (TopoFit, )
+surface_modules = (TopoFit, TopoInit)
 

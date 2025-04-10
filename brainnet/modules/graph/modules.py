@@ -1,10 +1,209 @@
 import torch
 
-from brainnet.mesh import topology
+import brainnet.mesh.topology
 from brainnet.modules.graph import layers
 
 
-class SurfaceModule(torch.nn.Module):
+class GenericSurfaceModule(torch.nn.Module):
+    def __init__(
+            self,
+            in_order: int,
+            out_order: int,
+            max_order: int,  # n_topologies: int = 7, # 0 - n_topologies
+            topology: str = "DeepSurferTopology",
+            device: str | torch.device = "cpu",
+        ):
+        super().__init__()
+        self.device = torch.device(device)
+        self.in_order = in_order
+        self.max_order = max_order
+        self.initialize_topologies(topology)
+        self.set_out_order(out_order)
+
+    def initialize_topologies(self, topology):
+        # The DeepSurfer topology is defined on the left hemisphere and
+        # although the topology is the same for both hemispheres, we need to
+        # reverse the
+        # order of the vertices in face array in order for the ordering to
+        # remain consistent (e.g., counter-clockwise) once the vertices are
+        # (almost) left-right mirrored
+
+        # We use the left topology in the submodules which only use knowledge
+        # of the neighborhoods to define the convolutions (and this is
+        # independent of the face orientation).
+
+        self.topologies = getattr(brainnet.mesh.topology, topology).recursive_subdivision(
+            self.max_order,
+            device=self.device,
+        )
+        self.all_topologies = list(range(self.in_order, self.max_order + 1))
+        self.n_topologies = len(self.all_topologies)
+
+    def set_out_order(self, order):
+        assert self.max_order >= order
+        self.out_order = order
+        self.active_topologies = list(range(self.in_order, self.out_order + 1))
+        self.out_topology = self.topologies[self.active_topologies[-1]]
+
+    def solve_ode_euler(self, h, v, dv):
+        """Solve dv/dt = f(t, v) using Euler's method."""
+        return v + h * dv
+
+    # def solve_ode_RK4(self, h, v, dv):
+    #     k1 = dv
+    #     k2 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k1))
+    #     k3 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k2))
+    #     k4 = self.pial_deform(self.grid_sample_features(fmaps, v + h * k3))
+    #     return v + h/6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+    def _get_features(self, features, maps):
+        # return (torch.cat([features[m] for m in maps], dim=1), )
+        return tuple(features[m] for m in maps)
+
+    def grid_sample_features(
+        self, features: list[torch.Tensor] | tuple, vertices: torch.Tensor
+    ):
+        return torch.cat(tuple(self.grid_sample(f, vertices) for f in features), dim=1)
+
+    def grid_sample(self, image, vertices):
+        """
+
+        Parameters
+        ----------
+        image :
+            image shape is (N, C, W, H, D)
+        vertices :
+            vertices shape is (N, 3, M)
+
+        Returns
+        -------
+        samples :
+            samples shape (N, C, M)
+        """
+        # vertices are in voxel coordinates
+        vertices = self.normalize_coordinates(vertices)
+
+        # samples is N,C,D,H,W where C is from `image` and D,H,W are from `points`
+        samples = torch.nn.functional.grid_sample(
+            image.swapaxes(2, 4),  # N,C,W,H,D -> N,C,D,H,W
+            # N,3,M -> N,M,3 -> N,D,H,W,3 where D=M; H=W=1
+            vertices.mT[:, :, None, None],
+            align_corners=True,
+        )
+        return samples[..., 0, 0] # squeeze out H, W
+
+    @staticmethod
+    def get_image_shape(image):
+        return torch.tensor(image.shape[-3:], dtype=image.dtype, device=image.device)
+
+    def get_image_center(self, image_shape):
+        return 0.5 * (image_shape[None, :, None] - 1.0)
+
+    def set_image_center(self, image):
+        """This is used with grid sampling when align_corners=True."""
+        self._image_shape = self.get_image_shape(image)
+        self._image_center = self.get_image_center(self._image_shape)
+
+    def normalize_coordinates(self, coords, image: None | torch.Tensor = None):
+        # vertices are in voxel coordinates
+
+        # Transform vertices from (0, shape) to (-half_shape, half_shape), then
+        # normalize to [-1, 1]
+        if image is None:
+            return (coords - self._image_center) / self._image_center
+        else:
+            center = self.get_image_center(self.get_image_shape(image))
+            return (coords - center) / center
+
+    def unnormalize_coordinates(self, coords, image: None | torch.Tensor = None):
+        if image is None:
+            return self._image_center * coords + self._image_center
+        else:
+            center = self.get_image_center(self.get_image_shape(image))
+            return center * coords + center
+
+
+class SurfaceInitializerModule(GenericSurfaceModule):
+    def __init__(
+        self,
+        in_order: int,
+        out_order: int,
+        max_order: int,  # n_topologies: int = 7, # 0 - n_topologies
+        feature_maps: list[list[str]],
+        n_steps: int | list[int] | None = None,
+        topology: str = "DeepSurferTopology",
+        device: str | torch.device = "cpu",
+    ):
+        super().__init__(in_order, out_order, max_order, topology, device)
+
+        if n_steps is None:
+            n_steps = [2] * (self.n_topologies-1) + [1]
+        elif isinstance(n_steps, int):
+            n_steps = [n_steps] * self.n_topologies
+
+        self.n_steps = dict(zip(self.all_topologies, n_steps))
+        self.step_size = {k: 1.0 / v for k, v in self.n_steps.items()}
+        self.feature_maps = dict(zip(self.all_topologies, feature_maps))
+
+        self.deform = torch.nn.ModuleDict()
+
+
+    def _estimate_surface(self, features: dict[str, torch.Tensor], v: torch.Tensor):
+        for order in self.active_topologies:
+            step_size = self.step_size[order]
+            deform = self.deform[str(order)]
+            fmaps = self._get_features(features, self.feature_maps[order])
+            for _ in range(self.n_steps[order]):
+                v_features = self.grid_sample_features(fmaps, v)
+                v = self.solve_ode_euler(step_size, v, deform(v_features))
+            if order < self.out_order:
+                v = self.topologies[order].subdivide_vertices(v)
+        return v
+
+    def forward(
+        self,
+        features: dict[str, torch.Tensor],
+        template_vertices: dict[str, torch.Tensor],
+    ):
+        """
+        Faces can be retrieved from
+
+            faces = self.topologies[self.prediction_res].faces
+
+        Parameters
+        ----------
+        features : torch.Tensor
+            Tensor of shape (N, C, W, H, D) where N is batch size and C is the
+            number of channels (feature maps).
+            NOTE Torch assumes that images are (N,C,D,H,W). For convolutions
+            this does not really matter, however, when we sample features for
+            the surface vertices using `grid_sample`, we need to transpose D
+            and W to that they correspond to the coordinates of `vertices`
+            which are x,y,z (W,H,D).
+        vertices : torch.Tensor
+            Tensor of shape (N, M, 3) where M is the number of vertices and the
+            last dimension contains the coordinates (x,y,z).
+
+        Returns
+        -------
+
+        """
+        # features = [features] if isinstance(features, torch.Tensor) else features
+
+        # The last feature map has the same spatial dimensions as the input
+        # image
+        last_feature_map = tuple(features.values())[-1]
+        self.set_image_center(last_feature_map)
+
+        dtype = last_feature_map.dtype
+        template_vertices = {k: v.to(dtype) for k,v in template_vertices.items()}
+
+        return {
+            h:  dict(white=self._estimate_surface(features, v.mT).mT) for h, v in template_vertices.items()
+        }
+
+
+class SurfaceModule(GenericSurfaceModule):
     def __init__(
         self,
         in_order: int,
@@ -14,45 +213,16 @@ class SurfaceModule(torch.nn.Module):
         pial_feature_maps: list[str],
         white_n_steps: int | list[int] | None = None,
         pial_n_steps: int  = 10,
+        topology: str = "DeepSurferTopology",
         device: str | torch.device = "cpu",
     ) -> None:
-        super().__init__()
-        self.device = torch.device(device)
-
-        # TOPOLOGIES
-        assert max_order >= out_order
-        self.out_order = out_order
-
-        # The topology is defined on the left hemisphere and although the
-        # topology is the same for both hemispheres, we need to reverse the
-        # order of the vertices in face array in order for the ordering to
-        # remain consistent (e.g., counter-clockwise) once the vertices are
-        # (almost) left-right mirrored
-
-        # We use the left topology in the submodules which only use knowledge
-        # of the neighborhoods to define the convolutions (and this is
-        # independent of the face orientation).
-
-        # self.topologies = topology.StandardTopology.recursive_subdivision(
-        #     max_order,
-        #     device=self.device,
-        # )
-
-        self.topologies = topology.FsAverageTopology.recursive_subdivision(
-            max_order,
-            device=self.device,
-        )
-
-        self.active_topologies = list(range(in_order, out_order + 1))
-        self.out_topology = self.topologies[self.active_topologies[-1]]
-        self.all_topologies = list(range(in_order, max_order + 1))
-        n_topologies = len(self.all_topologies)
+        super().__init__(in_order, out_order, max_order, topology, device)
 
         # WHITE MATTER CONFIG
         if white_n_steps is None:
-            white_n_steps =[2] * (n_topologies-1) + [1]
+            white_n_steps = [2] * (self.n_topologies-1) + [1]
         elif isinstance(white_n_steps, int):
-            white_n_steps = [white_n_steps] * n_topologies
+            white_n_steps = [white_n_steps] * self.n_topologies
 
         self.white_n_steps = dict(zip(self.all_topologies, white_n_steps))
         self.white_step_size = {k: 1.0 / v for k, v in self.white_n_steps.items()}
@@ -125,10 +295,6 @@ class SurfaceModule(torch.nn.Module):
         # Transpose back to (N, M, 3)
         return dict(white=white_vertices, pial=pial_vertices)
 
-    def _get_features(self, features, maps):
-        # return (torch.cat([features[m] for m in maps], dim=1), )
-        return tuple(features[m] for m in maps)
-
     def _estimate_white(self, features: dict[str, torch.Tensor], v: torch.Tensor):
         for order in self.active_topologies:
             step_size = self.white_step_size[order]
@@ -148,78 +314,7 @@ class SurfaceModule(torch.nn.Module):
             v = self.solve_ode_euler(self.pial_step_size, v, self.pial_deform(v_features))
         return v
 
-    def solve_ode_euler(self, h, v, dv):
-        """Solve dv/dt = f(t, v) using Euler's method."""
-        return v + h * dv
 
-    # def solve_ode_RK4(self, h, v, dv):
-    #     k1 = dv
-    #     k2 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k1))
-    #     k3 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k2))
-    #     k4 = self.pial_deform(self.grid_sample_features(fmaps, v + h * k3))
-    #     return v + h/6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
-
-    def grid_sample_features(
-        self, features: list[torch.Tensor] | tuple, vertices: torch.Tensor
-    ):
-        return torch.cat(tuple(self.grid_sample(f, vertices) for f in features), dim=1)
-
-    def grid_sample(self, image, vertices):
-        """
-
-        Parameters
-        ----------
-        image :
-            image shape is (N, C, W, H, D)
-        vertices :
-            vertices shape is (N, 3, M)
-
-        Returns
-        -------
-        samples :
-            samples shape (N, C, M)
-        """
-        # vertices are in voxel coordinates
-        vertices = self.normalize_coordinates(vertices)
-
-        # samples is N,C,D,H,W where C is from `image` and D,H,W are from `points`
-        samples = torch.nn.functional.grid_sample(
-            image.swapaxes(2, 4),  # N,C,W,H,D -> N,C,D,H,W
-            # N,3,M -> N,M,3 -> N,D,H,W,3 where D=M; H=W=1
-            vertices.mT[:, :, None, None],
-            align_corners=True,
-        )
-        return samples[..., 0, 0] # squeeze out H, W
-
-    @staticmethod
-    def get_image_shape(image):
-        return torch.tensor(image.shape[-3:], dtype=image.dtype, device=image.device)
-
-    def get_image_center(self, image_shape):
-        return 0.5 * (image_shape[None, :, None] - 1.0)
-
-    def set_image_center(self, image):
-        """This is used with grid sampling when align_corners=True."""
-        self._image_shape = self.get_image_shape(image)
-        self._image_center = self.get_image_center(self._image_shape)
-
-    def normalize_coordinates(self, coords, image: None | torch.Tensor = None):
-        # vertices are in voxel coordinates
-
-        # Transform vertices from (0, shape) to (-half_shape, half_shape), then
-        # normalize to [-1, 1]
-        if image is None:
-            return (coords - self._image_center) / self._image_center
-        else:
-            center = self.get_image_center(self.get_image_shape(image))
-            return (coords - center) / center
-
-    def unnormalize_coordinates(self, coords, image: None | torch.Tensor = None):
-        if image is None:
-            return self._image_center * coords + self._image_center
-        else:
-            center = self.get_image_center(self.get_image_shape(image))
-            return center * coords + center
 
 def make_unet_channels(in_channels: int, depth: int, multiplier: int = 2) -> dict:
     """Construct Unet hierarchy"""
@@ -238,7 +333,7 @@ class UNet(torch.nn.Module):
     def __init__(
         self,
         in_channels: int,
-        topologies: list[topology.Topology],
+        topologies: list[ brainnet.mesh.topology.Topology],
         conv_module: torch.nn.Module,
         reduce: str = "amax",
         channels: int | dict = 32,
@@ -422,7 +517,7 @@ class UNetTransform(torch.nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        topologies: list[topology.Topology],
+        topologies: list[brainnet.mesh.topology.Topology],
         channels: None | dict = None,
         unet_conv_module: torch.nn.Module = layers.EdgeConvolutionBlock,
         deform_conv_module: torch.nn.Module = layers.EdgeConvolution,
@@ -455,12 +550,11 @@ class UNetTransform(torch.nn.Module):
         )
 
         # Final convolution block to estimate deformation field from features
-        reduce_index, gather_index = topologies[-1].get_convolution_indices()
         deform = deform_conv_module(
             unet.out_ch,
             out_channels,
-            reduce_index,
-            gather_index,
+            topologies[-1].conv_index_reduce,
+            topologies[-1].conv_index_gather,
             bias=False,
             init_zeros=True,
         )

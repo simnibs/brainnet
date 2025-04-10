@@ -49,6 +49,7 @@ class UNet(torch.nn.Module):
         return_encoder_features: (None | list[bool]) = None,
         return_decoder_features: None | list[bool] = None,
         max_pool_size: int = 2,
+        conv_kwargs: dict | None = None,
         encoder_post: list[list[int]] | None = None,
         decoder_post: list[list[int]] | None = None,
     ):
@@ -117,7 +118,9 @@ class UNet(torch.nn.Module):
         self.encoder_post = torch.nn.ModuleDict()
         self.encoder_scale = []
         for i, e_chs in enumerate(encoder_channels):
-            self.encoder[f"enc:{i}"], out_ch = self.make_conv_block(d, in_ch, e_chs)
+            self.encoder[f"enc:{i}"], out_ch = self.make_conv_block(
+                d, in_ch, e_chs, conv_kwargs
+            )
             # Add skip connection
             if i < (self.num_levels - 1):
                 skip_connections.append(out_ch)
@@ -126,7 +129,7 @@ class UNet(torch.nn.Module):
             # Post processing
             if self.return_encoder_features[i]:
                 self.encoder_post[f"enc:{i}"], out_ch = self.make_conv_block(
-                    d, out_ch, encoder_post[i]
+                    d, out_ch, encoder_post[i], conv_kwargs
                 )
             self.num_features[f"enc:{i}"] = out_ch
 
@@ -137,14 +140,16 @@ class UNet(torch.nn.Module):
         scale = self.encoder_scale[-1]
         for i, d_chs in enumerate(decoder_channels):
             in_ch += skip_connections.pop()
-            self.decoder[f"dec:{i}"], out_ch = self.make_conv_block(d, in_ch, d_chs)
+            self.decoder[f"dec:{i}"], out_ch = self.make_conv_block(
+                d, in_ch, d_chs, conv_kwargs
+            )
             scale /= max_pool_size
             self.decoder_scale.append(int(scale))
             in_ch = out_ch
             # Post processing
             if self.return_decoder_features[i]:
                 self.decoder_post[f"dec:{i}"], out_ch = self.make_conv_block(
-                    d, out_ch, decoder_post[i]
+                    d, out_ch, decoder_post[i], conv_kwargs
                 )
             self.num_features[f"dec:{i}"] = out_ch
 
@@ -170,11 +175,20 @@ class UNet(torch.nn.Module):
         # self.feature_scales |= {f"{self._fm_name['decoder'](i)}": n for i,n in enumerate(self.decoder_scale)}
 
     @staticmethod
-    def make_conv_block(spatial_dims, in_ch, channels: list[int] | tuple | None = None):
+    def make_conv_block(
+        spatial_dims,
+        in_ch,
+        channels: list[int] | tuple | None = None,
+        conv_kwargs: dict | None = None,
+    ):
         conv_block = torch.nn.Sequential()
-        if channels[0] is not None:
+        if channels is not None and channels[0] is not None:
             for out_ch in channels:
-                conv_block.append(ConvolutionBlock(spatial_dims, in_ch, out_ch))
+                conv_block.append(
+                    ConvolutionBlock(
+                        spatial_dims, in_ch, out_ch, conv_kwargs=conv_kwargs
+                    )
+                )
                 in_ch = out_ch
         return conv_block, in_ch
 

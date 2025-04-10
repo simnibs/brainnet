@@ -11,7 +11,7 @@ from brainsynth.transforms.spatial import ScaleAndSquare
 
 import brainnet.modules.head
 import brainnet.mesh.topology
-from brainnet.mesh.surface import TemplateSurfaces
+from brainnet.mesh.surface import Surface
 from brainnet.modules.graph.modules import UNetTransform
 from brainnet.sphere_utils import change_sphere_size
 
@@ -241,15 +241,6 @@ class BrainInflate(torch.nn.Module):
         # assert n_topologies >= out_res + 1
         # self.out_res = out_res
 
-        # The topology is defined on the left hemisphere and although the
-        # topology is the same for both hemispheres, we need to reverse the
-        # order of the vertices in face array in order for the ordering to
-        # remain consistent (e.g., counter-clockwise) once the vertices are
-        # (almost) left-right mirrored
-
-        # We use the left topology in the submodules which only use knowledge
-        # of the neighborhoods to define the convolutions (and this is
-        # independent of the face orientation).
         self.topologies = brainnet.mesh.topology.get_recursively_subdivided_topology(
             n_topologies - 1,
             brainnet.mesh.topology.initial_faces.to(self.device),
@@ -261,7 +252,7 @@ class BrainInflate(torch.nn.Module):
         self.topology["rh"].reverse_face_orientation()
 
         self.surface = {
-            k: TemplateSurfaces(torch.zeros(v.n_vertices, 3, device=self.device), v)
+            k: Surface(torch.zeros(v.n_vertices, 3, device=self.device), v)
             for k, v in self.topology.items()
         }
 
@@ -281,7 +272,7 @@ class BrainInflate(torch.nn.Module):
 
     def set_surfaces(self, vertices):
         self.surface = {
-            k: TemplateSurfaces(v, self.topology[k]) for k, v in vertices.items()
+            k: Surface(v, self.topology[k]) for k, v in vertices.items()
         }
 
     def normalize_coordinates(self):
@@ -361,12 +352,12 @@ class SphericalReg(torch.nn.Module):
         self.set_topologies(n_topologies)
 
         self.surface = {
-            k: TemplateSurfaces(torch.zeros(v.n_vertices, 3, device=self.device), v)
+            k: Surface(torch.zeros(v.n_vertices, 3, device=self.device), v)
             for k, v in self.topology.items()
         }
 
         # Initial positions
-        self.sphere = TemplateSurfaces(
+        self.sphere = Surface(
             torch.tensor(
                 nib.freesurfer.read_geometry(
                     brainsynth.resources_dir / "sphere-reg.srf"
@@ -402,15 +393,6 @@ class SphericalReg(torch.nn.Module):
         )
 
     def set_topologies(self, n_topologies):
-        # The topology is defined on the left hemisphere and although the
-        # topology is the same for both hemispheres, we need to reverse the
-        # order of the vertices in face array in order for the ordering to
-        # remain consistent (e.g., counter-clockwise) once the vertices are
-        # (almost) left-right mirrored
-
-        # We use the left topology in the submodules which only use knowledge
-        # of the neighborhoods to define the convolutions (and this is
-        # independent of the face orientation).
         self.topologies = brainnet.mesh.topology.get_recursively_subdivided_topology(
             n_topologies - 1,
             brainnet.mesh.topology.initial_faces.to(self.device),

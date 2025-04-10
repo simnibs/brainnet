@@ -1,5 +1,28 @@
-from brainnet.modules.graph.modules import UNetTransform, SurfaceModule
+from brainnet.modules.graph.modules import UNetTransform, SurfaceModule, SurfaceInitializerModule
 import brainnet.modules.graph.layers
+
+
+class TopoInit(SurfaceInitializerModule):
+    def __init__(
+        self,
+        in_channels: dict[str, int],
+        out_channels: int = 3,
+        channels: dict | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+
+        UNetTransform_kwargs = dict(channels=channels)
+
+        for topo in self.all_topologies:  # e.g., 1, 2, ..., 7
+            self.deform[str(topo)] = UNetTransform(
+                sum(in_channels[j] for j in self.feature_maps[topo]),
+                out_channels,
+                self.topologies[: topo + 1],
+                **UNetTransform_kwargs,
+            )
+
 
 class TopoFit(SurfaceModule):
     def __init__(

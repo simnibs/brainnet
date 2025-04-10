@@ -60,7 +60,7 @@ class GraphConvolution(torch.nn.Module):
             torch.zeros_like(features_self),
             -1,
             self.reduce_index,
-            features_other[..., self.gather_index]
+            features_other[..., self.gather_index],
         )
 
         # merge (self and neighbors)
@@ -137,6 +137,7 @@ def convolution_block(Convolution):
 GraphConvolutionBlock = convolution_block(GraphConvolution)
 EdgeConvolutionBlock = convolution_block(EdgeConvolution)
 
+
 class ResidualGraphConvolution(torch.nn.Module):
     def __init__(
         self,
@@ -152,9 +153,9 @@ class ResidualGraphConvolution(torch.nn.Module):
         self.convs = torch.nn.Sequential()
         for in_ch, out_ch in zip(channels[:-2], channels[1:-1]):
             self.convs.append(GraphConvolutionBlock(in_ch, out_ch, **kwargs))
-        self.convs.append(GraphConvolutionBlock(
-            channels[-2], channels[-1], activation=None, **kwargs
-        ))
+        self.convs.append(
+            GraphConvolutionBlock(channels[-2], channels[-1], activation=None, **kwargs)
+        )
         self.norm = torch.nn.InstanceNorm1d(
             channels[0], affine=False, track_running_stats=False
         )
@@ -318,7 +319,7 @@ class LinearDeformationBlock(torch.nn.Sequential):
         # self.add_module(
         #     "Convolution[out]", torch.nn.Conv1d(in_channels, out_channels, 1)
         # )
-        for i,out_ch in enumerate(linear_channels):
+        for i, out_ch in enumerate(linear_channels):
             self.add_module(f"Convolution_{i}", torch.nn.Conv1d(in_channels, out_ch, 1))
             if batch_norm:
                 self.add_module.append(f"BatchNorm_{i}", torch.nn.BatchNorm1d(out_ch))
@@ -342,10 +343,14 @@ class ConvolutionRepeater(torch.nn.Sequential):
     ) -> None:
         super().__init__()
         assert n > 0
-        reduce_index, gather_index = topology.get_convolution_indices()
 
         for _ in torch.arange(n):
             self.append(
-                conv_module(in_channels, out_channels, reduce_index, gather_index),
+                conv_module(
+                    in_channels,
+                    out_channels,
+                    topology.conv_index_reduce,
+                    topology.conv_index_gather,
+                ),
             )
             in_channels = out_channels

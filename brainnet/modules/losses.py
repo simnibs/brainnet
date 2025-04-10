@@ -7,17 +7,36 @@ class SquaredError(torch.nn.Module):
         super().__init__()
 
     def forward(self, a, b):
-        # return (a - b) ** 2
-        return torch.mean((a - b) ** 2, dim=-1)
+        return (a - b) ** 2
+        # return torch.mean((a - b) ** 2, dim=-1)
 
+class NormalizedSquaredError(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, a, b):
+        # return (a - b) ** 2 / torch.clamp(b**2, min=1.0/b.abs().amax()**2)
+        # return torch.mean((a - b) ** 2 / torch.clamp(b**2, self.tol), dim=-1)
+        d = a**2 + b**2
+        d = d.clamp(min=1.0/d.amax())
+        return (a - b)**2 / d
 
 class AbsoluteError(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
     def forward(self, a, b):
-        # return torch.abs(a - b)
-        return torch.abs(a - b).mean(dim=-1)
+        return torch.abs(a - b)#.mean(dim=-1)
+
+class NormalizedAbsoluteError(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, a, b):
+        # return torch.abs(a - b) / b.clamp(min=1.0/b.abs().amax())
+        d = a.abs() + b.abs()
+        d = d.clamp(min=1.0/d.amax())
+        return torch.abs(a - b) / d
 
 
 class SquaredNormError(torch.nn.Module):
@@ -105,7 +124,9 @@ def wrap_semi_hard_reduction(cls):
 
 
 MSELoss = wrap_mean_reduction(SquaredError)
+NSELoss = wrap_mean_reduction(NormalizedSquaredError)
 L1Loss = wrap_mean_reduction(AbsoluteError)
+NL1Loss = wrap_mean_reduction(NormalizedAbsoluteError)
 MSNELoss = wrap_mean_reduction(SquaredNormError)
 MSCosSimLoss = wrap_mean_reduction(SquaredCosineSimilarityError)
 
