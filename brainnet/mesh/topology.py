@@ -1,81 +1,5 @@
 import torch
 
-
-# def get_recursively_subdivided_topology(n_recursions: int = 0, device=None):
-#     assert n_recursions >= 0
-
-#     topology = StandardTopology(device=device)
-#     topologies = [topology]
-#     for _ in range(0, n_recursions):
-#         topology = StandardTopology(topology.subdivide_faces())
-#         topologies.append(topology)
-
-#     return topologies
-
-
-# NOTE In order to reproduce the faces from
-#   FS_DIR/average/surf/lh.sphere.ico{i}.reg
-# we would need the following subdivision. However, when indexing into the
-# vertices of fsaverage7 in order to obtain the lower resolution icos (e.g.,
-# v[:N_FACES_ICO_0], v[:N_FACES_ICO_1], etc.), we simply have to reorder the
-# faces each time!
-
-# def get_fsaverage_topology(ico_order: int = 0):
-#     assert ico_order >= 0
-
-#     topologies = [topology := FsAverageTopology()]
-#     topologies_reordered = [topology_reordered := FsAverageTopology()]
-#     for i in range(0, ico_order):
-#         if i <= 3:
-#             topology = FsAverageTopology(topology.subdivide_faces())
-#             topologies.append(topology)
-#         if ico_order >= 5:
-#             topology_reordered = FsAverageTopology(fsaverage_reorder_faces_once(topology_reordered.subdivide_faces()))
-#             topologies_reordered.append(topology_reordered)
-
-#     return topologies + topologies_reordered[5:] if ico_order >= 5 else topologies
-
-
-# def get_fsaverage_topology(
-#     ico_order: int = 0, device: str | torch.device | None = None
-# ):
-#     assert ico_order >= 0
-
-#     topologies = [topology := FsAverageTopology(device=device)]
-#     for _ in range(0, ico_order):
-#         # reordering the faces changes the order in which vertices are added
-#         # upon face subdivision!
-#         topology = FsAverageTopology(
-#             fsaverage_reorder_faces_once(topology.subdivide_faces()), device=device
-#         )
-#         topologies.append(topology)
-
-#     return topologies
-
-
-def fsaverage_reorder_faces_once(faces):
-    return torch.cat((faces[::4], faces.reshape(-1, 4, 3)[:, 1:].reshape(-1, 3)))
-
-
-# def fsaverage_reorder_faces(faces, order, n_ico0=20):
-
-#     order1 = order + 1
-#     shape = [n_ico0] + [4 for i in range(order)] + [3]
-#     ff = faces.reshape(shape)
-
-#     ffindexed = []
-#     for i in range(order1):
-#         indexer = [0 for _ in range(order1)]
-#         for j in range(max(i, 1)):
-#             indexer[j] = slice(None)
-#         if i > 0:
-#             indexer[i] = slice(1, None)
-
-#         ffindexed.append(ff[*indexer].reshape(-1,3))
-
-#     return torch.cat(ffindexed)
-
-
 class Topology:
     def __init__(
         self,
@@ -84,8 +8,6 @@ class Topology:
         retain_edge_order: bool = True,
         device: str | torch.device | None = None,
     ):
-        self.subdivision_factor = 4
-        self.faces = faces
         match device:
             case str():
                 self.device = torch.device(device)
@@ -95,14 +17,18 @@ class Topology:
                 self.device = device
             case _:
                 raise ValueError()
-        self.dtype = faces.dtype
-        self.n_faces = faces.shape[0]
-        self.vertices_per_face = faces.shape[1]
+        self.subdivision_factor = 4
+        self.faces = faces.to(self.device)
+        self.dtype = self.faces.dtype
+        self.n_faces = self.faces.shape[0]
+        self.vertices_per_face = self.faces.shape[1]
         self.n_vertices = self.n_faces_to_n_vertices(self.n_faces)
         self._reversed_face_order = (0, 2, 1)
 
         if edge_pairs is None:
-            self.edge_pairs = torch.tensor([[1, 2], [2, 0], [0, 1]], dtype=self.dtype, device=self.device)
+            self.edge_pairs = torch.tensor(
+                [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=device
+            )
         else:
             self.edge_pairs = edge_pairs
 
@@ -113,14 +39,8 @@ class Topology:
         # Ensure subdivide_faces is still valid
         self.faces_to_edges = self.faces_to_edges[:, self._reversed_face_order]
 
-    def edges_from_faces(
-        self,
-        sort_dim0: bool = False,
-        sort_dim1: bool = False,
-    ):
-        """Apply *within*-edge sort no matter what."""
-        # pairs = torch.LongTensor([[0, 1], [1, 2], [2, 0]])
-        # pairs = torch.tensor([[1, 2], [2, 0], [0, 1]], device=self.device)
+    def get_edges(self, sort: bool = False):
+        # (n_faces, 3, 2)
         edges = torch.stack(
             [
                 self.faces[:, self.edge_pairs[:, 0]],
@@ -128,10 +48,25 @@ class Topology:
             ],
             dim=2,
         )
-        edges = edges.reshape((-1, 2))
-        if sort_dim1:
-            edges, _ = edges.sort(1)
-        if sort_dim0:
+        return edges.sort(-1)[0] if sort else edges
+
+    def get_unique_edges(self):
+        return self.vertex_adjacency
+
+    def get_edges_ravelled(
+        self,
+        sort_between: bool = False,
+        sort_within: bool = False,
+    ):
+        """
+
+        sort :
+            Sort between edges.
+        sort_within :
+            Sort vertex indices within each edge.
+        """
+        edges = self.get_edges(sort_within).reshape((-1, 2))
+        if sort_between:
             edge0, edge0_index = edges[:, 0].sort()
             edges[:, 0] = edge0
             edges[:, 1] = edges[edge0_index, 1]
@@ -260,7 +195,7 @@ class Topology:
         # Vertex adjacency and face-to-edge mapping
         # -----------------------------------------
         # no need to sort as unique will do that anyway
-        edges = self.edges_from_faces(sort_dim1=True)  # e.g., (1,0) and (0,1) -> (0,1)
+        edges = self.get_edges_ravelled(sort_within=True)  # e.g., (1,0) and (0,1) -> (0,1)
 
         # trick from pytorch3d: use a hash to speed up the call to unique which
         # is otherwise slow
@@ -283,7 +218,10 @@ class Topology:
             # this eliminates all edges between upsampled vertices
             u_edges_prev_order = u_edges[: len(u) // 2]
 
-        faces_to_edges = idx.reshape(self.n_faces, 3)
+        # back to dtype of faces
+        faces_to_edges = idx.to(self.dtype).reshape(self.n_faces, 3)
+        u_edges = u_edges.to(self.dtype)
+        u_edges_prev_order = u_edges_prev_order.to(self.dtype)
 
         # if retain_edge_order:
         #     ind_sorted = idx.argsort(stable=True)
@@ -379,13 +317,16 @@ class Topology:
         return topologies
 
 
-class StandardTopology(Topology):
+class DeepSurferTopology(Topology):
     def __init__(
         self,
         faces: torch.Tensor | None = None,
         edge_pairs: str | torch.Tensor | None = None,
         device: str | torch.device | None = None,
     ):
+        """Topology from the DeepSurfer package. This is defined for the left
+        hemisphere. Hence, to be valid for right hemisphere, we need to reverse
+        the vertex order."""
         device = torch.device(device) if isinstance(device, str) else device
 
         faces = (
@@ -520,7 +461,7 @@ class StandardTopology(Topology):
         )
 
         edge_pairs = torch.tensor(
-            [[1, 2], [2, 0], [0, 1]], dtype=torch.int, device=device
+            [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=device
         )
         super().__init__(faces, edge_pairs, retain_edge_order=False, device=device)
 
@@ -547,50 +488,63 @@ class StandardTopology(Topology):
         #    /   f2   \    /   f1   \
         #   /          \  /          \
         # V1 ---------- v14---------- V2
-        #
-        # We have
-        #
-        #   faces_to_edges[:, 0] = edge opposite faces[:, 0]
-        #   faces_to_edges[:, 1] = edge opposite faces[:, 1]
-        #   faces_to_edges[:, 2] = edge opposite faces[:, 2]
-        #
-        # i.e.,
-        #
-        #   edges = e12, e20, e01 = (v1,v2), (v2,v0), (v0,v1)
+
+        # These are the faces made up entirely of new vertices)
+        f_new = self.faces_to_edges + self.n_vertices
 
         # Concatenate each "original" vertex with the vertices placed on it's
         # adjacent edges such that the orientation (e.g., counter-clockwise) is
-        # preserved. Please refer to the figure above
-        new_vertex_indices = self.faces_to_edges + self.n_vertices
-
+        # preserved
         f0 = torch.stack(
             [
+                f_new[:, 0], # edge 0-1
+                f_new[:, 2], # edge 2-0
                 self.faces[:, 0],
-                new_vertex_indices[:, self.edge_pairs[0, 1]],
-                new_vertex_indices[:, self.edge_pairs[0, 0]],
             ],
             dim=1,
         )
         f1 = torch.stack(
             [
+                f_new[:, 1], # edge 1-2
+                f_new[:, 0], # edge 0-1
                 self.faces[:, 1],
-                new_vertex_indices[:, self.edge_pairs[1, 1]],
-                new_vertex_indices[:, self.edge_pairs[1, 0]],
             ],
             dim=1,
         )
         f2 = torch.stack(
             [
+                f_new[:, 2], # 2
+                f_new[:, 1], # 1
                 self.faces[:, 2],
-                new_vertex_indices[:, self.edge_pairs[2, 1]],
-                new_vertex_indices[:, self.edge_pairs[2, 0]],
             ],
             dim=1,
         )
-        # Finally, the faces made up entirely of new vertices
-        f3 = new_vertex_indices
 
-        return torch.cat((f0, f1, f2, f3))
+        return torch.cat((f_new, f0, f1, f2))
+
+
+# NOTE In order to reproduce the faces from
+#   FS_DIR/average/surf/lh.sphere.ico{i}.reg
+# we would need the following subdivision. However, when indexing into the
+# vertices of fsaverage7 in order to obtain the lower resolution icos (e.g.,
+# v[:N_FACES_ICO_0], v[:N_FACES_ICO_1], etc.), we simply have to reorder the
+# faces each time!
+#
+# def fsaverage_reorder_faces_once(faces):
+#     return torch.cat((faces[::4], faces.reshape(-1, 4, 3)[:, 1:].reshape(-1, 3)))
+#
+# def get_fsaverage_topology(ico_order: int = 0):
+#     assert ico_order >= 0
+#     topologies = [topology := FsAverageTopology()]
+#     topologies_reordered = [topology_reordered := FsAverageTopology()]
+#     for i in range(0, ico_order):
+#         if i <= 3:
+#             topology = FsAverageTopology(topology.subdivide_faces())
+#             topologies.append(topology)
+#         if ico_order >= 5:
+#             topology_reordered = FsAverageTopology(fsaverage_reorder_faces_once(topology_reordered.subdivide_faces()))
+#             topologies_reordered.append(topology_reordered)
+#     return topologies + topologies_reordered[5:] if ico_order >= 5 else topologies
 
 
 class FsAverageTopology(Topology):
@@ -632,7 +586,6 @@ class FsAverageTopology(Topology):
             if faces is None
             else faces
         )
-
         edge_pairs = torch.tensor(
             [[2, 0], [1, 2], [0, 1]], dtype=torch.int, device=device
         )

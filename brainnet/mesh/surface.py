@@ -16,14 +16,14 @@ smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, cu
 """
 
 
-class TemplateSurfaces:
+class Surface:
     def __init__(
         self,
         vertices: torch.Tensor,
         topology: brainnet.mesh.topology.Topology | torch.Tensor,
-        topology_class: str = "FsAverageTopology",
+        topology_class: str = "DeepSurferTopology",
     ) -> None:
-        """A batch of surfaces (vertices) that share a common topology.
+        """A batch of surfaces (vertices) that share a topology.
 
         Parameters
         ----------
@@ -51,7 +51,7 @@ class TemplateSurfaces:
     def topology(self, value):
         self._topology = (
             value
-            if isinstance(value, brainnet.mesh.topology.Topology)
+            if issubclass(value.__class__, brainnet.mesh.topology.Topology)
             else self._topology_class(value)
         )
         self.faces = self._topology.faces
@@ -88,8 +88,6 @@ class TemplateSurfaces:
         # (n_batch, n_vertices, v_per_face, coordinates)
         return self.vertices[:, self.faces]
 
-    def compute_face_barycenters(self):
-        return self.as_mesh().mean(2)
 
     def bounding_box(self):
         """(batch, 2, 3)."""
@@ -99,12 +97,15 @@ class TemplateSurfaces:
         center = self.bounding_box().mean(1)[:, None]
         self.vertices = self.vertices - center
 
+    def compute_face_barycenters(self):
+        return self.as_mesh().mean(2)
+
+
     def sample_points(
         self,
         n_samples: int,
-        replacement=True,
-        weights: torch.Tensor | None = None,
-        return_sampled_faces_and_bc=False,
+        replacement = True,
+        sample_weights: torch.Tensor | str | None = "face areas",
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample a number of points on each surface. Points are sampled from
         each triangle with a probability proportional to its area.
@@ -127,14 +128,18 @@ class TemplateSurfaces:
             graph-encoded objects.
         https://github.com/facebookresearch/pytorch3d/blob/main/pytorch3d/ops/sample_points_from_meshes.py
         """
-        sample_weight = self.compute_face_areas()
-        sample_weight = (
-            sample_weight * weights if weights is not None else sample_weight
-        )
-        sample_weight = sample_weight / sample_weight.sum(1)[:, None]
+        if isinstance(sample_weights, torch.Tensor):
+            # (n_batch, n_faces)
+            assert sample_weights.shape[1] == self.topology.n_faces
+        elif sample_weights == "face areas":
+            sample_weight = self.compute_face_areas()
+        elif sample_weights is None:
+           sample_weight = torch.ones(self.n_batch, self.topology.n_faces, device=self.device)
+        else:
+            raise ValueError
+        sample_weight = sample_weight / sample_weight.sum(1, keepdim=True)
 
-        # Sample faces based on weight
-        # (n_batch, n_samples)
+        # Sample faces based on weight (n_batch, n_samples)
         sampled_faces = sample_weight.multinomial(n_samples, replacement)
 
         # Sample barycentric coordinates for each face
@@ -146,10 +151,7 @@ class TemplateSurfaces:
         samples = self.interpolate_vertex_features(
             self.vertices, sampled_faces, sampled_coords
         )
-        if return_sampled_faces_and_bc:
-            return samples, sampled_faces, sampled_coords
-        else:
-            return samples
+        return samples, sampled_faces, sampled_coords
 
     def interpolate_vertex_features(self, x, faces, barycentric_coords):
         """Sample a set of features (B, N[, C]) onto the barycentric coordinates
@@ -174,9 +176,9 @@ class TemplateSurfaces:
         return x[ix, self.faces[None]].mean(dim=2)
 
     def _compute_unnormalized_face_normals(self):
-        mesh = self.vertices[:, self.faces]
+        m = self.as_mesh()
         return torch.cross(
-            mesh[:, :, 1] - mesh[:, :, 0], mesh[:, :, 2] - mesh[:, :, 0], dim=-1
+            m[:, :, 1] - m[:, :, 0], m[:, :, 2] - m[:, :, 0], dim=-1
         )
 
     def compute_face_areas(self):
@@ -185,38 +187,32 @@ class TemplateSurfaces:
     def compute_face_normals(self, return_face_areas: bool = False):
         normals = self._compute_unnormalized_face_normals()
         if return_face_areas:
-            norms = normals.norm(dim=-1)
-            face_areas = 0.5 * norms
-            normals = normals / norms.clamp_min(min=1e-12)[..., None]
+            norms = normals.norm(dim=-1, keepdim=True)
+            face_areas = 0.5 * norms.squeeze(-1)
+            normals = normals / norms.clamp_min(min=1e-12)
             return normals, face_areas
         else:
             return torch.nn.functional.normalize(normals, p=2.0, dim=-1)
 
     def compute_vertex_normals(self):
         face_normals = self.compute_face_normals()
-
-        vertex_normals = torch.zeros_like(self.vertices)
-        self._collect_face_values_(vertex_normals, face_normals)
-
+        vertex_normals = self._collect_face_values_(face_normals)
         return torch.nn.functional.normalize(vertex_normals, p=2.0, dim=-1)
 
     def compute_vertex_normals_from_face_normals(
         self,
         face_normals: torch.Tensor,
-        n_vertices,
     ):
         """Save a computation - perhaps delete."""
-        vertex_normals = torch.zeros(
-            (face_normals.shape[0], n_vertices, 3), device=self.device
-        )
-        self._collect_face_values_(vertex_normals, face_normals)
-
+        vertex_normals = self._collect_face_values_(face_normals)
         return torch.nn.functional.normalize(vertex_normals, p=2.0, dim=-1)
 
-    def _collect_face_values_(self, buffer: torch.Tensor, values: torch.Tensor):
-        buffer.index_add_(1, self.faces[:, 0], values)
-        buffer.index_add_(1, self.faces[:, 1], values)
-        buffer.index_add_(1, self.faces[:, 2], values)
+    def _collect_face_values_(self, values: torch.Tensor):
+        buffer = torch.zeros_like(self.vertices)
+        buffer = buffer.index_add(1, self.faces[:, 0], values)
+        buffer = buffer.index_add(1, self.faces[:, 1], values)
+        buffer = buffer.index_add(1, self.faces[:, 2], values)
+        return buffer
 
     # def compute_cotangents(self, eps=1e-8):
     #     """
@@ -276,7 +272,7 @@ class TemplateSurfaces:
 
     #     return cot, area
 
-    def compute_angles(self, edge_length_tol=1e-6):
+    def compute_angles(self, min_edge_length=1e-6, min_angle=1e-3):
         """For each face, compute the angle at each vertex. Optionally,
         integrate the total angle at each vertex
 
@@ -296,8 +292,9 @@ class TemplateSurfaces:
 
         m = self.as_mesh()
         E = torch.stack([m[:, :, i] - m[:, :, j] for i, j in EI])
-        EN = E.norm(dim=-1)
+        EN = E.norm(dim=-1).maximum(torch.tensor(min_edge_length, device=self.device))
 
+        # we need to clamp due to numerical inaccuracies
         face_angles = torch.stack(
             [
                 torch.sum(
@@ -311,17 +308,22 @@ class TemplateSurfaces:
                 for vi, (ej, ek) in zip(V, VI)
             ],
             -1,
-        ).acos()
+        ).clamp(-1.0, 1.0).acos().clamp(min_angle, torch.pi - min_angle)
 
+        # if face_angles.isnan().any():
+        #     raise ValueError(f"NAN is angles: {face_angles.isnan().sum()}")
+
+        # replace zeros
+        # min_angle = torch.tensor(1e-3, device=self.device)
+        # face_angles = torch.maximum(face_angles, min_angle)
+
+        # replace NaNs
         # Triangles with edges of zero length (!)
-        invalid = torch.any(EN < edge_length_tol, 0)
-        # replace zeros and NaNs
-        min_angle = torch.tensor(1e-3, device=self.device)
-        nan_angle = 0.5 * torch.pi - 1e-3 * torch.pi
-        tmp = torch.maximum(face_angles[invalid], min_angle)
-        tmp = torch.nan_to_num(tmp, nan=nan_angle)
-        face_angles[invalid] = tmp * torch.pi / tmp.sum(-1, keepdim=True)
-        # face_angles[invalid] = torch.pi / 3.0
+
+        # invalid = torch.any(EN < edge_length_tol, 0)
+        # nan_angle = 0.5 * torch.pi - 1e-3 * torch.pi
+        # tmp = torch.nan_to_num(face_angles[invalid], nan=nan_angle)
+        # face_angles[invalid] = tmp * torch.pi / tmp.sum(-1, keepdim=True)
 
         return face_angles
 
@@ -351,10 +353,11 @@ class TemplateSurfaces:
         `apply_correction` is True, calculcate "A_mixed" (fig. 4) from Meyer
         (2003).
 
-
-
         Parameters
         ----------
+
+        Returns
+        -------
 
         References
         ----------
@@ -380,8 +383,9 @@ class TemplateSurfaces:
             # source vertex and one where x_j is the source vertex
             cot_x_E2_1 = cot_x_E2_0.clone()
 
-            # The Voronoi areas are not valid for obtuse triangles (i.e., triangles
-            # with any angle larger than pi/2). Apply correction (fig. 4)
+            # The Voronoi areas are not valid for obtuse triangles (i.e.,
+            # triangles with any angle larger than pi/2). Apply correction
+            # (fig. 4)
             is_obtuse_angle = face_angles > torch.pi / 2.0
             is_obtuse_triangle = is_obtuse_angle.any(-1)
 
@@ -395,10 +399,8 @@ class TemplateSurfaces:
                 .reshape(self.n_batch, -1)
             )
 
-            face_area = self.compute_face_areas()
-            face_area = (
-                face_area[..., None].expand_as(cotangents).reshape(self.n_batch, -1)
-            )
+            face_area = self.compute_face_areas()[..., None].expand_as(face_angles)
+            face_area = face_area.reshape(self.n_batch, -1)
 
             # If angle is obtuse at x (vertex of interest), use face_area / 2.0
             # instead of Voronoi area contribution
@@ -422,7 +424,6 @@ class TemplateSurfaces:
         A_mixed = torch.index_add(A_mixed, 1, edges[0], cot_x_E2_0)
         A_mixed = torch.index_add(A_mixed, 1, edges[1], cot_x_E2_1)
         A_mixed = A_mixed / 8.0
-
         return A_mixed
 
     @staticmethod
@@ -473,6 +474,17 @@ class TemplateSurfaces:
         angles = self.compute_angles()
         vertex_area = self.voronoi_area(angles)
         cot = self.compute_cotangents(angles)
+        cot = cot.reshape(self.n_batch, -1, 1)
+
+        # if cot.isnan().any() or cot.isinf().any() or (cot == 0).any():
+        #     print("ANGLE")
+        #     print(cot.amin(),cot.amax())
+        #     print(angles.amin(),angles.amax())
+        #     raise ValueError
+        # if (1.0/vertex_area).isnan().any() or vertex_area.isinf().any() or (vertex_area == 0).any():
+        #     print("AREA")
+        #     print(vertex_area.amin(), vertex_area.amax())
+        #     raise ValueError
 
         edges = self.topology.edges_from_faces().T
         edge_vec = f[:, edges].diff(dim=1).squeeze(1)
@@ -526,7 +538,7 @@ class TemplateSurfaces:
         return out
 
     def smooth_taubin(
-        self, buffer=None, a=0.8, b=-0.85, n_iter=1, dim=1, inplace=False
+        self, buffer=None, a=0.8, b=-0.81, n_iter=1, dim=1, inplace=False
     ):
         # assert 0.0 <= a <= 1.0, f"a should be in 0 <= a <= 1 (got {a})"
         # assert b <= -a, f"b should be <= -a (got a = {a} and b = {b})"
@@ -562,7 +574,7 @@ class TemplateSurfaces:
         buffer = torch.index_reduce(
             torch.zeros_like(x),
             dim,
-            self.topology.conv_index_reduce,
+            self.topology.conv_index_reduce.long(), # TODO needs to be long!?
             x.index_select(dim, self.topology.conv_index_gather),
             "mean",
             include_self=False,
@@ -570,14 +582,14 @@ class TemplateSurfaces:
         # update
         return x + a * (buffer - x)
 
-    def compute_edge_lengths(self):
+    def compute_edge_norm(self, unique: bool = False):
         """ """
-        return (
-            self.vertices[:, self.topology.vertex_adjacency]
-            .diff(dim=-2)
-            .squeeze(-2)
-            .norm(dim=-1)
-        )
+        if unique:
+            edges = self.vertices[:, self.topology.get_unique_edges()]
+        else:
+            edges = self.vertices[:, self.topology.get_edges()]
+
+        return edges.diff(dim=-2).squeeze(-2).norm(dim=-1)
 
     @staticmethod
     def nearest_neighbor_tensors(a: torch.Tensor, b: torch.Tensor):
@@ -592,7 +604,7 @@ class TemplateSurfaces:
 
         return cuda_extensions.compute_nearest_neighbor(a, b, size_self, size_other)
 
-    def nearest_neighbor(self, other: "TemplateSurfaces"):
+    def nearest_neighbor(self, other: "Surface"):
         # for each element in `self`, this is the index of the closest element
         # in `other`, hence minimum set distance per vertex is
         # dist(self.vertices, other.vertices[index])
@@ -600,7 +612,7 @@ class TemplateSurfaces:
 
     def compute_self_intersections(self):
         assert self.vertices.dtype == torch.float
-        assert self.faces.dtype == torch.int  # torch.int64
+        assert self.faces.dtype == torch.int
         vertices = self.vertices.detach()
         faces = self.faces.detach()
 
