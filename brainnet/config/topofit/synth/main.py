@@ -47,7 +47,7 @@ tags += [mode_contrast, mode_resolution]
 device: str | torch.device = torch.device("cuda:0")
 
 in_order = 0
-out_order = 4
+out_order = 6
 max_order = 6
 template_surface = dict(resolution=in_order, name="template")
 target_vertices = dict(resolution=out_order, name="target")
@@ -68,6 +68,8 @@ out_dir: Path = Path("/mnt/scratch/personal/jesperdn/results")
 model_dir = out_dir
 # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
 
+freeze_features = False
+
 ckpt_body = 400
 load_body_from_checkpoint = (
     out_dir
@@ -76,7 +78,7 @@ load_body_from_checkpoint = (
     / "checkpoint"
     / f"state_checkpoint_{ckpt_body:05d}.pt"
 )
-ckpt_head = None # 600
+ckpt_head = None  # 600
 if ckpt_head is None:
     load_head_from_checkpoint = None
 else:
