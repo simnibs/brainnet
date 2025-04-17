@@ -11,6 +11,7 @@ from ignite.engine import Engine
 import brainnet.config
 from brainsynth.transforms.utilities import channel_last
 
+
 FREESURFER_VOLUME_INFO = dict(
     head=[2, 0, 20],
     valid="1  # volume info valid",
@@ -32,11 +33,13 @@ def synchronize_state(engine, other, attrs):
 
 def set_head_weight(engine, weights):
     print("Setting head weights")
+    print(weights)
     engine._process_function.criterion.update_head_weights(weights)
 
 
 def set_loss_weight(engine, weights):
     print("Setting loss weights")
+    print(weights)
     engine._process_function.criterion.update_loss_weights(weights)
 
 
@@ -246,6 +249,7 @@ def optimizer_reset(engine):
     print("Resetting optimizer state")
     engine._process_function.optimizer.state = defaultdict(dict, {})
 
+
 # WANDB LOGGING
 
 
@@ -323,7 +327,9 @@ def write_volume(
 
         v = channel_last(v)
 
-        nib.Nifti1Image(v.cpu().numpy(), affine).to_filename(out_dir / name)
+        nib.Nifti1Image(v.cpu().numpy(), affine.cpu().numpy()).to_filename(
+            out_dir / name
+        )
 
 
 def write_example(
@@ -339,7 +345,7 @@ def write_example(
         vol_info["volume"] = tuple(x.shape[-3:])
 
         st = f"epoch-{engine.state.epoch:05d}.{prefix}"
-        affine = torch.eye(4).numpy()
+        affine = torch.eye(4)
 
         for label, y in zip((None, "pred", "true"), (dict(x=x), y_pred, y_true)):
             for k, v in y.items():
@@ -348,5 +354,47 @@ def write_example(
                         write_surface(v, vol_info, config.examples_dir, st, k, label)
                     else:
                         v = v[:, :5] if "dec:" in k else v
-                        k = k.replace(":","-")
+                        k = k.replace(":", "-")
                         write_volume(v, affine, config.examples_dir, st, k, label)
+
+
+def write_input_image_with_affine(
+    engine: Engine,
+    evaluators: dict[str, Engine],
+    config: brainnet.config.ResultsParameters,
+):
+    for prefix, e in evaluators.items():
+        _, image, affine, _, _ = e.state.output
+
+        st = f"epoch-{engine.state.epoch:05d}.{prefix}"
+        k = "image"
+        label = None
+
+        write_volume(image, affine[0], config.examples_dir, st, k, label)
+
+
+def write_template(
+    engine: Engine,
+    evaluators: dict[str, Engine],
+    config: brainnet.config.ResultsParameters,
+):
+    vol_info = copy.deepcopy(FREESURFER_VOLUME_INFO)
+
+    for prefix, e in evaluators.items():
+        _, image, _, y_pred, y_true = e.state.output
+
+        vol_info["volume"] = tuple(image.shape[-3:])
+
+        prefix = f"epoch-{engine.state.epoch:05d}.{prefix}"
+        for label, y in zip(("pred", "true"), (y_pred, y_true)):
+            for k, ss in y.items():
+                if config.examples_keys is None or k in config.examples_keys:
+                    f = ss.faces.detach().to(torch.int).cpu().numpy()
+                    for i, v in enumerate(ss.vertices):
+                        name = ".".join([prefix, "surface", k, label, f"{i:02d}"])
+                        nib.freesurfer.write_geometry(
+                            config.examples_dir / name,
+                            v.detach().to(torch.float).cpu().numpy(),
+                            f,
+                            volume_info=vol_info,
+                        )

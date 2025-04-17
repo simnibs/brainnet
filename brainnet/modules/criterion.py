@@ -292,7 +292,6 @@ class Criterion(torch.nn.Module):
 
     def forward(self, y_pred, y_true):
         """Compute all losses that is possible given the entries in `y_pred`"""
-
         # Compute raw loss
         loss_dict = {}
         for head, losses in self._active_losses.items():
@@ -345,12 +344,14 @@ class CriterionAggregator(Metric):
 
     @reinit__is_reduced
     def update(self, output: tuple) -> None:
-        if len(output) == 4:
-            loss, x, _, _ = output  # out signature: loss, x, y_pred, y_true
-        else:
-            ValueError(
-                f"Wrong output signature from engine for CriterionAggregator. Expected (loss, x, y_pred, y_true), got output of length {len(output)}."
-            )
+        loss, x = output[:2]  # out signature: loss, x, y_pred, y_true
+
+        # if len(output) == 4:
+        #     loss, x, _, _ = output  # out signature: loss, x, y_pred, y_true
+        # else:
+        #     raise ValueError(
+        #         f"Wrong output signature from engine for CriterionAggregator. Expected (loss, x, y_pred, y_true), got output of length {len(output)}."
+        #     )
 
         # the input is converted from mapping to tuple so convert back
         # loss = dict(zip(self.required_output_keys, input_loss))

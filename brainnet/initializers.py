@@ -54,12 +54,12 @@ def init_optimizer(config, model):
 
 
 def init_dataloader(
-        ds_config: brainnet.config.DatasetParameters,
-        dl_config: brainnet.config.DataloaderParameters,
+        ds_config: dict[str, brainsynth.config.DatasetConfig],
+        dl_config: dict,
     ):
     dataloader = {
-        subset: brainsynth.dataset.setup_dataloader(config, vars(dl_config))
-        for subset,config in vars(ds_config).items()
+        subset: brainsynth.dataset.setup_dataloader(config, **dl_config)
+        for subset,config in ds_config.items()
     }
     print("Dataloaders")
     for k,v in dataloader.items():

@@ -1,5 +1,6 @@
 import torch
 
+
 class Topology:
     def __init__(
         self,
@@ -27,7 +28,7 @@ class Topology:
 
         if edge_pairs is None:
             self.edge_pairs = torch.tensor(
-                [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=device
+                [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=self.device
             )
         else:
             self.edge_pairs = edge_pairs
@@ -185,7 +186,10 @@ class Topology:
         """
         vs = torch.arange(self.vertices_per_face, device=self.device)
         self.vertex_opposite_edge = torch.cat(
-            [vs[torch.isin(vs, e, assume_unique=True, invert=True)] for e in self.edge_pairs]
+            [
+                vs[torch.isin(vs, e, assume_unique=True, invert=True)]
+                for e in self.edge_pairs
+            ]
         )
         # indices of edge pairs associated with vertex_opposite_edge
         self.vertex_edges = torch.stack(
@@ -195,7 +199,9 @@ class Topology:
         # Vertex adjacency and face-to-edge mapping
         # -----------------------------------------
         # no need to sort as unique will do that anyway
-        edges = self.get_edges_ravelled(sort_within=True)  # e.g., (1,0) and (0,1) -> (0,1)
+        edges = self.get_edges_ravelled(
+            sort_within=True
+        )  # e.g., (1,0) and (0,1) -> (0,1)
 
         # trick from pytorch3d: use a hash to speed up the call to unique which
         # is otherwise slow
@@ -327,10 +333,10 @@ class DeepSurferTopology(Topology):
         """Topology from the DeepSurfer package. This is defined for the left
         hemisphere. Hence, to be valid for right hemisphere, we need to reverse
         the vertex order."""
-        device = torch.device(device) if isinstance(device, str) else device
+        device = torch.device(device) if device is not None else device
 
-        faces = (
-            torch.tensor(
+        if faces is None:
+            faces = torch.tensor(
                 [
                     [0, 2, 1],
                     [0, 3, 2],
@@ -456,9 +462,9 @@ class DeepSurferTopology(Topology):
                 dtype=torch.int,
                 device=device,
             )
-            if faces is None
-            else faces
-        )
+        else:
+            if device is None:
+                device = faces.device
 
         edge_pairs = torch.tensor(
             [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=device
@@ -497,24 +503,24 @@ class DeepSurferTopology(Topology):
         # preserved
         f0 = torch.stack(
             [
-                f_new[:, 0], # edge 0-1
-                f_new[:, 2], # edge 2-0
+                f_new[:, 0],  # edge 0-1
+                f_new[:, 2],  # edge 2-0
                 self.faces[:, 0],
             ],
             dim=1,
         )
         f1 = torch.stack(
             [
-                f_new[:, 1], # edge 1-2
-                f_new[:, 0], # edge 0-1
+                f_new[:, 1],  # edge 1-2
+                f_new[:, 0],  # edge 0-1
                 self.faces[:, 1],
             ],
             dim=1,
         )
         f2 = torch.stack(
             [
-                f_new[:, 2], # 2
-                f_new[:, 1], # 1
+                f_new[:, 2],  # 2
+                f_new[:, 1],  # 1
                 self.faces[:, 2],
             ],
             dim=1,
@@ -554,10 +560,10 @@ class FsAverageTopology(Topology):
         edge_pairs: str | torch.Tensor | None = None,
         device: str | torch.device | None = None,
     ):
-        device = torch.device(device) if isinstance(device, str) else device
+        device = torch.device(device) if device is not None else device
 
-        faces = (
-            torch.tensor(
+        if faces is None:
+            faces = torch.tensor(
                 [
                     [0, 3, 4],
                     [0, 4, 5],
@@ -583,9 +589,10 @@ class FsAverageTopology(Topology):
                 dtype=torch.int,
                 device=device,
             )
-            if faces is None
-            else faces
-        )
+        else:
+            if device is None:
+                device = faces.device
+
         edge_pairs = torch.tensor(
             [[2, 0], [1, 2], [0, 1]], dtype=torch.int, device=device
         )

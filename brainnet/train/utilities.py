@@ -52,7 +52,6 @@ def add_model_checkpoint(
     config : brainnet.config.ResultsParameters
         Results configuration.
     """
-    # Checkpoint to store n_saved best models wrt score function
     model_checkpoint = ModelCheckpoint(
         config.checkpoint_dir,
         config.checkpoint_prefix,
@@ -61,36 +60,65 @@ def add_model_checkpoint(
         filename_pattern=config.checkpoint_filename_pattern,
         # score_function=score_function,
         # score_name="accuracy",
-        global_step_transform=lambda e, _: e.state.epoch,  # use epoch instead of iteration
+        global_step_transform=lambda e,
+        _: e.state.epoch,  # use epoch instead of iteration
     )
 
     engine.add_event_handler(config.save_checkpoint_on, model_checkpoint, to_save)
 
 
-def load_checkpoint_from_setup(to_load, train_setup):
-    if train_setup.train_params.load_checkpoint != 0:
-        ckpt_name = train_setup.results.checkpoint_filename_pattern.format(
-            filename_prefix=train_setup.results.checkpoint_prefix,
+def add_model_checkpoint_best(
+    engine, to_save: dict[str, Any], config: brainnet.config.ResultsParameters
+):
+    def checkpoint_chamfer_score_fn(engine):
+        surfaces = ("white", "pial")
+        return sum(engine.state.metrics["loss"][s]["chamfer"] for s in surfaces) / 2.0
+
+    # Checkpoint to store n_saved best models wrt. score function
+    model_checkpoint = ModelCheckpoint(
+        config.checkpoint_dir,
+        config.checkpoint_prefix,
+        n_saved=1,
+        require_empty=config.require_empty,
+        # filename_pattern=config.checkpoint_filename_pattern,
+        score_function=checkpoint_chamfer_score_fn,
+        score_name="chamfer",
+        global_step_transform=lambda e,
+        _: e.state.epoch,  # use epoch instead of iteration
+    )
+
+    engine.add_event_handler(config.save_checkpoint_on, model_checkpoint, to_save)
+
+
+def load_checkpoint_from_setup(to_load, setup):
+    if setup.load_checkpoint != 0:
+        ckpt_name = setup.results.checkpoint_filename_pattern.format(
+            filename_prefix=setup.results.checkpoint_prefix,
             name="checkpoint",
-            global_step=train_setup.train_params.load_checkpoint,
+            global_step=setup.load_checkpoint,
         )
         print(f"Loading checkpoint {ckpt_name}")
-        ckpt = train_setup.results._from_checkpoint_dir / ckpt_name
-        load_checkpoint(to_load, ckpt, train_setup.device)
+        ckpt = setup.results._from_checkpoint_dir / ckpt_name
+        load_checkpoint(to_load, ckpt, setup.device)
     else:
         state_dict = {}
-        if (ckpt := train_setup.results.load_body_from_checkpoint) is not None:
+        if (ckpt := setup.results.load_body_from_checkpoint) is not None:
             print(f"Loading parameters for body from {ckpt}")
-            checkpoint_obj = torch.load(ckpt, map_location=train_setup.device)["model"]
-            state_dict.update({k:v for k,v in checkpoint_obj.items() if k.startswith("body")})
-        if (ckpt := train_setup.results.load_head_from_checkpoint) is not None:
+            checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
+            state_dict.update(
+                {k: v for k, v in checkpoint_obj.items() if k.startswith("body")}
+            )
+        if (ckpt := setup.results.load_head_from_checkpoint) is not None:
             print(f"Loading parameters for heads from {ckpt}")
-            checkpoint_obj = torch.load(ckpt, map_location=train_setup.device)["model"]
-            state_dict.update({k:v for k,v in checkpoint_obj.items() if k.startswith("heads")})
+            checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
+            state_dict.update(
+                {k: v for k, v in checkpoint_obj.items() if k.startswith("heads")}
+            )
         # model.load_state_dict(checkpoint_obj, **kwargs)
         ModelCheckpoint.load_objects(
             dict(model=to_load["model"]), dict(model=state_dict), strict=False
         )
+
 
 def load_checkpoint(to_load, ckpt, device, **kwargs):
     ckpt = torch.load(ckpt, map_location=device)
@@ -210,11 +238,10 @@ def write_example_to_disk(
         config=config,
     )
 
+
 def add_metric_to_engine(
-        engine,
-        metric: Metric = CriterionAggregator(),
-        name: str = "loss"
-    ):
+    engine, metric: Metric = CriterionAggregator(), name: str = "loss"
+):
     metric.attach(engine, name)
 
 
@@ -226,7 +253,6 @@ def add_evaluation_event(
     logger: Callable,
     epoch_length: int | None,
 ) -> Engine:
-
     metric = CriterionAggregator()
 
     evaluator = Engine(eval_step)
@@ -282,5 +308,38 @@ def parse_args(argv):
         default=False,
         help="Disable logging with wandb.",
     )
+    # parser.add_argument(
+    #     "--resume",
+    #     type=str,
+    #     default=None,
+    #     help="Resume from run.",
+    # )
 
     return parser.parse_args(argv[1:])
+
+
+def argparser_topofit(argv):
+    parser = argparse.ArgumentParser(
+        prog="TopoFit Trainer",
+        description="Main interface to training a TopoFit model.",
+    )
+    parser.add_argument(
+        "specs", help="Configuration file defining the parameters for training."
+    )
+    # parser.add_argument(
+    #     "--load-checkpoint",
+    #     default=None,
+    #     type=int,
+    #     help="Resume training from this checkpoint.",
+    # )
+    # parser.add_argument(
+    #     "--max-epochs",
+    #     default=None,
+    #     type=int,
+    #     help="Terminate training when this number of epochs is reached.",
+    # )
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        default=False,
+        help="Disable logging wi

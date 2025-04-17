@@ -1,5 +1,8 @@
+from copy import deepcopy
 import torch
 
+import brainsynth
+from brainsynth.utilities import apply_affine
 import brainnet.mesh.topology
 from brainnet.utils import atleast_nd_append, atleast_nd_prepend
 
@@ -88,7 +91,6 @@ class Surface:
         # (n_batch, n_vertices, v_per_face, coordinates)
         return self.vertices[:, self.faces]
 
-
     def bounding_box(self):
         """(batch, 2, 3)."""
         return torch.stack((self.vertices.amin(1), self.vertices.amax(1)), dim=1)
@@ -100,11 +102,10 @@ class Surface:
     def compute_face_barycenters(self):
         return self.as_mesh().mean(2)
 
-
     def sample_points(
         self,
         n_samples: int,
-        replacement = True,
+        replacement=True,
         sample_weights: torch.Tensor | str | None = "face areas",
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample a number of points on each surface. Points are sampled from
@@ -134,7 +135,9 @@ class Surface:
         elif sample_weights == "face areas":
             sample_weight = self.compute_face_areas()
         elif sample_weights is None:
-           sample_weight = torch.ones(self.n_batch, self.topology.n_faces, device=self.device)
+            sample_weight = torch.ones(
+                self.n_batch, self.topology.n_faces, device=self.device
+            )
         else:
             raise ValueError
         sample_weight = sample_weight / sample_weight.sum(1, keepdim=True)
@@ -177,9 +180,7 @@ class Surface:
 
     def _compute_unnormalized_face_normals(self):
         m = self.as_mesh()
-        return torch.cross(
-            m[:, :, 1] - m[:, :, 0], m[:, :, 2] - m[:, :, 0], dim=-1
-        )
+        return torch.cross(m[:, :, 1] - m[:, :, 0], m[:, :, 2] - m[:, :, 0], dim=-1)
 
     def compute_face_areas(self):
         return 0.5 * self._compute_unnormalized_face_normals().norm(dim=-1)
@@ -213,6 +214,9 @@ class Surface:
         buffer = buffer.index_add(1, self.faces[:, 1], values)
         buffer = buffer.index_add(1, self.faces[:, 2], values)
         return buffer
+
+    def apply_affine(self, affine: torch.Tensor):
+        return apply_affine(affine, self.vertices)
 
     # def compute_cotangents(self, eps=1e-8):
     #     """
@@ -295,20 +299,25 @@ class Surface:
         EN = E.norm(dim=-1).maximum(torch.tensor(min_edge_length, device=self.device))
 
         # we need to clamp due to numerical inaccuracies
-        face_angles = torch.stack(
-            [
-                torch.sum(
-                    self.bool_to_sign(EI[ej, 0] == vi)
-                    * E[ej]
-                    * self.bool_to_sign(EI[ek, 0] == vi)
-                    * E[ek],
-                    -1,
-                )
-                / (EN[ej] * EN[ek])
-                for vi, (ej, ek) in zip(V, VI)
-            ],
-            -1,
-        ).clamp(-1.0, 1.0).acos().clamp(min_angle, torch.pi - min_angle)
+        face_angles = (
+            torch.stack(
+                [
+                    torch.sum(
+                        self.bool_to_sign(EI[ej, 0] == vi)
+                        * E[ej]
+                        * self.bool_to_sign(EI[ek, 0] == vi)
+                        * E[ek],
+                        -1,
+                    )
+                    / (EN[ej] * EN[ek])
+                    for vi, (ej, ek) in zip(V, VI)
+                ],
+                -1,
+            )
+            .clamp(-1.0, 1.0)
+            .acos()
+            .clamp(min_angle, torch.pi - min_angle)
+        )
 
         # if face_angles.isnan().any():
         #     raise ValueError(f"NAN is angles: {face_angles.isnan().sum()}")
@@ -574,7 +583,7 @@ class Surface:
         buffer = torch.index_reduce(
             torch.zeros_like(x),
             dim,
-            self.topology.conv_index_reduce.long(), # TODO needs to be long!?
+            self.topology.conv_index_reduce.long(),  # TODO needs to be long!?
             x.index_select(dim, self.topology.conv_index_gather),
             "mean",
             include_self=False,
@@ -924,3 +933,32 @@ class Surface:
             self.vertices = res
         else:
             return res
+
+
+def load_deepsurfer_template(subdivision: int, device: str | torch.device = "cpu"):
+    """Load DeepSurfer template surface at `subdivision` level."""
+    device = torch.device(device)
+    assert (
+        0 <= subdivision <= 6
+    ), "DeepSurfer template is only defined at resolution levels 0 to 6."
+
+    topo_lh = brainnet.mesh.topology.DeepSurferTopology.recursive_subdivision(
+        subdivision, device=device
+    )[-1]
+    topo_rh = deepcopy(topo_lh)
+    topo_rh.reverse_face_orientation()
+
+    return dict(
+        lh=Surface(
+            brainsynth.load_cortical_template("lh", device)["vertices"][
+                : topo_lh.n_vertices
+            ],
+            topo_lh,
+        ),
+        rh=Surface(
+            brainsynth.load_cortical_template("rh", device)["vertices"][
+                : topo_rh.n_vertices
+            ],
+            topo_rh,
+        ),
+    )
