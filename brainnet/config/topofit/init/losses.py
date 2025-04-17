@@ -1,7 +1,7 @@
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
-    SurfaceSupervisedLoss,
+    SupervisedLoss,
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
@@ -13,7 +13,7 @@ from brainnet.modules.losses_surface import (
 
 functions = dict(
     white=dict(
-        matched=SurfaceSupervisedLoss(MatchedDistanceLoss(), y_pred="white", y_true="white"),
+        matched=SupervisedLoss(MatchedDistanceLoss(), y_pred="white", y_true="white"),
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         tri_var=SurfaceRegularizationLoss(TriangleLengthVarianceLoss(), y_pred="white"),

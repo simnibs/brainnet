@@ -1,7 +1,7 @@
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
-    SurfaceSupervisedLoss,
+    SupervisedLoss,
 )
 from brainnet.modules.losses_surface import (
     SurfaceRMSELoss,
@@ -16,8 +16,8 @@ kw_sphere = dict(y_pred="sphere.reg", y_true="sphere.reg")
 functions = {
     "sphere.reg": dict(
         # distance=SurfaceSupervisedLoss(SurfaceRMSELoss(), **kw_sphere),
-        distance=SurfaceSupervisedLoss(CentralAngleLoss(), **kw_sphere),
-        edge=SurfaceSupervisedLoss(SurfaceEdgeRMSELoss(), **kw_sphere),
+        distance=SupervisedLoss(CentralAngleLoss(), **kw_sphere),
+        edge=SupervisedLoss(SurfaceEdgeRMSELoss(), **kw_sphere),
         normal=SurfaceRegularizationLoss(SphericalNormalLoss(), y_pred=kw_sphere["y_pred"]),
 
         # distance=SurfaceSupervisedLoss(SphericalArcLoss(radius=100.0), **kw_sphere),

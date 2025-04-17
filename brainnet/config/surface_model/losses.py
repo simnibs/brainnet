@@ -1,7 +1,7 @@
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
-    SurfaceSupervisedLoss,
+    SupervisedLoss,
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
@@ -17,12 +17,12 @@ from brainnet.modules.losses_surface import (
 
 functions = dict(
     white=dict(
-        matched=SurfaceSupervisedLoss(
+        matched=SupervisedLoss(
             MatchedDistanceLoss(), y_pred="white", y_true="white",
         ),
         hinge=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SymmetricChamferLoss(), y_pred="white", y_true="white",
         ),
         # curv=SurfaceSupervisedLoss(
@@ -30,12 +30,12 @@ functions = dict(
         # ),
     ),
     pial=dict(
-        matched=SurfaceSupervisedLoss(
+        matched=SupervisedLoss(
             MatchedDistanceLoss(), y_pred="pial", y_true="pial",
         ),
         hinge=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SymmetricChamferLoss(), y_pred="pial", y_true="pial",
         ),
         # curv=SurfaceSupervisedLoss(

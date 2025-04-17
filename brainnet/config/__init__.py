@@ -2,7 +2,6 @@ from brainnet.config.base import (
     BrainNetParameters,
     BrainRegParameters,
     CriterionParameters,
-    DataloaderParameters,
     DatasetParameters,
     EventAction,
     LossParameters,
@@ -10,6 +9,5 @@ from brainnet.config.base import (
     ResultsParameters,
     SynthesizerParameters,
     TrainParameters,
-    TrainSetup,
     WandbParameters,
 )

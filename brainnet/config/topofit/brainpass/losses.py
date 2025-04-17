@@ -1,7 +1,7 @@
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
-    SurfaceSupervisedLoss,
+    SupervisedLoss,
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
@@ -25,21 +25,21 @@ kw_semisym = dict(weight_key=None, sym_weights=(0.5, 0.5))
 
 functions = dict(
     white=dict(
-        matched=SurfaceSupervisedLoss(
+        matched=SupervisedLoss(
             MatchedDistanceLoss(),
             **kw_white,
         ),
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SampledSemiSymmetricMSNormLoss(**kw_semisym),
             **kw_white,
         ),
-        hardchamfer=SurfaceSupervisedLoss(
+        hardchamfer=SupervisedLoss(
             SampledSemiSymmetricSemiHardSNormLoss(**kw_semisym, hard_fraction=0.25),
             **kw_white,
         ),
-        curv=SurfaceSupervisedLoss(
+        curv=SupervisedLoss(
             SampledSemiSymmetricL1Loss("H", **kw_semisym),
             **kw_white,
         ),
@@ -50,21 +50,21 @@ functions = dict(
         # ),
     ),
     pial=dict(
-        matched=SurfaceSupervisedLoss(
+        matched=SupervisedLoss(
             MatchedDistanceLoss(),
             **kw_pial,
         ),
         spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SampledSemiSymmetricMSNormLoss(**kw_semisym),
             **kw_pial,
         ),
-        hardchamfer=SurfaceSupervisedLoss(
+        hardchamfer=SupervisedLoss(
             SampledSemiSymmetricSemiHardSNormLoss(**kw_semisym, hard_fraction=0.25),
             **kw_pial,
         ),
-        curv=SurfaceSupervisedLoss(
+        curv=SupervisedLoss(
             SampledSemiSymmetricL1Loss("H", **kw_semisym),
             **kw_pial,
         ),

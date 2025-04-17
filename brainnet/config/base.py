@@ -22,19 +22,6 @@ class CriterionParameters:
     train: LossParameters
     validation: LossParameters
 
-
-@dataclass
-class DataloaderParameters:
-    batch_size: int = 1
-    num_workers: int = 4
-    prefetch_factor: int = 2
-    drop_last: bool = False
-    # kwargs: dict | None = None
-
-    # def __post_init__(self):
-    #     if self.kwargs is None:
-    #         self.kwargs = {}
-
 @dataclass
 class DatasetParameters:
     train: DatasetConfig
@@ -169,19 +156,19 @@ class WandbParameters:
     #         self.kwargs = {}
 
 
-@dataclass
-class TrainSetup:
-    """Class to collect all training related configurations."""
-    project: str
-    run: str
-    device: str | torch.device
+# @dataclass
+# class TrainSetup:
+#     """Class to collect all training related configurations."""
+#     project: str
+#     run: str
+#     device: str | torch.device
 
-    criterion: CriterionParameters
-    dataloader: DataloaderParameters
-    dataset: DatasetParameters
-    model: ModelParameters | torch.nn.Module
-    optimizer: OptimizerParameters
-    results: ResultsParameters
-    synthesizer: SynthesizerParameters | None
-    train_params: TrainParameters
-    wandb: WandbParameters
+#     criterion: CriterionParameters
+#     dataloader: DataloaderParameters
+#     dataset: DatasetParameters
+#     model: ModelParameters | torch.nn.Module
+#     optimizer: OptimizerParameters
+#     results: ResultsParameters
+#     synthesizer: SynthesizerParameters | None
+#     train_params: TrainParameters
+#     wandb: WandbParameters

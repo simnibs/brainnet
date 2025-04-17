@@ -1,7 +1,7 @@
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
-    SurfaceSupervisedLoss,
+    SupervisedLoss,
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
@@ -21,17 +21,17 @@ kw_pial = dict(y_pred="pial", y_true="pial")
 
 functions = dict(
     white=dict(
-        matched=SurfaceSupervisedLoss(
+        matched=SupervisedLoss(
             MatchedDistanceLoss(),
             **kw_white,
         ),
         hinge=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SymmetricSampledNormLoss("sampled_P"), # weight_key="sampled_W_medial_wall"
             **kw_white,
         ),
-        curv=SurfaceSupervisedLoss(
+        curv=SupervisedLoss(
             SymmetricSampledMSELoss("sampled_H"),
             **kw_white,
         ),
@@ -42,17 +42,17 @@ functions = dict(
         # ),
     ),
     pial=dict(
-        matched=SurfaceSupervisedLoss(
+        matched=SupervisedLoss(
             MatchedDistanceLoss(),
             **kw_pial,
         ),
         hinge=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         edge=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SymmetricSampledNormLoss("sampled_P"), # weight_key="sampled_W_medial_wall"
             **kw_pial,
         ),
-        curv=SurfaceSupervisedLoss(
+        curv=SupervisedLoss(
             SymmetricSampledMSELoss("sampled_H"),
             **kw_pial,
         ),

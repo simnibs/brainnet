@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass, InitVar
 import importlib
 from pathlib import Path
@@ -7,8 +6,10 @@ import torch
 from ignite.engine import Events
 
 import brainsynth.config
+from brainsynth.dataset import AlignmentDataset
 from brainnet import config
-from brainnet.modules import body, head
+from brainnet.modules.alignment import AffineCorticalAlignment
+
 
 @dataclass
 class TrainParameters:
@@ -17,8 +18,9 @@ class TrainParameters:
     Additional setup is performed in post_init as inferred from these variables.
 
     """
+
     # fmt: off
-    project                 : str                   = "TopoFit"
+    project                 : str                   = "CorticalAlignment"
     contrast                : str                   = "t1w"  # synth, t1w, t2w, flair
     resolution              : str                   = "1mm" # 1mm, random
     run_suffix              : str                   = ""
@@ -52,7 +54,7 @@ class TrainParameters:
     # =========================================================================
 
     optimizer_name          : InitVar[str]          = "AdamW"
-    optimizer_kwargs        : InitVar[dict]         = dict(lr=5e-5)
+    optimizer_kwargs        : InitVar[dict]         = dict(lr=1e-4)
 
     # =========================================================================
     #   MODEL
@@ -74,19 +76,7 @@ class TrainParameters:
     UNET_RETURN_ENCODER_FEATURES: InitVar[list | None] = None
     UNET_RETURN_DECODER_FEATURES: InitVar[list | None] = [True, True, True, True]
 
-    UNET_FREEZE             : bool                  = False
-
-    TOPOFIT_ORDER_IN        : InitVar[int]          = 0
-    TOPOFIT_ORDER_OUT       : InitVar[int]          = 6
-    TOPOFIT_ORDER_MAX       : InitVar[int]          = 6
-    TOPOFIT_WHITE_MATTER_CHANNELS: InitVar[dict]    = dict(
-        encoder=[96, 96, 96, 96],
-        decoder=[96, 96, 96],
-    )
-    TOPOFIT_GRAY_MATTER_CHANNELS: InitVar[list]     = [32]
-    TOPOFIT_GRAY_MATTER_MODULE: InitVar[str]        = "LinearDeformationBlock"
-
-    enable_amp              : bool                  = True
+    enable_amp: bool = True
 
     # =========================================================================
     #   DATASET
@@ -94,9 +84,11 @@ class TrainParameters:
     # COBRE and MCIC are used as test sets.
     # ISBI2015 results from FS are not great
 
-    data_dir                : InitVar[str]          = "/mnt/projects/CORTECH/nobackup/training_data/full"
-    subject_dir             : InitVar[str]          = "/mnt/projects/CORTECH/nobackup/training_data/subject_splits"
-    datasets                : InitVar[list]         = [
+    data_dir: InitVar[str] = "/mnt/projects/CORTECH/nobackup/training_data/full"
+    subject_dir: InitVar[str] = (
+        "/mnt/projects/CORTECH/nobackup/training_data/subject_splits"
+    )
+    datasets: InitVar[list] = [
         "ABIDE",
         "ADHD200",
         "ADNI3",
@@ -119,15 +111,8 @@ class TrainParameters:
     # out_center_str = "lh"
 
     # Full brain
-    fov_out_size            : InitVar[list]         = [176, 208, 176]
-    fov_out_center_str      : InitVar[str]          = "brain"
-
-    # =========================================================================
-    #   PRETRAINED
-    # =========================================================================
-
-    load_body_from_checkpoint : InitVar[str | None] = "/mnt/scratch/personal/jesperdn/results/TopoFit-UNet/synth_1mm/checkpoint/state_checkpoint_00400.pt"
-    load_head_from_checkpoint : InitVar[str | None] = None # "/mnt/scratch/personal/jesperdn/results/TopoFit/t1w_1mm-taubin_16/checkpoint/state_checkpoint_00600.pt"
+    fov_out_size: InitVar[list] = [192, 224, 192]
+    fov_out_center_str: InitVar[str] = "image"
 
     # =========================================================================
     #   WANDB
@@ -146,8 +131,8 @@ class TrainParameters:
         out_dir,
         model_dir,
         evaluate_on_every,
-        save_checkpoint_on_every,
         save_example_on_every,
+        save_checkpoint_on_every,
         events_trainer,
         events_evaluator,
         losses,
@@ -157,19 +142,11 @@ class TrainParameters:
         UNET_DECODER_CHANNELS,
         UNET_RETURN_ENCODER_FEATURES,
         UNET_RETURN_DECODER_FEATURES,
-        TOPOFIT_ORDER_IN,
-        TOPOFIT_ORDER_OUT,
-        TOPOFIT_ORDER_MAX,
-        TOPOFIT_WHITE_MATTER_CHANNELS,
-        TOPOFIT_GRAY_MATTER_CHANNELS,
-        TOPOFIT_GRAY_MATTER_MODULE,
         data_dir,
         subjects_dir,
         datasets,
         fov_out_size,
         fov_out_center_str,
-        load_body_from_checkpoint,
-        load_head_from_checkpoint,
         wandb_run_id,
         wandb_run_tags,
     ):
@@ -192,14 +169,11 @@ class TrainParameters:
 
         device = torch.device(device)
 
-
-
         # =====================================================================
         # CRITERION
         # =====================================================================
 
-        losses = importlib.import_module(f".{losses}", "brainnet.config.topofit")
-
+        losses = importlib.import_module(f".{losses}", "brainnet.config.alignment")
 
         self.criterion = config.CriterionParameters(
             train=losses.cfg_loss,
@@ -210,9 +184,12 @@ class TrainParameters:
         # TRAINING / EVALUATION PARAMETERS
         # =====================================================================
 
-
-        train_events = importlib.import_module(f".{events_trainer}", "brainnet.config.topofit")
-        eval_events = importlib.import_module(f".{events_evaluator}", "brainnet.config.topofit")
+        train_events = importlib.import_module(
+            f".{events_trainer}", "brainnet.config.alignment"
+        )
+        eval_events = importlib.import_module(
+            f".{events_evaluator}", "brainnet.config.alignment"
+        )
 
         self.trainer_epoch_length = epoch_length_train
         self.trainer_max_epochs = self.max_epochs
@@ -261,25 +238,7 @@ class TrainParameters:
             case _:
                 raise ValueError
 
-        match resolution:
-            case "1mm":
-                builder_res = "Iso"
-            case "random":
-                builder_res = ""
-            case _:
-                raise ValueError
-
-        random_skullstrip: bool = True
-
-        builder_contrast = "Synth" if contrast == "synth" else "Select"
-        if builder_contrast == "Synth" or random_skullstrip:
-            # synth has skullstrip anyway
-            builder_train = f"Only{builder_contrast}{builder_res}"
-        else:
-            builder_train = f"Only{builder_contrast}NoSkullStrip{builder_res}"
-        builder_validation = f"OnlySelectNoSkullStrip{builder_res}"
-
-        self.dataloader = config.DataloaderParameters()
+        self.dataloader = dict(dataset_class=AlignmentDataset)
 
         # =====================================================================
         # DATASETS
@@ -287,18 +246,15 @@ class TrainParameters:
         # {ds}.exclude.txt
         subject_subset_exclude = "exclude"
 
-        template_surface = dict(resolution=TOPOFIT_ORDER_IN, name="template")
-        target_vertices = dict(resolution=TOPOFIT_ORDER_OUT, name="target")
-
-        self.dataset = config.DatasetParameters(
+        self.dataset = dict(
             train=brainsynth.config.DatasetConfig(
                 root_dir=data_dir,
                 subject_dir=subjects_dir,
                 subject_subset=subject_subset_train,
                 datasets=datasets,
                 images=images_train,
-                target_vertices=target_vertices,
-                template_surface=template_surface,
+                target_vertices=None,
+                template_surface=None,
                 exclude_subjects=subject_subset_exclude,
             ),
             validation=brainsynth.config.DatasetConfig(
@@ -307,8 +263,8 @@ class TrainParameters:
                 subject_subset=subject_subset_val,
                 datasets=datasets,
                 images=images_val,
-                target_vertices=target_vertices,
-                template_surface=template_surface,
+                target_vertices=None,
+                template_surface=None,
                 exclude_subjects=subject_subset_exclude,
             ),
         )
@@ -317,42 +273,19 @@ class TrainParameters:
         # MODEL
         # =====================================================================
 
-        UNET_DECODER_CHANNELS_POST = {
-            ("t1w", "1mm"):         None,
-            ("synth", "1mm"):       UNET_DECODER_CHANNELS["t1w","1mm"],
-            ("synth", "random"):    UNET_DECODER_CHANNELS["t1w","1mm"],
-        }
+        # unet = body.UNet(
+        #     spatial_dims=3,
+        #     in_channels=1,
+        #     encoder_channels=UNET_ENCODER_CHANNELS[contrast, resolution],
+        #     decoder_channels=UNET_DECODER_CHANNELS[contrast, resolution],
+        #     return_encoder_features=UNET_RETURN_ENCODER_FEATURES,
+        #     return_decoder_features=UNET_RETURN_DECODER_FEATURES,
+        #     # match the synth features to the T1w features
+        #     encoder_post=None,
+        #     decoder_post=UNET_DECODER_CHANNELS_POST[contrast, resolution],
+        # )
 
-        unet = body.UNet(
-            spatial_dims=3,
-            in_channels=1,
-            encoder_channels=UNET_ENCODER_CHANNELS[contrast, resolution],
-            decoder_channels=UNET_DECODER_CHANNELS[contrast, resolution],
-            return_encoder_features=UNET_RETURN_ENCODER_FEATURES,
-            return_decoder_features=UNET_RETURN_DECODER_FEATURES,
-            # match the synth features to the T1w features
-            encoder_post=None,
-            decoder_post=UNET_DECODER_CHANNELS_POST[contrast, resolution],
-        )
-
-        topofit = head.TopoFit(
-            in_channels=unet.num_features,
-            in_order=TOPOFIT_ORDER_IN,
-            out_order=TOPOFIT_ORDER_OUT,
-            max_order=TOPOFIT_ORDER_MAX,
-            white_feature_maps=[unet.decoder_features] * (TOPOFIT_ORDER_MAX - TOPOFIT_ORDER_IN + 1),
-            white_channels=TOPOFIT_WHITE_MATTER_CHANNELS,
-            pial_feature_maps=unet.decoder_features,
-            pial_channels=TOPOFIT_GRAY_MATTER_CHANNELS,
-            pial_deform_module=TOPOFIT_GRAY_MATTER_MODULE,
-            device=device
-        )
-
-        self.model = config.BrainNetParameters(
-            device=device,
-            body=unet,
-            heads=dict(surface=topofit),
-        )
+        self.model = AffineCorticalAlignment(device=device)
 
         # =====================================================================
         # OPTIMIZER
@@ -373,13 +306,21 @@ class TrainParameters:
             else None,
             save_example_on=save_example_on,
             save_checkpoint_on=save_checkpoint_on,
-            load_body_from_checkpoint=load_body_from_checkpoint,
-            load_head_from_checkpoint=load_head_from_checkpoint,
         )
 
         # =====================================================================
         # SYNTHESIZER
         # =====================================================================
+        match contrast, resolution:
+            case "t1w", "1mm":
+                builder_train = "CropSelectIso"
+                builder_validation = "CropSelectIso"
+            case "synth", "1mm":
+                builder_train = "CropSynthIso"
+                builder_validation = "CropSelectIso"
+            case "synth", "random":
+                builder_train = "CropSynth"
+                builder_validation = "CropSelect"
 
         self.synthesizer = config.SynthesizerParameters(
             train=brainsynth.config.SynthesizerConfig(

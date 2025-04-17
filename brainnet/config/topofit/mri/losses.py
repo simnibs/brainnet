@@ -1,7 +1,7 @@
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
-    SurfaceSupervisedLoss,
+    SupervisedLoss,
 )
 from brainnet.modules.losses_surface import (
     EdgeLengthVarianceLoss,
@@ -36,7 +36,7 @@ functions = dict(
         edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         tri_Q=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="white"),
         taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="white"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SampledSemiSymmetricMSNormLoss(
                 value_key=("interpolated", "points"), sym_weights=(0.5, 0.5),
             ),
@@ -61,7 +61,7 @@ functions = dict(
         taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="pial"),
         edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
         tri_Q=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="pial"),
-        chamfer=SurfaceSupervisedLoss(
+        chamfer=SupervisedLoss(
             SampledSemiSymmetricMSNormLoss(
                 value_key=("interpolated", "points"), sym_weights=(0.5, 0.5),
             ),
