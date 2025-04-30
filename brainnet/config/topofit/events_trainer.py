@@ -8,47 +8,48 @@ from brainnet.event_handlers import (
 )
 
 loss_events = [
-
     config.EventAction(
         event=Events.EPOCH_STARTED(once=101),
         handler=set_loss_weight,
         kwargs=dict(
             weights={
-                # ("white", "spring"): 10.0,
-                # ("pial", "spring"):  10.0,
-                ("white", "taubin"):   20.0,
-                ("pial", "taubin"):    20.0,
-
-                ("white", "edge_var"):  5.0,
-                ("pial", "edge_var"):   2.5,
-                ("white", "tri_Q"):     2.5,
-                ("pial", "tri_Q"):      2.5,
+                ("white", "spring"): 5.0,
+                ("pial", "spring"): 5.0,
+                # ("white", "taubin"): 20.0,
+                # ("pial", "taubin"): 10.0,
+                # ("white", "edge_var"): 5.0,
+                # ("pial", "edge_var"): 2.5,
+                # ("white", "tri_Q"): 2.5,
+                # ("pial", "tri_Q"): 2.5,
             }
         ),
     ),
-
     config.EventAction(
         event=Events.EPOCH_STARTED(once=301),
         handler=set_loss_weight,
         kwargs=dict(
             weights={
-                # ("white", "spring"): 1.0,
-                # ("pial", "spring"):  0.5,
-                ("white", "taubin"):   5.0,
-                ("pial", "taubin"):    2.5,
-
-                # ("white", "edge_var"):  2.5,
-                # ("pial", "edge_var"):   1.25,
-                # ("white", "tri_Q"):     1.25,
-                # ("pial", "tri_Q"):      1.25,
-                ("white", "edge_var"):  1.0,
-                ("pial", "edge_var"):   0.5,
-                ("white", "tri_Q"):     0.5,
-                ("pial", "tri_Q"):      0.5,
+                ("white", "spring"): 1.0,
+                ("pial", "spring"): 0.5,
+                # ("white", "taubin"): 5.0,
+                # ("pial", "taubin"): 2.5,
+                ("white", "edge_var"): 1.0,
+                ("pial", "edge_var"): 0.5,
+                ("white", "tri_Q"): 0.5,
+                ("pial", "tri_Q"): 0.5,
             }
         ),
     ),
-
+    config.EventAction(
+        event=Events.EPOCH_STARTED(once=401),
+        handler=set_loss_weight,
+        kwargs=dict(
+            weights={
+                ("white", "spring"): 0.5,
+                ("pial", "spring"): 0.25,
+            }
+        ),
+    ),
 ]
 
 optimizer_events = [

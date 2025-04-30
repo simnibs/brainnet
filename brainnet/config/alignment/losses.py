@@ -25,4 +25,5 @@ loss_weights = dict(
     rh_brain=dict(MSE=1.0),
 )
 
-cfg_loss = LossParameters(functions, head_weights, loss_weights)
+train = LossParameters(functions, head_weights, loss_weights)
+validation = train

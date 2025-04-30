@@ -1,15 +1,14 @@
 DEFAULTS = dict(
-    contrast="synth",
+    contrast="t1w",
     resolution="1mm",
-    # run_suffix="TEST",
-    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-UNet/synth_1mm/checkpoint/state_checkpoint_00400.pt",
+    run_suffix="32-spring",
+    UNET_DECODER_CHANNELS={
+        ("t1w", "1mm"): [[128], [64], [32], [32]],
+    },
 )
 
 PHASES = {
-    "Resolution 4 (freeze)": dict(
-        TOPOFIT_ORDER_OUT=4, UNET_FREEZE=True, max_epochs=100
-    ),
-    "Resolution 4": dict(TOPOFIT_ORDER_OUT=4, load_checkpoint=100, max_epochs=200),
+    "Resolution 4": dict(TOPOFIT_ORDER_OUT=4, max_epochs=200),
     "Resolution 5": dict(TOPOFIT_ORDER_OUT=5, load_checkpoint=200, max_epochs=400),
     "Resolution 6": dict(TOPOFIT_ORDER_OUT=6, load_checkpoint=400, max_epochs=600),
 }
