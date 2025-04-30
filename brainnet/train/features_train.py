@@ -9,11 +9,10 @@ from ignite.engine import Engine
 import brainsynth
 
 from brainnet.dict_utils import recursively_apply_function
-import brainnet.config
 import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
-from brainnet.dict_utils import recursive_dict_sum, recursive_itemize
+from brainnet.dict_utils import recursive_dict_sum, recursively_apply_method
 
 
 class SupervisedStep:
@@ -44,7 +43,9 @@ class SupervisedStep:
             init_verts = recursively_apply_function(init_verts, func)
 
             with torch.no_grad():
-                y_true = self.synthesizer(images, initial_vertices=init_verts, unpack=False)
+                y_true = self.synthesizer(
+                    images, initial_vertices=init_verts, unpack=False
+                )
 
             # Add batch dim
             func = functools.partial(torch.unsqueeze, dim=0)
@@ -62,9 +63,14 @@ class SupervisedStep:
 
 class SupervisedTrainingStep(SupervisedStep):
     def __init__(
-        self, synthesizer, pretrained_model, model, criterion, optimizer,
+        self,
+        synthesizer,
+        pretrained_model,
+        model,
+        criterion,
+        optimizer,
         gradient_accumulation_steps: int = 1,
-        enable_amp: bool = False
+        enable_amp: bool = False,
     ) -> None:
         super().__init__(synthesizer, model, criterion)
         self.pretrained_model = pretrained_model
@@ -94,12 +100,18 @@ class SupervisedTrainingStep(SupervisedStep):
 
             # a little inaccurate but does not matter so much as it is just
             # for weighting the losses
-            subsamp = [2**(3-int(k.split(":")[-1])) for k in y_true if "dec:" in k]
-            mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_true, subsamp)}
+            subsamp = [2 ** (3 - int(k.split(":")[-1])) for k in y_true if "dec:" in k]
+            mask = {
+                k: mask[..., ::s, ::s, ::s].ravel() for k, s in zip(y_true, subsamp)
+            }
             # mask["sr1"] = mask["dec:3"]
 
-            y_pred_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_pred.items()}
-            y_true_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_true.items()}
+            y_pred_masked = {
+                k: v.reshape(*v.shape[:2], -1)[..., mask[k]] for k, v in y_pred.items()
+            }
+            y_true_masked = {
+                k: v.reshape(*v.shape[:2], -1)[..., mask[k]] for k, v in y_true.items()
+            }
 
             loss = self.compute_loss(y_pred_masked, y_true_masked)
             total_loss = recursive_dict_sum(loss["weighted"])
@@ -123,13 +135,16 @@ class SupervisedTrainingStep(SupervisedStep):
                 # accumulate across multiple passes (whenever .backward is
                 # called)
                 self.optimizer.zero_grad()
-        loss = recursive_itemize(loss)
+        loss = recursively_apply_method(loss, "item")
 
         # these are stored in engine.state.output
         return loss, batch["image"], y_pred, y_true
 
+
 class EvaluationStep(SupervisedStep):
-    def __init__(self, synthesizer, pretrained_model, model, criterion, enable_amp: bool = False):
+    def __init__(
+        self, synthesizer, pretrained_model, model, criterion, enable_amp: bool = False
+    ):
         super().__init__(synthesizer, model, criterion)
         self.pretrained_model = pretrained_model
         self.enable_amp = enable_amp
@@ -152,23 +167,32 @@ class EvaluationStep(SupervisedStep):
 
                 # a little inaccurate but does not matter so much as it is just
                 # for weighting the losses
-                subsamp = [2**(3-int(k.split(":")[-1])) for k in y_true if "dec:" in k]
-                mask = {k: mask[..., ::s, ::s, ::s].ravel() for k,s in zip(y_true, subsamp)}
+                subsamp = [
+                    2 ** (3 - int(k.split(":")[-1])) for k in y_true if "dec:" in k
+                ]
+                mask = {
+                    k: mask[..., ::s, ::s, ::s].ravel() for k, s in zip(y_true, subsamp)
+                }
                 # mask["sr1"] = mask["dec:3"]
 
-                y_pred_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_pred.items()}
-                y_true_masked = {k: v.reshape(*v.shape[:2],-1)[..., mask[k]] for k,v in y_true.items()}
+                y_pred_masked = {
+                    k: v.reshape(*v.shape[:2], -1)[..., mask[k]]
+                    for k, v in y_pred.items()
+                }
+                y_true_masked = {
+                    k: v.reshape(*v.shape[:2], -1)[..., mask[k]]
+                    for k, v in y_true.items()
+                }
 
                 loss = self.compute_loss(y_pred_masked, y_true_masked)
 
         # we don't need the weighted loss
-        loss = recursive_itemize(loss["raw"])
+        loss = recursively_apply_method(loss["raw"], "item")
 
         return loss, batch["image"], y_pred, y_true
 
 
 def train(args):
-
     """
 
     train_setup_file = "brainnet.config.topofit.mri.main"
@@ -176,7 +200,7 @@ def train(args):
     train_setup.wandb.enable = False
 
     args = brainnet.train.utilities.parse_args(
-        "brainnet/train/features_train.py brainnet.config.topofit.features.main --max-epochs 50 --no-wandb".split()
+        "brainnet/train/features_train.py brainnet.config.topofit.features.main --load-checkpoint 200 --max-epochs 250 --no-wandb".split()
     )
 
     """
@@ -186,8 +210,12 @@ def train(args):
     print("Setting up training...")
 
     train_setup = getattr(importlib.import_module(train_setup_file), "train_setup")
-    cfg_pretrained_model = getattr(importlib.import_module(train_setup_file), "cfg_pretrained_model")
-    ckpt_pretrained_model = getattr(importlib.import_module(train_setup_file), "ckpt_pretrained_model")
+    cfg_pretrained_model = getattr(
+        importlib.import_module(train_setup_file), "cfg_pretrained_model"
+    )
+    ckpt_pretrained_model = getattr(
+        importlib.import_module(train_setup_file), "ckpt_pretrained_model"
+    )
 
     sep_line = 79 * "="
 
@@ -203,10 +231,18 @@ def train(args):
     dataloader = brainnet.initializers.init_dataloader(
         train_setup.dataset, train_setup.dataloader
     )
-    pretrained_model = brainnet.initializers.init_model(copy.deepcopy(cfg_pretrained_model))
+    pretrained_model = brainnet.initializers.init_model(
+        copy.deepcopy(cfg_pretrained_model)
+    )
+    # pretrained_model_opt = torch.compile(pretrained_model)
     model = brainnet.initializers.init_model(train_setup.model)
+    # model_opt = torch.compile(model)
     optimizer = brainnet.initializers.init_optimizer(train_setup.optimizer, model)
     synth = brainnet.initializers.init_synthesizer(train_setup.synthesizer)
+    # synth_opt = {}
+    # for k,v in synth.items():
+    #     if isinstance(v, torch.nn.Module):
+    #         synth_opt[k] = torch.compile(v)
 
     # =============================================================================
     # TRAINING
@@ -295,12 +331,12 @@ def train(args):
         to_save["grad_scaler"] = train_step.grad_scaler
 
     brainnet.train.utilities.add_model_checkpoint(trainer, to_save, train_setup.results)
-    brainnet.train.utilities.write_example_to_disk(trainer, evaluators, train_setup.results)
+    brainnet.train.utilities.write_example_to_disk(
+        trainer, evaluators, train_setup.results
+    )
     brainnet.train.utilities.load_checkpoint_from_setup(to_save, train_setup)
     brainnet.train.utilities.load_checkpoint(
-        dict(model=pretrained_model),
-        ckpt_pretrained_model,
-        train_setup.device
+        dict(model=pretrained_model), ckpt_pretrained_model, train_setup.device
     )
     print("Setup completed. Starting training at epoch ...")
 
@@ -313,7 +349,9 @@ def train(args):
     print(sep_line)
 
     # Start the training
-    epoch_length = train_setup.train_params.epoch_length_train or len(iter(dataloader["train"]))
+    epoch_length = train_setup.train_params.epoch_length_train or len(
+        iter(dataloader["train"])
+    )
     # trainer.state.epoch_length = epoch_length
     trainer.run(
         dataloader["train"],

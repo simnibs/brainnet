@@ -1,6 +1,9 @@
+import math
+
 import torch
 
 # ERROR FUNCTIONS
+
 
 class SquaredError(torch.nn.Module):
     def __init__(self) -> None:
@@ -10,6 +13,7 @@ class SquaredError(torch.nn.Module):
         return (a - b) ** 2
         # return torch.mean((a - b) ** 2, dim=-1)
 
+
 class NormalizedSquaredError(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -18,15 +22,17 @@ class NormalizedSquaredError(torch.nn.Module):
         # return (a - b) ** 2 / torch.clamp(b**2, min=1.0/b.abs().amax()**2)
         # return torch.mean((a - b) ** 2 / torch.clamp(b**2, self.tol), dim=-1)
         d = a**2 + b**2
-        d = d.clamp(min=1.0/d.amax())
-        return (a - b)**2 / d
+        d = d.clamp(min=1.0 / d.amax())
+        return (a - b) ** 2 / d
+
 
 class AbsoluteError(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
     def forward(self, a, b):
-        return torch.abs(a - b)#.mean(dim=-1)
+        return torch.abs(a - b)  # .mean(dim=-1)
+
 
 class NormalizedAbsoluteError(torch.nn.Module):
     def __init__(self) -> None:
@@ -35,7 +41,7 @@ class NormalizedAbsoluteError(torch.nn.Module):
     def forward(self, a, b):
         # return torch.abs(a - b) / b.clamp(min=1.0/b.abs().amax())
         d = a.abs() + b.abs()
-        d = d.clamp(min=1.0/d.amax())
+        d = d.clamp(min=1.0 / d.amax())
         return torch.abs(a - b) / d
 
 
@@ -67,6 +73,54 @@ class SquaredCosineSimilarityError(torch.nn.CosineSimilarity):
 
     def forward(self, a, b):
         return (1.0 - super().forward(a, b)) ** 2
+
+
+class NegLogProbDiagonalMultivariateNormal(torch.nn.Module):
+    def __init__(self):
+        """Simplified version of torch.distributions.MultivariateNormal that
+        assumes a diagonal covariance matrix.
+        """
+        super().__init__()
+
+    def log_prob(self, loc, log_scale, value):
+        # compute the Mahalanobis distance (x-mu).T @ SIGMA**-1 @ (x-mu) when
+        # SIGMA is diagonal
+        diff = value - loc
+        # M = diff.pow(2).div(scale.pow(2)).sum(-1)
+        M = diff.pow(2).div(log_scale.exp().pow(2)).sum(-1)
+
+        # half_log_det = scale.log().sum(-1)
+        half_log_det = log_scale.sum(-1)
+        d = loc.shape[-1]
+        return -0.5 * (d * math.log(2 * math.pi) + M) - half_log_det
+
+    def forward(
+        self,
+        loc: torch.Tensor,
+        scale: torch.Tensor,
+        query_points: torch.Tensor,
+    ):
+        """Given loc (mean) and scale (standard deviation) of a multivariate
+        normal distribution with diagonal covariance structure, estimate the
+        negative log probability of the query points.
+
+        Parameters
+        ----------
+        loc : torch.Tensor
+            (n_batch, n_vertices, d)
+        scale : torch.Tensor
+            The *standard deviation* in each dimension, i.e., the square root
+            of the diagonal entries in the covariance matrix.
+            (n_batch, n_vertices, d)
+        query_points : torch.Tensor
+            (n_batch, n_vertices, d)
+
+        Returns
+        -------
+        neg_log_prob
+            (n_batch, n_vertices)
+        """
+        return self.log_prob(loc, scale, query_points).neg()
 
 
 # DECORATORS
@@ -133,3 +187,15 @@ MSCosSimLoss = wrap_mean_reduction(SquaredCosineSimilarityError)
 SemiHardSELoss = wrap_semi_hard_reduction(SquaredError)
 SemiHardL1Loss = wrap_semi_hard_reduction(AbsoluteError)
 SemiHardSNELoss = wrap_semi_hard_reduction(SquaredNormError)
+
+
+# Make a mean reduction of the negative log probability loss mimicking the
+# input pattern of `wrap_mean_reduction` but where the third arg is passed to
+# the super method rather than being used to weigh the error post hoc!
+class NegLogProbLoss(NegLogProbDiagonalMultivariateNormal):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, y_pred, y_true, y_pred_scale):
+        error = super().forward(y_pred, y_pred_scale, y_true)
+        return error.mean()

@@ -7,7 +7,7 @@ import torch
 from ignite.engine import Engine
 
 import brainsynth
-from brainsynth.utilities import apply_affine
+# from brainsynth.utilities import apply_affine
 
 from brainnet.dict_utils import (
     recursively_apply_function,
@@ -17,7 +17,7 @@ from brainnet.dict_utils import (
 import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
-from brainnet.mesh.surface import Surface, load_deepsurfer_template
+from brainnet.mesh.surface import Surface  # , load_deepsurfer_template
 from brainnet.mesh.topology import DeepSurferTopology
 from brainnet.modules.head import surface_modules
 
@@ -30,52 +30,14 @@ class SupervisedStep:
         synthesizer: None | brainsynth.Synthesizer,
         model: brainnet.BrainNet,
         criterion: brainnet.Criterion,
-        subdivision: int,
+        # subdivision: int,
     ) -> None:
         self.synthesizer = synthesizer
         self.model = model
         self.criterion = criterion
         self.device = self.model.device
-        self.initialize_surface_templates()
-        self.set_templates(subdivision)
-
-    def initialize_surface_templates(self):
-        # Get empty Surface. We update the vertices each iteration
-        self.surface_template = dict(
-            y_pred=self.get_placeholder_surface_templates(),
-            y_true=self.get_placeholder_surface_templates(),
-        )
-
-    def get_placeholder_surface_templates(self):
-        """Initialize placeholder objects for the predicted and target
-        surfaces. The vertices are updated on each iteration.
-        """
-        surface_names = ("white", "pial")
-
-        module = [
-            i for i in self.model.heads.values() if isinstance(i, surface_modules)
-        ]
-
-        if len(module) == 0:
-            return {}
-
-        assert len(module) == 1
-        module = module[0]
-
-        # topology = module.get_prediction_topology()
-        topology = module.out_topology
-        topology = dict(lh=topology, rh=copy.deepcopy(topology))
-
-        if isinstance(topology["rh"], DeepSurferTopology):
-            topology["rh"].reverse_face_orientation()
-
-        return {
-            h: {
-                s: Surface(torch.zeros(t.n_vertices, 3, device=self.device), t)
-                for s in surface_names
-            }
-            for h, t in topology.items()
-        }
+        # self.set_templates(subdivision)
+        self.set_prediction_topologies()
 
     def update_surface_template(self, template, data):
         """Insert vertices data from `data` into template and replace `data`
@@ -86,13 +48,35 @@ class SupervisedStep:
                 template[h][s].vertices = surfaces[s]
                 data[h][s] = template[h][s]
 
-    def set_templates(self, subdivision: int):
-        self.template_mni = load_deepsurfer_template(subdivision, self.device)
-        self.template_sub = copy.deepcopy(self.template_mni)
+    def set_prediction_topologies(self):
+        module = [
+            i for i in self.model.heads.values() if isinstance(i, surface_modules)
+        ]
+        if len(module) == 0:
+            return {}
 
-    def update_subject_template(self, affine):
-        for h, s in self.template_mni.items():
-            self.template_sub[h].vertices = apply_affine(affine, s.vertices)
+        assert len(module) == 1
+        module = module[0]
+        self.topology = copy.deepcopy(module.out_topology)
+
+    def get_surfaces(self, vertices, vertex_data: dict | None = None):
+        surfaces = {}
+        for h, surfs in vertices.items():
+            surfaces[h] = {}
+            for s, v in surfs.items():
+                surf = Surface(v, self.topology[h])
+                if vertex_data is not None:
+                    surf.vertex_data = vertex_data[h][s]
+                surfaces[h][s] = surf
+        return surfaces
+
+    # def set_templates(self, subdivision: int):
+    #     self.template_mni = load_deepsurfer_template(subdivision, self.device)
+    #     self.template_sub = copy.deepcopy(self.template_mni)
+
+    # def update_subject_template(self, affine):
+    #     for h, s in self.template_mni.items():
+    #         self.template_sub[h].vertices = apply_affine(affine, s.vertices)
 
     def prepare_batch(self, batch):
         """Run data augmentation/synthesis on the batch as returned by the
@@ -102,7 +86,7 @@ class SupervisedStep:
             # assume synthesizer was applied when loading the data
             return batch
         else:
-            images, surfaces, init_verts = batch
+            images, affines, surfaces, init_verts = batch
 
             # Remove batch dim
             func = functools.partial(torch.squeeze, dim=0)
@@ -111,7 +95,9 @@ class SupervisedStep:
             init_verts = recursively_apply_function(init_verts, func)
 
             with torch.no_grad():
-                y_true = self.synthesizer(images, surfaces, init_verts, unpack=False)
+                y_true = self.synthesizer(
+                    images, surfaces, init_verts, affines, unpack=False
+                )
 
             # Add batch dim
             func = functools.partial(torch.unsqueeze, dim=0)
@@ -122,15 +108,8 @@ class SupervisedStep:
 
             return image, y_true, init_verts
 
-    def prepare_loss(self, y_pred, y_true):
-        if (k := "surface") in y_pred:
-            self.update_surface_template(self.surface_template["y_pred"], y_pred[k])
-            self.update_surface_template(self.surface_template["y_true"], y_true[k])
-
-            self.criterion.prepare_for_surface_loss(y_pred[k], y_true[k])
-
     def compute_loss(self, y_pred, y_true):
-        self.prepare_loss(y_pred, y_true)
+        self.criterion.prepare_for_surface_loss(y_pred["surface"], y_true["surface"])
         raw = self.criterion(y_pred, y_true)
         return dict(raw=raw, weighted=self.criterion.apply_weights(raw))
 
@@ -159,10 +138,10 @@ class SupervisedTrainingStep(SupervisedStep):
 
         image, y_true, template = self.prepare_batch(batch)
 
-        with torch.autocast(self.device.type, enabled=self.enable_amp):
-            mni305_to_ras = self.model(image, vox2mri)["brain"]
+        # with torch.autocast(self.device.type, enabled=self.enable_amp):
+        #     mni305_to_ras = self.model(image, vox2mri)["brain"]
 
-        template = apply_affine(mni305_to_ras, self.template)
+        # template = apply_affine(mni305_to_ras, self.template)
 
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
@@ -178,8 +157,11 @@ class SupervisedTrainingStep(SupervisedStep):
                 features = self.model.body(image)
             features = recursively_apply_method(features, "float")
             y_pred = self.model.forward_heads(features, template)
-
+            y_true["surface"] = self.get_surfaces(y_true["surface"])
             loss = self.compute_loss(y_pred, y_true)
+            # print(loss["raw"]["white"]["neglogprob"])
+            # print(loss["raw"]["pial"]["neglogprob"])
+            # print()
             total_loss = recursive_dict_sum(loss["weighted"])
             total_loss /= self.gradient_accumulation_steps
 
@@ -224,25 +206,27 @@ class EvaluationStep(SupervisedStep):
                 # we cast to float32 during training
                 features = recursively_apply_method(features, "float")
                 y_pred = self.model.forward_heads(features, template)
-
+                y_true["surface"] = self.get_surfaces(y_true["surface"])
                 loss = self.compute_loss(y_pred, y_true)
 
-        # we don't need the weighted loss
+        # we don't need the weighted loss anymore
         loss = recursively_apply_method(loss["raw"], "item")
 
         return loss, image, y_pred, y_true
+
+
+def setup_model(setup):
+    return brainnet.initializers.init_model(setup.model)
 
 
 def create_trainer(setup, no_wandb: bool = False):
     # Overwrite args from command line if provided
     if no_wandb:
         setup.wandb.enable = False
-    # if args.resume is not Nones:
-    #     train_setup.resume_from_run
 
     criterion = brainnet.initializers.init_criterion(setup.criterion)
     dataloader = brainnet.initializers.init_dataloader(setup.dataset, setup.dataloader)
-    model = brainnet.initializers.init_model(setup.model)
+    model = setup_model(setup)
     # model.compile()
     optimizer = brainnet.initializers.init_optimizer(setup.optimizer, model)
     synth = brainnet.initializers.init_synthesizer(setup.synthesizer)
@@ -338,16 +322,7 @@ def create_trainer(setup, no_wandb: bool = False):
     brainnet.train.utilities.load_checkpoint_from_setup(to_save, setup)
 
     print("Setup completed.", end="\n\n")
-
-    print(f"Project             {setup.project:30s}")
-    print(f"Contrast            {setup.contrast:30s}")
-    print(f"Resolution          {setup.resolution:30s}")
-    print(f"Run                 {setup.run:30s}")
-    print(f"Load checkpoint     {setup.load_checkpoint:d}")
-    print(f"Max epochs          {setup.max_epochs:d}")
-    print(f"Output dir          {setup.results.out_dir}")
-    print(f"Wandb enabled       {setup.wandb.enable}")
-    print()
+    print(setup)
 
     return trainer, dataloader["train"]
 
@@ -358,7 +333,7 @@ def train(args):
     python brainnet/train/topofit.py synth_1mm --no-wandb
 
     args = brainnet.train.utilities.argparser_topofit(
-        "brainnet/train/topofit.py synth_1mm --no-wandb".split()
+        "brainnet/train/topofit.py t1w_1mm --no-wandb".split()
     )
 
     """

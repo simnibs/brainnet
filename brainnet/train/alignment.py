@@ -228,6 +228,12 @@ class EvaluationStep(SupervisedStep):
         return loss, image, vox2mri, y_pred, y_true
 
 
+def setup_model(setup):
+    model = setup.model
+    model.to(setup.device)
+    return model
+
+
 def create_trainer(setup, no_wandb: bool = False):
     # Overwrite args from command line if provided
     if no_wandb:
@@ -237,8 +243,7 @@ def create_trainer(setup, no_wandb: bool = False):
 
     criterion = brainnet.initializers.init_criterion(setup.criterion)
     dataloader = brainnet.initializers.init_dataloader(setup.dataset, setup.dataloader)
-    model = setup.model
-    model.to(setup.device)
+    model = setup_model(setup)
     # model.compile()
     optimizer = brainnet.initializers.init_optimizer(setup.optimizer, model)
     synth = brainnet.initializers.init_synthesizer(setup.synthesizer)

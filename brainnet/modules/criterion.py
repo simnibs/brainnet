@@ -6,9 +6,9 @@ from ignite.exceptions import NotComputableError
 from ignite.metrics.metric import Metric, reinit__is_reduced, sync_all_reduce
 
 from brainnet.config import LossParameters
-import brainnet.modules.losses_surface
 import brainnet.dict_utils
 from brainnet.mesh.surface import Surface
+from brainnet.utils import unsqueeze_and_expand
 
 
 def recursive_dict_setter(d, k, v):
@@ -216,10 +216,10 @@ class Criterion(torch.nn.Module):
                     # on y_pred, set the interpolated data (e.g., medial wall
                     # weights) of the sampled points on y_pred to the value of the
                     # corresponding (closest) point on y_true
-                    for k in y_pred[h][s].vertex_data:
-                        y_pred[h][s].interpolated["data"][k] = (
-                            y_true[h][s].interpolated["data"][k].gather(-1, index)
-                        )
+                    # for k in y_pred[h][s].vertex_data:
+                    #     y_pred[h][s].interpolated["data"][k] = (
+                    #         y_true[h][s].interpolated["data"][k].gather(-1, index)
+                    #     )
                     # =============================================================
 
                     # NOTE these are indices into y_pred!
@@ -228,6 +228,34 @@ class Criterion(torch.nn.Module):
                         y_pred[h][s].interpolated["points"],
                     )
                     y_true[h][s].interpolated["data"]["chamfer_index"] = index
+
+                    # =========================================================
+                    # NOTE
+                    # For data that is only present in *y_true*, set the
+                    # interpolated data of the sampled points on y_pred to the
+                    # value of the corresponding (closest) point on y_true
+                    # (e.g., medial wall label)
+                    y_true_interp = y_true[h][s].interpolated["data"].keys()
+                    y_pred_interp = y_pred[h][s].interpolated["data"].keys()
+
+                    index = y_pred[h][s].interpolated["data"]["chamfer_index"]
+                    for k in y_true_interp:
+                        if k not in y_pred[h][s].interpolated["data"]:
+                            x = y_true[h][s].interpolated["data"][k]
+                            index = unsqueeze_and_expand(index, x)
+                            y_pred[h][s].interpolated["data"][k] = x.gather(-1, index)
+
+                    # For data that is only present in *y_pred*, set the
+                    # interpolated data of the sampled points on y_true to the
+                    # value of the corresponding (closest) point on y_pred
+                    # (e.g., uncertainty/sigma estimate from model)
+                    index = y_true[h][s].interpolated["data"]["chamfer_index"]
+                    for k in y_pred_interp:
+                        if k not in y_true[h][s].interpolated["data"]:
+                            x = y_pred[h][s].interpolated["data"][k]
+                            index = unsqueeze_and_expand(index, x)
+                            y_true[h][s].interpolated["data"][k] = x.gather(1, index)
+                    # =========================================================
 
                 elif self._needs_chamfer:
                     index = y_pred[h][s].nearest_neighbor(y_true[h][s])
@@ -250,15 +278,15 @@ class Criterion(torch.nn.Module):
         surface.interpolated["face_index"] = samp_face
         surface.interpolated["baricenter"] = samp_coo
 
-        ss = Surface(
-            surface.smooth_taubin(
-                surface.smooth_gauss(surface.vertices, n_iter=2), n_iter=2
-            ),
-            surface.topology,
-        )
-        n = ss.compute_vertex_normals()
-        n = ss.interpolate_vertex_features(n, samp_face, samp_coo)
-        surface.interpolated["data"]["normal"] = n / n.norm(dim=-1, keepdim=True)
+        # ss = Surface(
+        #     surface.smooth_taubin(
+        #         surface.smooth_gauss(surface.vertices, n_iter=2), n_iter=2
+        #     ),
+        #     surface.topology,
+        # )
+        # n = ss.compute_vertex_normals()
+        # n = ss.interpolate_vertex_features(n, samp_face, samp_coo)
+        # surface.interpolated["data"]["normal"] = n / n.norm(dim=-1, keepdim=True)
 
         if self._needs_curvature:
             if taubin_smoothing:

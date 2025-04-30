@@ -8,7 +8,7 @@ import torch
 def function_from_string(fn_str):
     """Get a function from its full string specification, e.g.,
 
-        'my.module.function' -> return function from my.module
+    'my.module.function' -> return function from my.module
 
     """
     split = fn_str.split(".")
@@ -34,11 +34,8 @@ class RegularizationLoss(torch.nn.Module):
         self.loss_fn = loss_fn
         self.y_pred = y_pred
 
-
     def forward(self, y_pred):
-        return self.loss_fn(
-            y_pred if self.y_pred is None else y_pred[self.y_pred]
-        )
+        return self.loss_fn(y_pred if self.y_pred is None else y_pred[self.y_pred])
 
 
 class SupervisedLoss(torch.nn.Module):
@@ -103,7 +100,9 @@ class SupervisedLoss(torch.nn.Module):
 
 
 class SoftMaskedSupervisedLoss(SupervisedLoss):
-    def __init__(self, loss_fn, y_pred: str, y_true: str, mask, background_channel) -> None:
+    def __init__(
+        self, loss_fn, y_pred: str, y_true: str, mask, background_channel
+    ) -> None:
         super().__init__(loss_fn, y_pred, y_true)
         self.mask = mask
         self.background_channel = background_channel
@@ -142,9 +141,12 @@ class SurfaceRegularizationLoss(RegularizationLoss, SurfaceLossHandler):
 class SurfaceSupervisedLoss(SupervisedLoss, SurfaceLossHandler):
     def __init__(self, *args, **kwargs) -> None:
         """Extract surface data and calculate average loss over hemispheres."""
-        super().__init__(*args, **kwargs) # init of SupervisedLoss!
+        super().__init__(*args, **kwargs)  # init of SupervisedLoss!
 
     def forward(self, y_pred, y_true, **kwargs):
         return self.average_over_hemispheres(
-            super().forward, y_pred, y_true, **kwargs,
+            super().forward,
+            y_pred,
+            y_true,
+            **kwargs,
         )

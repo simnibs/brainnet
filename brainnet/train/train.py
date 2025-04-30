@@ -13,11 +13,11 @@ from brainsynth.config.utilities import load_config, recursive_namespace_to_dict
 from brainsynth.dataset import get_dataloader_concatenated_and_split, setup_dataloader
 
 import brainnet
-from brainnet.mesh.surface import TemplateSurfaces
+from brainnet.mesh.surface import Surface
 from brainnet.modules.brainnet import BrainNet
 from brainnet.modules.head import surface_modules
 from brainnet.modules.criterion import Criterion
-from brainnet.utilities import recursive_dict_sum
+from brainnet.dict_utils import recursive_dict_sum
 
 fmt_epoch = lambda epoch: f"{epoch:05d}"
 fmt_state = lambda epoch: f"state_{fmt_epoch(epoch)}.pt"
@@ -852,11 +852,10 @@ class BrainNetTrainer:
 
         topology = module.get_prediction_topology()
         topology = dict(lh=topology, rh=copy.deepcopy(topology))
-        topology["rh"].reverse_face_orientation()
 
         return {
             h: {
-                s: TemplateSurfaces(torch.zeros(t.n_vertices, 3, device=self.device), t)
+                s: Surface(torch.zeros(t.n_vertices, 3, device=self.device), t)
                 for s in surface_names
             }
             for h, t in topology.items()

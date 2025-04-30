@@ -2,13 +2,14 @@ def recursively_apply_function(d, fn, out=None):
     """Recursively call a function on values."""
     if out is None:
         out = {}
-    for k,v in d.items():
+    for k, v in d.items():
         if isinstance(v, dict):
             out[k] = {}
             recursively_apply_function(v, fn, out[k])
         else:
             out[k] = fn(v)
     return out
+
 
 def recursively_apply_method(d, method, method_kwargs=None, out=None):
     """Recursively call .method(**method_kwargs) on values."""
@@ -25,11 +26,12 @@ def recursively_apply_method(d, method, method_kwargs=None, out=None):
 
 def recursive_dict_update_(d0, d1):
     """`d1` is a subset of `d0`."""
-    for k,v in d1.items():
+    for k, v in d1.items():
         if isinstance(v, dict):
             recursive_dict_update_(d0[k], v)
         else:
             d0[k] = v
+
 
 def recursive_dict_sum(d):
     """Recursive sum values of a dict containing only int/float values."""
@@ -41,18 +43,20 @@ def recursive_dict_sum(d):
             total += v
     return total
 
-def recursive_dict_multiply(d, factor): # iop() # inplace operator from operator module
+
+def recursive_dict_multiply(d, factor):  # iop() # inplace operator from operator module
     """Multiply all entries of a dictionary by `factor`."""
-    for k,v in d.items():
+    for k, v in d.items():
         if isinstance(v, dict):
             recursive_dict_multiply(v, factor)
         else:
-            d[k] *= factor # iop(d[k], factor)  ---- operator.imul, operator.iadd, ...
+            d[k] *= factor  # iop(d[k], factor)  ---- operator.imul, operator.iadd, ...
 
-def flatten_dict(d: dict, out: None | dict = None, prefix=None): # sep=":"
+
+def flatten_dict(d: dict, out: None | dict = None, prefix=None):  # sep=":"
     if out is None:
         out = {}
-    for k,v in d.items():
+    for k, v in d.items():
         # key = k if prefix is None else sep.join((prefix, k))
         if prefix is None:
             key = k
@@ -66,11 +70,12 @@ def flatten_dict(d: dict, out: None | dict = None, prefix=None): # sep=":"
             out[key] = v
     return out
 
+
 def multiply_dicts(values, weights, out: None | dict = None, threshold=1e-8):
     """Multiply two dicts entry-wise. All entries much match exactly."""
     if out is None:
         out = {}
-    for k,v in values.items():
+    for k, v in values.items():
         if isinstance(v, dict):
             out[k] = {}
             multiply_dicts(v, weights[k], out[k], threshold)
@@ -83,7 +88,7 @@ def add_dict(a: dict, b: dict):
     """Add `b` to `a` entrywise (in place). If an entry in `b` doesn't exist in
     `a`, it is created.
     """
-    for k,v in b.items():
+    for k, v in b.items():
         if k in a:
             if isinstance(v, dict):
                 add_dict(a[k], v)
@@ -112,8 +117,8 @@ def increment_dict_count(a: dict, b: dict, value: int = 1):
         b = dict(a=dict(x=2))
 
     """
-    for k,v in b.items():
-        if k in a: # error if this is a leaf node in a but not in b!
+    for k, v in b.items():
+        if k in a:  # error if this is a leaf node in a but not in b!
             if isinstance(v, dict):
                 increment_dict_count(a[k], v, value)
             else:
@@ -129,7 +134,7 @@ def increment_dict_count(a: dict, b: dict, value: int = 1):
 
 def divide_dict(a: dict, b: dict):
     """Divide values of `a` with those in `b`. Entries should match."""
-    for k,v in a.items():
+    for k, v in a.items():
         if isinstance(v, dict):
             divide_dict(a[k], b[k])
         else:

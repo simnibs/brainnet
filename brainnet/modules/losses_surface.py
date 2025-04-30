@@ -6,6 +6,7 @@ from brainnet import sphere_utils
 from brainnet.modules.losses import (
     L1Loss,
     NL1Loss,
+    NegLogProbLoss,
     NSELoss,
     MSELoss,
     MSNELoss,
@@ -82,7 +83,7 @@ def wrap_index_matched_data(cls):
     class IndexMatchedData(cls):
         def __init__(
             self,
-            value_key: tuple[str,str] = ("interpolated", "points"),
+            value_key: tuple[str, str] = ("interpolated", "points"),
             index_key: str = "chamfer_index",
             weight_key: str | None = None,
             *args,
@@ -333,6 +334,12 @@ SampledSemiSymmetricNSELoss = wrap_index_matched_data(SemiSymmetricNSELoss)
 SemiSymmetricCosSimLoss = wrap_semi_symmetric(MSCosSimLoss)
 SampledSemiSymmetricCosSimLoss = wrap_index_matched_data(SemiSymmetricCosSimLoss)
 
+SemiSymmetricNegLogProbLoss = wrap_semi_symmetric(NegLogProbLoss)
+SampledSemiSymmetricNegLogProbLoss = wrap_index_matched_data(
+    SemiSymmetricNegLogProbLoss
+)
+
+
 # SemiHard
 SemiSymmetricSemiHardNELoss = wrap_semi_symmetric(SemiHardSNELoss)
 SampledSemiSymmetricSemiHardSNormLoss = wrap_index_matched_data(
@@ -383,6 +390,7 @@ class FaceNormalConsistencyLoss(MSNELoss):  # MSCosSimLoss
 
 # nib.freesurfer.write_geometry("test1", vv[0].numpy(), f.numpy())
 
+
 class LaplacianLoss(MSNELoss):
     def __init__(self, dim: int = 1):
         super().__init__()
@@ -394,12 +402,13 @@ class LaplacianLoss(MSNELoss):
         dv = torch.index_reduce(
             torch.zeros_like(v),
             self.dim,
-            surface.topology.conv_index_reduce.long(), # TODO needs to be long!?
+            surface.topology.conv_index_reduce.long(),  # TODO needs to be long!?
             v.index_select(self.dim, surface.topology.conv_index_gather),
             "mean",
             include_self=False,
         )
         return self.loss_fn(dv, v)
+
 
 class TaubinLoss(MSNELoss):
     def __init__(self, a=0.33, b=-0.34, n_iter: int = 5):
@@ -409,6 +418,7 @@ class TaubinLoss(MSNELoss):
 
     def forward(self, s: Surface):
         return self.loss_fn(s.vertices, s.smooth_taubin(**self.taubin_kw))
+
 
 class IndexedSmoothnessLoss(MSNELoss):
     def __init__(self, dim=-1) -> None:
@@ -427,8 +437,9 @@ class IndexedSmoothnessLoss(MSNELoss):
         true2pred_r = true2pred[:, y_pred.topology.conv_index_reduce]
         true2pred_g = true2pred[:, y_pred.topology.conv_index_gather]
 
-        return 0.5 * super().forward(pred2true_r, pred2true_g) + 0.5 * super().forward(true2pred_r, true2pred_g)
-
+        return 0.5 * super().forward(pred2true_r, pred2true_g) + 0.5 * super().forward(
+            true2pred_r, true2pred_g
+        )
 
         # vi = y_pred.vertex_data["k2"].index_select(1, y_pred.topology.conv_index_reduce)
         # vj = y_pred.vertex_data["k2"].index_select(1, y_pred.topology.conv_index_gather)
@@ -577,6 +588,7 @@ class EdgeNormLoss(torch.nn.Module):
         """
         return surface.compute_edge_norm(unique=True).pow(2).mean()
 
+
 class EdgeLengthVarianceLoss(MSELoss):
     def __init__(self):
         super().__init__()
@@ -605,6 +617,7 @@ class EdgeLengthVarianceLoss(MSELoss):
         # MSE to the mean
         return super().forward(edge_length_mu1, 1)
 
+
 # class TriangleLengthVarianceLoss(MSELoss):
 #     def __init__(self):
 #         super().__init__()
@@ -631,6 +644,7 @@ class EdgeLengthVarianceLoss(MSELoss):
 #         edge_norm_mu1 = 3.0 * edge_norm/edge_norm.sum(-1, keepdim=True)
 #         # MSE to the mean
 #         return super().forward(edge_norm_mu1, 1.0)
+
 
 class TriangleQualityLoss(torch.nn.Module):
     def __init__(self):
@@ -659,7 +673,8 @@ class TriangleQualityLoss(torch.nn.Module):
         # q=0 is worst
         # q=1 is best
         q = a * A / E.pow(2).sum(-1)
-        return 1.0 - q.mean() # 0 = best; 1 = worst
+        return 1.0 - q.mean()  # 0 = best; 1 = worst
+
 
 class AreaLoss(MSELoss):
     def __init__(self, *args, **kwargs) -> None:
@@ -674,7 +689,9 @@ class AreaLoss(MSELoss):
 
         return super().forward(area_mu1, 1)
 
+
 # OTHER
+
 
 class SelfIntersectionCount(torch.nn.Module):
     def __init__(self, normalize: bool = True):

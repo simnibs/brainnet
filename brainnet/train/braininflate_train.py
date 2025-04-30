@@ -11,9 +11,9 @@ import brainnet.config
 import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
-from brainnet.utilities import recursive_dict_sum, recursive_itemize
+from brainnet.dict_utils import recursive_dict_sum, recursive_itemize
 
-from brainnet.mesh.surface import TemplateSurfaces
+from brainnet.mesh.surface import Surface
 
 
 class SupervisedStep:
@@ -34,7 +34,7 @@ class SupervisedStep:
             self.template_surfaces[h] = {}
             for s in surfaces:
                 t = copy.deepcopy(surf_obj.topology)
-                self.template_surfaces[h][s] = TemplateSurfaces(
+                self.template_surfaces[h][s] = Surface(
                     torch.zeros(
                         (surf_obj.n_batch, t.n_vertices, 3), device=self.device
                     ),

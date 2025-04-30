@@ -13,8 +13,8 @@ import brainnet.train.utilities
 
 from brainnet import event_handlers
 import brainnet.initializers
-from brainnet.mesh.surface import TemplateSurfaces
-from brainnet.utilities import recursive_dict_sum, recursive_itemize
+from brainnet.mesh.surface import Surface
+from brainnet.dict_utils import recursive_dict_sum, recursive_itemize
 
 from brainnet.mesh import topology
 
@@ -62,7 +62,7 @@ class SupervisedStep:
 
         return {
             h: {
-                s: TemplateSurfaces(torch.zeros(t.n_vertices, 3, device=self.device), t)
+                s: Surface(torch.zeros(t.n_vertices, 3, device=self.device), t)
                 for s in surface_names
             }
             for h, t in top.items()

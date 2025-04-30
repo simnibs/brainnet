@@ -11,9 +11,9 @@ import brainnet.config
 import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
-from brainnet.utilities import recursive_dict_sum, recursive_itemize
+from brainnet.dict_utils import recursive_dict_sum, recursive_itemize
 
-from brainnet.mesh.surface import TemplateSurfaces
+from brainnet.mesh.surface import Surface
 
 from brainnet.sphere_utils import change_sphere_size
 
@@ -40,13 +40,13 @@ class SupervisedStep:
             self.y_true_template[h] = {}
             self.y_pred_template[h] = {}
             for s in surfaces:
-                self.y_true_template[h][s] = TemplateSurfaces(
+                self.y_true_template[h][s] = Surface(
                     torch.zeros(
                         (1, top.n_vertices, 3), device=self.device
                     ),
                     top,
                 )
-                self.y_pred_template[h][s] = TemplateSurfaces(
+                self.y_pred_template[h][s] = Surface(
                     torch.zeros(
                         (1, top.n_vertices, 3), device=self.device
                     ),

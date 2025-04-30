@@ -342,4 +342,6 @@ def argparser_topofit(argv):
         "--no-wandb",
         action="store_true",
         default=False,
-        help="Disable logging wi
+        help="Disable logging with wandb.",
+    )
+    return parser.parse_args(argv[1:])

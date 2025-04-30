@@ -299,6 +299,14 @@ def write_surface(
                     volume_info=vol_info,
                 )
 
+            if "sigma" in ss.vertex_data:
+                for i, v in enumerate(ss.vertex_data["sigma"]):
+                    name = ".".join([prefix, "sigma", hemi, surf, label, f"{i:02d}"])
+                    nib.freesurfer.write_morph_data(
+                        out_dir / name,
+                        v.exp().norm(dim=-1).detach().to(torch.float).cpu().numpy(),
+                    )
+
 
 def write_volume(
     vol: torch.Tensor, affine, out_dir: Path, prefix: str, tag: str, label: None | str

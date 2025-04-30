@@ -29,7 +29,7 @@ class GraphConvolution(torch.nn.Module):
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
         bias=True,
-        init_zeros: bool = False,
+        init_values: float | list[float] | None | tuple = None,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -44,12 +44,21 @@ class GraphConvolution(torch.nn.Module):
         # Compute features when a vertex is part of the neighborhood
         self.conv_other = torch.nn.Conv1d(in_channels, out_channels, **kwargs)
 
-        if init_zeros:
-            torch.nn.init.zeros_(self.conv_self.weight)
-            torch.nn.init.zeros_(self.conv_other.weight)
+        if init_values is not None:
+            self.init_with_values(self.conv_self.weight, init_values)
+            self.init_with_values(self.conv_other.weight, init_values)
             if bias:
-                torch.nn.init.zeros_(self.conv_self.bias)
-                torch.nn.init.zeros_(self.conv_other.bias)
+                self.init_with_values(self.conv_self.bias, init_values)
+                self.init_with_values(self.conv_other.bias, init_values)
+
+    def init_with_values(self, weights, values):
+        if isinstance(values, float):
+            torch.nn.init.constant_(weights, values)
+            torch.nn.init.constant_(weights, values)
+        else:
+            assert len(values) == self.out_channels
+            for w, value in zip(weights, values):
+                torch.nn.init.constant_(w, value)
 
     def forward(self, features):
         features_self = self.conv_self(features)  # W0
@@ -94,7 +103,7 @@ def convolution_block(Convolution):
             reduce_index: torch.Tensor,
             gather_index: torch.Tensor,
             bias: bool = True,
-            init_zeros: bool = False,
+            init_values: float | list[float] | None | tuple = None,
             norm: None | type[torch.nn.Module] = torch.nn.InstanceNorm1d,
             activation: None | type[torch.nn.Module] = torch.nn.PReLU,
             norm_kwargs: dict | None = None,
@@ -107,7 +116,7 @@ def convolution_block(Convolution):
                 reduce_index,
                 gather_index,
                 bias,
-                init_zeros,
+                init_values,
             )
             # norm -> activation -> drop out
             self.NAD = torch.nn.Sequential()
@@ -173,6 +182,7 @@ class GraphConvolutionDeformationBlock(torch.nn.Sequential):
         out_channels: int,
         reduce_index,
         gather_index,
+        out_init_values: float | list[float] | None | tuple = 0.0,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -188,7 +198,9 @@ class GraphConvolutionDeformationBlock(torch.nn.Sequential):
         # features -> deformation field
         self.add_module(
             f"GraphConvolution_{i+1}",
-            GraphConvolution(graph_channels[-1], out_channels, **kw, init_zeros=True),
+            GraphConvolution(
+                graph_channels[-1], out_channels, init_values=out_init_values, **kw
+            ),
         )
 
 
@@ -200,6 +212,7 @@ class EdgeConvolutionDeformationBlock(torch.nn.Sequential):
         out_channels: int,
         reduce_index,
         gather_index,
+        out_init_values: float | list[float] | None | tuple = 0.0,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -215,7 +228,9 @@ class EdgeConvolutionDeformationBlock(torch.nn.Sequential):
         # features -> deformation field
         self.add_module(
             f"GraphConvolution_{i+1}",
-            EdgeConvolution(graph_channels[-1], out_channels, **kw, init_zeros=True),
+            EdgeConvolution(
+                graph_channels[-1], out_channels, init_values=out_init_values, **kw
+            ),
         )
 
 
@@ -228,6 +243,7 @@ class ResidualGraphConvolutionDeformationBlock(torch.nn.Sequential):
         reduce_index,
         gather_index,
         n_residual_blocks: int = 3,
+        out_init_values: float | list[float] | None | tuple = 0.0,
     ) -> None:
         super().__init__()
         kw = dict(reduce_index=reduce_index, gather_index=gather_index)
@@ -244,7 +260,9 @@ class ResidualGraphConvolutionDeformationBlock(torch.nn.Sequential):
         # features -> deformation field
         self.add_module(
             "GraphConvolution_1",
-            GraphConvolution(graph_channels[-1], out_channels, **kw, init_zeros=True),
+            GraphConvolution(
+                graph_channels[-1], out_channels, init_values=out_init_values, **kw
+            ),
         )
 
 
@@ -275,7 +293,7 @@ class LinearDeformationBlock(torch.nn.Sequential):
         linear_channels: list[int],
         out_channels: int,
         batch_norm: bool = False,
-        # add_normal_features=False,
+        out_init_values: float | list[float] | None | tuple = None,
     ) -> None:
         super().__init__()
         """Quadrature deformation block.
@@ -292,33 +310,10 @@ class LinearDeformationBlock(torch.nn.Sequential):
 
 
         """
-        # self.add_normal_features = add_normal_features
-        # self.n_steps = n_steps
-        # self.step_size = 1.0 / self.n_steps
+        # we might as well use a linear layer but use 1D conv instead as that
+        # expects tensors of the format (N, C)
+        self.out_channels = out_channels
 
-        # if self.add_normal_features:
-        #     assert topology is not None
-        #     # initialize with batch size = 1
-        #     self._surface = TemplateSurfaces(
-        #         torch.empty((1, topology.n_vertices, 3), device=topology.faces.device),
-        #         topology.faces,
-        #     )
-        #     in_channels += 3
-
-        # we might as well use linear layers but use 1D convolutions instead as
-        # that expects tensors of the format (N, C)
-
-        # for out_ch in linear_channels:
-        #     self.add_module("Convolution", torch.nn.Conv1d(in_channels, out_ch, 1))
-        #     if batch_norm:
-        #         self.add_module.append("BatchNorm", torch.nn.BatchNorm1d(out_ch))
-        #     self.add_module("Activation", torch.nn.PReLU())
-        #     in_channels = out_ch
-
-        # # Final convolution to predict deformation vector
-        # self.add_module(
-        #     "Convolution[out]", torch.nn.Conv1d(in_channels, out_channels, 1)
-        # )
         for i, out_ch in enumerate(linear_channels):
             self.add_module(f"Convolution_{i}", torch.nn.Conv1d(in_channels, out_ch, 1))
             if batch_norm:
@@ -330,6 +325,19 @@ class LinearDeformationBlock(torch.nn.Sequential):
         self.add_module(
             f"Convolution_{i+1}", torch.nn.Conv1d(in_channels, out_channels, 1)
         )
+
+        if out_init_values is not None:
+            self.init_with_values(self[-1].weight, out_init_values)
+            self.init_with_values(self[-1].bias, out_init_values)
+
+    def init_with_values(self, weights, values):
+        if isinstance(values, float):
+            torch.nn.init.constant_(weights, values)
+            torch.nn.init.constant_(weights, values)
+        else:
+            assert len(values) == self.out_channels
+            for w, value in zip(weights, values):
+                torch.nn.init.constant_(w, value)
 
 
 class ConvolutionRepeater(torch.nn.Sequential):
