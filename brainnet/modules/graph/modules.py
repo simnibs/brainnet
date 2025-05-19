@@ -2,7 +2,7 @@ import copy
 import torch
 
 import brainnet.mesh.topology
-from brainnet.mesh.surface import Surface
+from brainnet.mesh.surface import load_deepsurfer_template, Surface
 from brainnet.modules.graph import layers
 
 
@@ -247,8 +247,7 @@ class SurfaceModule(GenericSurfaceModule):
         self.white_deform = torch.nn.ModuleDict()
         self.pial_deform = torch.nn.Module()
 
-        # self.white_uncertainty = None
-        # self.pial_uncertainty = None
+        self.sphere_reg = load_deepsurfer_template(self.in_order, self.device)
 
     def forward(
         self,
@@ -292,9 +291,9 @@ class SurfaceModule(GenericSurfaceModule):
             h: self._forward_hemi(h, features, v) for h, v in template_vertices.items()
         }
 
-    def make_surface(self, hemi, vertices, sigma):
+    def make_surface(self, hemi, vertices, vertex_data):
         s = Surface(vertices, self.out_topology[hemi])
-        s.vertex_data["sigma"] = sigma
+        s.vertex_data |= vertex_data
         return s
 
     def _forward_hemi(
@@ -302,9 +301,9 @@ class SurfaceModule(GenericSurfaceModule):
     ):
         """Predict placement of white matter surface and pial surface.."""
         white_v, white_u = self._estimate_white(features, vertices)
-        white = self.make_surface(hemi, white_v, white_u)
+        white = self.make_surface(hemi, white_v, dict(sigma=white_u))
         pial_v, pial_u = self._esimate_pial(features, white.vertices)
-        pial = self.make_surface(hemi, pial_v, pial_u)
+        pial = self.make_surface(hemi, pial_v, dict(sigma=pial_u))
         return dict(white=white, pial=pial)
 
     def _estimate_white(self, features: dict[str, torch.Tensor], v: torch.Tensor):
@@ -321,19 +320,20 @@ class SurfaceModule(GenericSurfaceModule):
                 v_features = self.grid_sample_features(fmaps, v)
 
                 dv, du = deform(v_features).split([3, 3], dim=1)
-                # du = du.abs()
-                # dv = deform(v_features)
+                # dv, du, dr = deform(v_features).split([3, 3, 3], dim=1)
+
                 v = self.solve_ode_euler(step_size, v, dv)
                 u = self.solve_ode_euler(step_size, u, du)
             if order < self.out_order:
                 v = self.topologies[order].subdivide_vertices(v)
                 u = self.topologies[order].subdivide_vertices(u)
-        # print(v)
-        # print(u)
-        # print()
+
+        # print("white")
+        # print(v.mT)
+        # print(u.mT)
 
         # Transpose back to (N, M, 3)
-        return v.mT, u.mT
+        return v.mT, u.mT.exp()
 
     def _esimate_pial(self, features: dict[str, torch.Tensor], v: torch.Tensor):
         # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
@@ -350,12 +350,13 @@ class SurfaceModule(GenericSurfaceModule):
 
             v = self.solve_ode_euler(self.pial_step_size, v, dv)
             u = self.solve_ode_euler(self.pial_step_size, u, du)
-        # print(v)
-        # print(u)
-        # print()
+
+        # print("pial")
+        # print(v.mT)
+        # print(u.mT)
 
         # Transpose back to (N, M, 3)
-        return v.mT, u.mT
+        return v.mT, u.mT.exp()
 
 
 def make_unet_channels(in_channels: int, depth: int, multiplier: int = 2) -> dict:

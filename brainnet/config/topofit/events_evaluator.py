@@ -21,6 +21,8 @@ loss_events = [
             weights={
                 ("white", "sif"): 1.0,
                 ("pial", "sif"): 1.0,
+                ("white", "chamfer"): 1.0,
+                ("pial", "chamfer"): 1.0,
             }
         ),
     ),

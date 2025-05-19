@@ -950,15 +950,15 @@ def load_deepsurfer_template(subdivision: int, device: str | torch.device = "cpu
 
     return dict(
         lh=Surface(
-            brainsynth.load_cortical_template("lh", device)["vertices"][
-                : topo_lh.n_vertices
-            ],
+            brainsynth.resources.load_cortical_template("lh", device=device)[
+                "vertices"
+            ][: topo_lh.n_vertices],
             topo_lh,
         ),
         rh=Surface(
-            brainsynth.load_cortical_template("rh", device)["vertices"][
-                : topo_rh.n_vertices
-            ],
+            brainsynth.resources.load_cortical_template("rh", device=device)[
+                "vertices"
+            ][: topo_rh.n_vertices],
             topo_rh,
         ),
     )

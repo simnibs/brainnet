@@ -75,24 +75,24 @@ class SquaredCosineSimilarityError(torch.nn.CosineSimilarity):
         return (1.0 - super().forward(a, b)) ** 2
 
 
-class NegLogProbDiagonalMultivariateNormal(torch.nn.Module):
+class NegLogLikDiagonalMultivariateNormal(torch.nn.Module):
     def __init__(self):
         """Simplified version of torch.distributions.MultivariateNormal that
         assumes a diagonal covariance matrix.
         """
         super().__init__()
 
-    def log_prob(self, loc, log_scale, value):
+    def log_prob(self, loc, scale, value):
         # compute the Mahalanobis distance (x-mu).T @ SIGMA**-1 @ (x-mu) when
         # SIGMA is diagonal
         diff = value - loc
-        # M = diff.pow(2).div(scale.pow(2)).sum(-1)
-        M = diff.pow(2).div(log_scale.exp().pow(2)).sum(-1)
+        M = diff.pow(2).div(scale.pow(2)).sum(-1)
 
-        # half_log_det = scale.log().sum(-1)
-        half_log_det = log_scale.sum(-1)
+        half_log_det = scale.log().sum(-1)
         d = loc.shape[-1]
         return -0.5 * (d * math.log(2 * math.pi) + M) - half_log_det
+        # return -0.5 * M - half_log_det
+        # return -M - 2.0 * half_log_det
 
     def forward(
         self,
@@ -121,6 +121,23 @@ class NegLogProbDiagonalMultivariateNormal(torch.nn.Module):
             (n_batch, n_vertices)
         """
         return self.log_prob(loc, scale, query_points).neg()
+
+
+class NegLogLikStandardMultivariateNormal(NegLogLikDiagonalMultivariateNormal):
+    def log_prob(self, loc, scale, value):
+        # force scale = 1.0
+
+        # compute the Mahalanobis distance (x-mu).T @ SIGMA**-1 @ (x-mu) when
+        # SIGMA is diagonal
+        diff = value - loc
+        M = diff.pow(2).div(1.0).sum(-1)
+
+        # half_log_det = 0.0
+        # d = loc.shape[-1]
+
+        # return -0.5 * (d * math.log(2 * math.pi) + M)
+        # return -0.5 * M
+        return -M
 
 
 # DECORATORS
@@ -192,7 +209,16 @@ SemiHardSNELoss = wrap_semi_hard_reduction(SquaredNormError)
 # Make a mean reduction of the negative log probability loss mimicking the
 # input pattern of `wrap_mean_reduction` but where the third arg is passed to
 # the super method rather than being used to weigh the error post hoc!
-class NegLogProbLoss(NegLogProbDiagonalMultivariateNormal):
+class NegLogLikLoss(NegLogLikDiagonalMultivariateNormal):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, y_pred, y_true, y_pred_scale):
+        error = super().forward(y_pred, y_pred_scale, y_true)
+        return error.mean()
+
+
+class NegLogLikStandardLoss(NegLogLikStandardMultivariateNormal):
     def __init__(self):
         super().__init__()
 

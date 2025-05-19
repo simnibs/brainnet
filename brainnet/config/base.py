@@ -75,9 +75,6 @@ class ResultsParameters:
     save_example_on: CallableEventWithFilter = Events.EPOCH_COMPLETED(every=20)
     checkpoint_filename_pattern: str = "{filename_prefix}_{name}_{global_step:05d}.pt"
     require_empty: bool = False  # require that checkpoints do not already exist
-    # transfer learning
-    load_body_from_checkpoint: None | Path | str = None
-    load_head_from_checkpoint: None | Path | str = None
 
     def __post_init__(self):
         self.out_dir = Path(self.out_dir)

@@ -4,6 +4,7 @@ import brainsynth
 import brainnet.config
 import brainnet.modules
 
+
 def init_model(config: brainnet.config.BrainNetParameters):
     device = torch.device(config.device)
     model_cls = getattr(brainnet.modules, config.model)
@@ -13,7 +14,6 @@ def init_model(config: brainnet.config.BrainNetParameters):
 
 
 def init_optimizer(config, model):
-
     print("Number of trainable parameters")
     if hasattr(model, "body"):
         np_body = sum(p.numel() for p in model.body.parameters() if p.requires_grad)
@@ -23,9 +23,7 @@ def init_optimizer(config, model):
     #     for h,v in model.heads.items():
     #         np_h = sum(p.numel() for p in v.parameters() if p.requires_grad)
     #         print(f"    {h:10s}   {np_h:10d}")
-    n_parameters = sum(
-        p.numel() for p in model.parameters() if p.requires_grad
-    )
+    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total            {n_parameters:10d}")
 
     if config.lr_parameter_groups is not None:
@@ -54,20 +52,22 @@ def init_optimizer(config, model):
 
 
 def init_dataloader(
-        ds_config: dict[str, brainsynth.config.DatasetConfig],
-        dl_config: dict,
-    ):
+    dataset_config: dict[str, brainsynth.config.DatasetConfig],
+    dataloader_config: dict,
+):
     dataloader = {
-        subset: brainsynth.dataset.setup_dataloader(config, **dl_config)
-        for subset,config in ds_config.items()
+        subset: brainsynth.dataset.setup_dataloader(config, **dataloader_config)
+        for subset, config in dataset_config.items()
     }
     print("Dataloaders")
-    for k,v in dataloader.items():
+    for k, v in dataloader.items():
         print(f"  {k:10s} : {len(v):6d}")
     return dataloader
 
-def init_criterion(config: brainnet.config.CriterionParameters):
-    return {subset: brainnet.Criterion(v) for subset,v in vars(config).items()}
 
-def init_synthesizer(config: brainnet.config.SynthesizerParameters):
-    return {subset: None if v is None else brainsynth.Synthesizer(v) for subset,v in vars(config).items()}
+def init_criterion(config: dict):
+    return {subset: brainnet.Criterion(v) for subset, v in config.items()}
+
+
+def init_synthesizer(config: dict):
+    return {subset: brainsynth.Synthesizer(v) for subset, v in config.items()}

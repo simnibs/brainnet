@@ -229,6 +229,11 @@ class Criterion(torch.nn.Module):
                     )
                     y_true[h][s].interpolated["data"]["chamfer_index"] = index
 
+                    # if "sigma" in y_pred[h][s].interpolated["data"]:
+                    #     y_true[h][s].interpolated["data"]["sigma"] = torch.ones_like(
+                    #         y_pred[h][s].interpolated["data"]["sigma"]
+                    #     )
+
                     # =========================================================
                     # NOTE
                     # For data that is only present in *y_true*, set the

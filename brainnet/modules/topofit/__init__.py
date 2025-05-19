@@ -45,7 +45,8 @@ class TopoFit(SurfaceModule):
         UNetTransform_kwargs = dict(channels=white_channels)
         UNetTransform_kwargs = dict(
             channels=white_channels,
-            deform_init_values=3 * [0.0] + 3 * [0.01],
+            # deform_init_values=3 * [0.0] + 3 * [0.001],
+            deform_init_values=3 * [0.0] + 3 * [0.0],
         )
 
         for topo in self.all_topologies:  # e.g., 1, 2, ..., 7
@@ -56,7 +57,8 @@ class TopoFit(SurfaceModule):
                 **UNetTransform_kwargs,
             )
 
-        pial_init_values = 3 * [0.01] + 3 * [0.01]
+        pial_init_values = 3 * [0.01] + 3 * [0.0]
+        # pial_init_values = 3 * [0.01] + 3 * [0.1]
         m = getattr(brainnet.modules.graph.layers, pial_deform_module)
         match pial_deform_module:
             case "LinearDeformationBlock":

@@ -32,7 +32,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     }
     UNET_DECODER_CHANNELS   : InitVar[dict]         = {
         ("t1w", "1mm"):         [[128], [64], [32], [16]],
-        ("synth", "1mm"):       [[128], [96], [64], [64]],
+        ("synth", "1mm"):       [[128], [96], [64], [32]],
         ("synth", "random"):    [[128], [96], [64], [64]],
     }
     UNET_RETURN_ENCODER_FEATURES: InitVar[list | None] = None
@@ -55,12 +55,10 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     #   PRETRAINED
     # =========================================================================
 
-    load_body_from_checkpoint: str | None = (
-        "/mnt/scratch/personal/jesperdn/results/TopoFit-UNet/synth_1mm/checkpoint/state_checkpoint_00400.pt"
-    )
-    load_head_from_checkpoint: str | None = (
-        None  # "/mnt/scratch/personal/jesperdn/results/TopoFit/t1w_1mm-taubin_16/checkpoint/state_checkpoint_00600.pt"
-    )
+    # "/mnt/scratch/personal/jesperdn/results/TopoFit-UNet/synth-1mm/checkpoint/state_checkpoint_00400.pt"
+    load_body_from_checkpoint: str | None = None
+    # "/mnt/scratch/personal/jesperdn/results/TopoFit/t1w_1mm-taubin_16/checkpoint/state_checkpoint_00600.pt"
+    load_head_from_checkpoint: str | None = None
 
     def __post_init__(self, *args):
         # split post init args for parent class and child class
@@ -85,21 +83,15 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         # DATASET
         # =====================================================================
 
-        template_surface = dict(resolution=TOPOFIT_ORDER_IN, name="template")
-        target_vertices = dict(resolution=TOPOFIT_ORDER_OUT, name="target")
+        template_surface = dict(resolution=TOPOFIT_ORDER_IN, types="template")
+        target_vertices = dict(resolution=TOPOFIT_ORDER_OUT, name="resample")
 
-        self.dataset = dict(
-            train=DatasetConfig(
-                **self.dataset_kwargs["train"],
-                target_vertices=target_vertices,
-                template_surface=template_surface,
-            ),
-            validation=DatasetConfig(
-                **self.dataset_kwargs["validation"],
-                target_vertices=target_vertices,
-                template_surface=template_surface,
-            ),
-        )
+        self.dataset = {
+            k: DatasetConfig(
+                **v, target_vertices=target_vertices, template_surface=template_surface
+            )
+            for k, v in self.dataset_kwargs.items()
+        }
 
         # =====================================================================
         # MODEL

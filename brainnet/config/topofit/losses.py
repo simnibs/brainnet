@@ -8,7 +8,7 @@ from brainnet.modules.losses_surface import (
     TaubinLoss,
     FaceNormalConsistencyLoss,
     SampledSemiSymmetricMSNormLoss,
-    SampledSemiSymmetricNegLogProbLoss,
+    SampledSemiSymmetricNegLogLikLoss,
     SelfIntersectionCount,
     TriangleQualityLoss,
     VertexToVertexAngleLoss,
@@ -32,24 +32,16 @@ functions = dict(
         chamfer=SurfaceSupervisedLoss(
             SampledSemiSymmetricMSNormLoss(
                 value_key=("interpolated", "points"),
-                sym_weights=(0.5, 0.5),
             ),
             **kw_white,
         ),
-        neglogprob=SurfaceSupervisedLoss(
-            SampledSemiSymmetricNegLogProbLoss(
+        negloglik=SurfaceSupervisedLoss(
+            SampledSemiSymmetricNegLogLikLoss(
                 value_key=("interpolated", "points"),
                 weight_key="sigma",
-                sym_weights=(0.5, 0.5),
             ),
             **kw_white,
         ),
-        # normal=SurfaceSupervisedLoss(
-        #     SampledSemiSymmetricCosSimLoss(
-        #         value_key=("interpolated", "normal"),
-        #     ),
-        #     **kw_white,
-        # ),
         # curv=SurfaceSupervisedLoss(
         #     SampledSemiSymmetricNL1Loss(value_key=("interpolated", "H")),
         #     # SampledSemiSymmetricNSELoss("H", **kw_semisym),
@@ -65,24 +57,16 @@ functions = dict(
         chamfer=SurfaceSupervisedLoss(
             SampledSemiSymmetricMSNormLoss(
                 value_key=("interpolated", "points"),
-                sym_weights=(0.5, 0.5),
             ),
             **kw_pial,
         ),
-        neglogprob=SurfaceSupervisedLoss(
-            SampledSemiSymmetricNegLogProbLoss(
+        negloglik=SurfaceSupervisedLoss(
+            SampledSemiSymmetricNegLogLikLoss(
                 value_key=("interpolated", "points"),
                 weight_key="sigma",
-                sym_weights=(0.5, 0.5),
             ),
             **kw_pial,
         ),
-        # normal=SurfaceSupervisedLoss(
-        #     SampledSemiSymmetricCosSimLoss(
-        #         value_key=("interpolated", "normal"),
-        #     ),
-        #     **kw_pial,
-        # ),
         # smoothness_vertex_chamfer = SurfaceSupervisedLoss(IndexedSmoothnessLoss(),**kw_pial),
         # curv=SurfaceSupervisedLoss(
         #     SampledSemiSymmetricNL1Loss(value_key=("interpolated", "H")),
@@ -97,6 +81,14 @@ functions = dict(
             y_pred=None,  # pass everything through, i.e., both white and pial
         ),
     ),
+    # The spherical coordinates are stored as vertex data on the white surface
+    sphere=dict(
+        arc=SurfaceSupervisedLoss(
+            SampledSemiSymmetricMSNormLoss(value_key=("interpolated", "sphere")),
+            **kw_white,
+        ),
+        # tri_Q=
+    ),
 )
 
 head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
@@ -104,28 +96,30 @@ head_weights = dict(white=1.0, pial=1.0, thickness=1.0)
 # fmt: off
 loss_weights = dict(
     white = dict(
-        chamfer  =    0.0,
-        neglogprob  =    1.0,
-        sif      =    0.0,
-        spring   =   10.0,
-        # taubin   =  100.0,
-        edge_var =    5.0,
-        tri_Q  =      2.5,
+        chamfer     =    1.0,
+        negloglik   =    0.0,
+        sif         =    0.0,
+        # spring      =   40.0,
+        taubin      =   40.0,
+        edge_var    =    5.0,
+        tri_Q       =    2.5,
     ),
     pial = dict(
-        chamfer  =    0.0,
-        neglogprob  =    1.0,
-        sif      =    0.0,
-        spring   =   10.0,
-        # taubin   =  100.0,
-        edge_var =    2.5,
-        tri_Q  =      2.5,
+        chamfer     =    1.0,
+        negloglik   =    0.0,
+        sif         =    0.0,
+        # spring      =   40.0,
+        taubin      =   20.0,
+        edge_var    =    2.5,
+        tri_Q       =    2.5,
     ),
     thickness = dict(
-        angle    =    1.0,
+        angle       =    1.0,
     ),
 )
 # fmt: on
 
 train = LossParameters(functions, head_weights, loss_weights)
-validation = train
+
+# loss_weights | dict(white=dict(sif=1.0), pial=dict(sif=1.0)
+validation = LossParameters(functions, head_weights, loss_weights)

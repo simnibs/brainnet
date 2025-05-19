@@ -6,7 +6,7 @@ from brainnet import sphere_utils
 from brainnet.modules.losses import (
     L1Loss,
     NL1Loss,
-    NegLogProbLoss,
+    NegLogLikLoss,
     NSELoss,
     MSELoss,
     MSNELoss,
@@ -334,10 +334,8 @@ SampledSemiSymmetricNSELoss = wrap_index_matched_data(SemiSymmetricNSELoss)
 SemiSymmetricCosSimLoss = wrap_semi_symmetric(MSCosSimLoss)
 SampledSemiSymmetricCosSimLoss = wrap_index_matched_data(SemiSymmetricCosSimLoss)
 
-SemiSymmetricNegLogProbLoss = wrap_semi_symmetric(NegLogProbLoss)
-SampledSemiSymmetricNegLogProbLoss = wrap_index_matched_data(
-    SemiSymmetricNegLogProbLoss
-)
+SemiSymmetricNegLogLikLoss = wrap_semi_symmetric(NegLogLikLoss)
+SampledSemiSymmetricNegLogLikLoss = wrap_index_matched_data(SemiSymmetricNegLogLikLoss)
 
 
 # SemiHard
@@ -411,7 +409,7 @@ class LaplacianLoss(MSNELoss):
 
 
 class TaubinLoss(MSNELoss):
-    def __init__(self, a=0.33, b=-0.34, n_iter: int = 5):
+    def __init__(self, a=0.33, b=-0.34, n_iter: int = 10):
         super().__init__()
         self.taubin_kw = dict(a=a, b=b, n_iter=n_iter)
         self.loss_fn = MSNELoss()
@@ -654,9 +652,9 @@ class TriangleQualityLoss(torch.nn.Module):
 
         in table 6, row 4 of Shewchuk (2002).
 
-        The loss is the negative of Q
+        The loss is
 
-            -mean(Q)
+            1.0 - mean(Q)
 
         References
         ----------

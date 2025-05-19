@@ -304,7 +304,7 @@ def write_surface(
                     name = ".".join([prefix, "sigma", hemi, surf, label, f"{i:02d}"])
                     nib.freesurfer.write_morph_data(
                         out_dir / name,
-                        v.exp().norm(dim=-1).detach().to(torch.float).cpu().numpy(),
+                        v.norm(dim=-1).detach().to(torch.float).cpu().numpy(),
                     )
 
 

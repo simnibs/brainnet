@@ -218,6 +218,13 @@ class TrainParameters(BaseObject):
                         datasets=datasets,
                         images=["generation_labels_dist", "t1w"],
                     ),
+                    exclude=kwargs_default
+                    | dict(
+                        subject_subset="exclude",
+                        exclude_subjects=None,
+                        datasets=datasets,
+                        images=["generation_labels_dist", "t1w"],
+                    ),
                 )
             case "t2w":
                 # HCP sub-059 excluded: T2w is just zeros!
