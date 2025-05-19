@@ -102,13 +102,13 @@ def load_checkpoint_from_setup(to_load, setup):
         load_checkpoint(to_load, ckpt, setup.device)
     else:
         state_dict = {}
-        if (ckpt := setup.results.load_body_from_checkpoint) is not None:
+        if (ckpt := setup.load_body_from_checkpoint) is not None:
             print(f"Loading parameters for body from {ckpt}")
             checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
             state_dict.update(
                 {k: v for k, v in checkpoint_obj.items() if k.startswith("body")}
             )
-        if (ckpt := setup.results.load_head_from_checkpoint) is not None:
+        if (ckpt := setup.load_head_from_checkpoint) is not None:
             print(f"Loading parameters for heads from {ckpt}")
             checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
             state_dict.update(
