@@ -1,4 +1,3 @@
-import copy
 import functools
 import importlib
 import sys
@@ -18,8 +17,7 @@ import brainnet.train.utilities
 from brainnet import event_handlers
 import brainnet.initializers
 from brainnet.config.alignment import train_parameters
-from brainnet.mesh.surface import Surface
-from brainnet.mesh.topology import DeepSurferTopology
+from brainnet.mesh.surface import load_deepsurfer_template, Surface
 
 
 class SupervisedStep:
@@ -35,26 +33,8 @@ class SupervisedStep:
         self.device = self.model.device
         self.ensure_device = EnsureDevice(self.device)
 
-        t_lh = DeepSurferTopology.recursive_subdivision(5, device=self.device)[-1]
-        t_rh = copy.deepcopy(t_lh)
-        t_rh.reverse_face_orientation()
-
-        self.topologies = dict(lh=t_lh, rh=t_rh)
-
-        self.template = dict(
-            lh=Surface(
-                brainsynth.load_cortical_template("lh", self.device)["vertices"][
-                    : t_lh.n_vertices
-                ],
-                t_lh,
-            ),
-            rh=Surface(
-                brainsynth.load_cortical_template("rh", self.device)["vertices"][
-                    : t_rh.n_vertices
-                ],
-                t_rh,
-            ),
-        )
+        self.template = load_deepsurfer_template(5, self.device)
+        self.topologies = {h: s.topology for h, s in self.template.items()}
 
     def apply_affines_to_template(self, affines):
         return dict(
