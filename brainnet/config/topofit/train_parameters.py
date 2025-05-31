@@ -55,7 +55,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     #   PRETRAINED
     # =========================================================================
 
-    # "/mnt/scratch/personal/jesperdn/results/TopoFit-UNet/synth-1mm/checkpoint/state_checkpoint_00400.pt"
+    # "/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-1mm/checkpoint/state_checkpoint_00400.pt"
     load_body_from_checkpoint: str | None = None
     # "/mnt/scratch/personal/jesperdn/results/TopoFit/t1w_1mm-taubin_16/checkpoint/state_checkpoint_00600.pt"
     load_head_from_checkpoint: str | None = None
@@ -103,7 +103,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             ("synth", "random"): UNET_DECODER_CHANNELS["t1w", "1mm"],
         }
 
-        unet = body.UNet(
+        unet_kwargs = dict(
             spatial_dims=3,
             in_channels=1,
             encoder_channels=UNET_ENCODER_CHANNELS[self.contrast, self.resolution],
@@ -114,8 +114,9 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             encoder_post=None,
             decoder_post=UNET_DECODER_CHANNELS_POST[self.contrast, self.resolution],
         )
+        unet = body.UNet(**unet_kwargs)
 
-        topofit = head.TopoFit(
+        topofit_kwargs = dict(
             in_channels=unet.num_features,
             in_order=TOPOFIT_ORDER_IN,
             out_order=TOPOFIT_ORDER_OUT,
@@ -126,8 +127,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             pial_feature_maps=unet.decoder_features,
             pial_channels=TOPOFIT_GRAY_MATTER_CHANNELS,
             pial_deform_module=TOPOFIT_GRAY_MATTER_MODULE,
-            device=self.device,
         )
+        topofit = head.TopoFit(**topofit_kwargs, device=self.device)
 
         self.model = config.BrainNetParameters(
             device=self.device,
@@ -147,34 +148,42 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             case _:
                 raise ValueError
 
-        random_skullstrip: bool = True
-
         builder_contrast = "Synth" if self.contrast == "synth" else "Select"
-        if builder_contrast == "Synth" or random_skullstrip:
-            # synth has skullstrip anyway
-            builder_train = f"Only{builder_contrast}{builder_res}"
-        else:
-            builder_train = f"Only{builder_contrast}NoSkullStrip{builder_res}"
-        builder_validation = f"OnlySelectNoSkullStrip{builder_res}"
+
+        if self.builder_train is None:
+            self.builder_train = f"Only{builder_contrast}{builder_res}"
+        if self.builder_validation is None:
+            self.builder_validation = f"OnlySelect{builder_res}"
 
         img_sel_train = None if self.contrast == "synth" else [self.contrast]
         img_sel_val = ["t1w"] if self.contrast == "synth" else [self.contrast]
 
         self.synthesizer = dict(
             train=SynthesizerConfig(
-                builder=builder_train,
+                builder=self.builder_train,
                 out_size=self.fov_out_size,
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
                 selectable_images=img_sel_train,
                 device=self.device,
+                **self.builder_train_kw,
             ),
             validation=SynthesizerConfig(
-                builder=builder_validation,
+                builder=self.builder_validation,
                 out_size=self.fov_out_size,
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
                 selectable_images=img_sel_val,
                 device=self.device,
+                **self.builder_validation_kw,
             ),
+        )
+
+        # Store information needed for setting up the prediction
+        self.prediction_config = dict(
+            preprocessor=dict(
+                out_size=self.fov_out_size, out_center_str=self.fov_out_center_str
+            ),
+            unet=unet_kwargs,
+            topofit=topofit_kwargs,
         )

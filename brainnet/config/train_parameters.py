@@ -1,6 +1,8 @@
 from dataclasses import dataclass, InitVar
 import importlib
+import json
 from pathlib import Path
+from typing import Any
 
 import torch
 from ignite.engine import Events
@@ -33,7 +35,7 @@ class TrainParameters(BaseObject):
     resume_from_run         : InitVar[str | None]   = None
     epoch_length_train      : InitVar[int]          = 100
     epoch_length_val        : InitVar[int]          = 50
-    out_dir                 : InitVar[Path | str]   = "/mnt/scratch/personal/jesperdn/results"
+    results_dir             : Path | str            = "/mnt/scratch/personal/jesperdn/results"
     model_dir               : InitVar[Path | str | None]   = None
     # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
     evaluate_on_every       : InitVar[int]          = 10
@@ -79,6 +81,9 @@ class TrainParameters(BaseObject):
         # "MCIC",
         "OASIS3",
     )
+    images_train            : InitVar[list | tuple | None] = None
+    images_validation       : InitVar[list | tuple | None] = None
+    images_exclude          : InitVar[list | tuple | None] = None
 
     # {ds}.exclude.txt
     subject_subset_exclude: InitVar[str] = "exclude"
@@ -94,6 +99,14 @@ class TrainParameters(BaseObject):
     # Full brain
     fov_out_size            : list | tuple          = (192, 224, 192)
     fov_out_center_str      : str                   = "image"
+
+    builder_train: str | None = None
+    builder_validation: str | None = None
+
+    builder_train_kw: dict[str, Any] | None = None
+    # do not use extracerebral augmentation (e.g., skullstripping) during
+    # validation
+    builder_validation_kw: dict[str, Any] | None = None
 
     # =========================================================================
     #   WANDB
@@ -112,7 +125,6 @@ class TrainParameters(BaseObject):
         resume_from_run,
         epoch_length_train,
         epoch_length_val,
-        out_dir,
         model_dir,
         evaluate_on_every,
         save_example_on_every,
@@ -125,19 +137,22 @@ class TrainParameters(BaseObject):
         data_dir,
         subjects_dir,
         datasets,
+        images_train,
+        images_validation,
+        images_exclude,
         subject_subset_exclude,
         wandb_enable,
         wandb_run_id,
         wandb_run_tags,
         package,
     ):
-        assert self.contrast in ("t1w", "synth")
-        assert self.resolution in ("1mm", "random")
+        # assert self.contrast in ("t1w", "synth")
+        # assert self.resolution in ("1mm", "random")
 
         data_dir = Path(data_dir)
         subjects_dir = Path(subjects_dir)
-        out_dir = Path(out_dir)
-        model_dir = model_dir or out_dir
+        self.results_dir = Path(self.results_dir)
+        model_dir = model_dir or self.results_dir
 
         # Run name
         self.run: str = "-".join(
@@ -185,23 +200,23 @@ class TrainParameters(BaseObject):
 
         kwargs_default = dict(
             root_dir=data_dir,
+            datasets=datasets,
             subject_dir=subjects_dir,
             exclude_subjects=subject_subset_exclude,
         )
+        images_exclude = images_exclude or images_validation
         match self.contrast:
             case "synth":
                 self.dataset_kwargs = dict(
                     train=kwargs_default
                     | dict(
                         subject_subset="train",
-                        datasets=datasets,
-                        images=["generation_labels_dist"],
+                        images=images_train or ["generation_labels_dist"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation",
-                        datasets=datasets,
-                        images=["generation_labels_dist", "t1w"],
+                        images=images_validation or ["generation_labels_dist", "t1w"],
                     ),
                 )
             case "t1w":
@@ -209,21 +224,18 @@ class TrainParameters(BaseObject):
                     train=kwargs_default
                     | dict(
                         subject_subset="train",
-                        datasets=datasets,
-                        images=["generation_labels_dist", "t1w"],
+                        images=images_train or ["generation_labels_dist", "t1w"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation",
-                        datasets=datasets,
-                        images=["generation_labels_dist", "t1w"],
+                        images=images_validation or ["generation_labels_dist", "t1w"],
                     ),
                     exclude=kwargs_default
                     | dict(
                         subject_subset="exclude",
                         exclude_subjects=None,
-                        datasets=datasets,
-                        images=["generation_labels_dist", "t1w"],
+                        images=images_exclude or ["generation_labels_dist", "t1w"],
                     ),
                 )
             case "t2w":
@@ -232,14 +244,12 @@ class TrainParameters(BaseObject):
                     train=kwargs_default
                     | dict(
                         subject_subset="train.t2",
-                        datasets=["HCP", "OASIS3"],
-                        images=["generation_labels_dist", "t2w"],
+                        images=images_train or ["generation_labels_dist", "t2w"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation.t2",
-                        datasets=["HCP", "OASIS3"],
-                        images=["generation_labels_dist", "t2w"],
+                        images=images_validation or ["generation_labels_dist", "t2w"],
                     ),
                 )
             case "flair":
@@ -247,14 +257,12 @@ class TrainParameters(BaseObject):
                     train=kwargs_default
                     | dict(
                         subject_subset="train.flair",
-                        datasets=["ADNI3", "AIBL"],
-                        images=["generation_labels_dist", "flair"],
+                        images=images_train or ["generation_labels_dist", "flair"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation.flair",
-                        datasets=["ADNI3", "AIBL"],
-                        images=["generation_labels_dist", "flair"],
+                        images=images_validation or ["generation_labels_dist", "flair"],
                     ),
                 )
             case _:
@@ -273,11 +281,15 @@ class TrainParameters(BaseObject):
         # =====================================================================
         # RESULTS
         # =====================================================================
-        save_example_on = Events.EPOCH_COMPLETED(every=save_example_on_every)
+        if save_example_on_every is None:
+            save_example_on = None
+        else:
+            save_example_on = Events.EPOCH_COMPLETED(every=save_example_on_every)
+
         save_checkpoint_on = Events.EPOCH_COMPLETED(every=save_checkpoint_on_every)
 
         self.results = config.ResultsParameters(
-            out_dir=out_dir / self.project / self.run,
+            out_dir=self.results_dir / self.project / self.run,
             load_from_dir=model_dir / self.project / resume_from_run
             if resume_from_run is not None
             else None,
@@ -289,6 +301,11 @@ class TrainParameters(BaseObject):
         # SYNTHESIZER
         # =====================================================================
 
+        self.builder_train_kw = self.builder_train_kw or {}
+        self.builder_validation_kw = self.builder_validation_kw or dict(
+            intensity_transforms_kw=dict(extracerebral_augmentation=False)
+        )
+
         # =====================================================================
         # WANDB
         # =====================================================================
@@ -297,7 +314,7 @@ class TrainParameters(BaseObject):
             enable=wandb_enable,
             project=self.project,
             name=self.run,
-            wandb_dir=out_dir / "wandb",
+            wandb_dir=self.results_dir / "wandb",
             log_on=self.evaluator_evaluate_on,
             run_id=wandb_run_id,
             tags=[self.contrast, self.resolution] + wandb_run_tags,
@@ -308,6 +325,16 @@ class TrainParameters(BaseObject):
         self.dataset = None
         self.model = None
         self.synthesizer = None
+
+        self.prediction_config = {}
+
+    def dump_prediction_config(self, out_dir: Path | str, name: str | None = None):
+        """Dump configuration information to a JSON file."""
+        if name is None:
+            name = f"{self.contrast}_{self.resolution}_config.json"
+        filename = Path(out_dir) / name
+        with open(filename, "w") as f:
+            json.dump(self.prediction_config, f)
 
     def __str__(self):
         return "\n".join(

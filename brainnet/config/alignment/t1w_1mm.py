@@ -1,13 +1,10 @@
 DEFAULTS = dict(
     contrast="t1w",
     resolution="1mm",
-    # run_suffix="TEST",
+    # run_suffix="16",
 )
 
-PHASES = {
-    "Phase 1": dict(max_epochs=(epochs := 1000)),
-    "Phase 2": dict(load_checkpoint=epochs, max_epochs=(epochs := 2000)),
-}
+PHASES = {"Phase 1": dict(max_epochs=2000)}
 
 # If override is defined, `phases` will be ignored and `override` will be run
 # instead. This is just a convenience for development.

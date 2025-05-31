@@ -8,6 +8,7 @@ import torch
 
 from ignite.engine import Engine
 
+import brainnet
 import brainnet.config
 from brainsynth.transforms.utilities import channel_last
 
@@ -17,7 +18,7 @@ FREESURFER_VOLUME_INFO = dict(
     valid="1  # volume info valid",
     filename="vol.nii",
     voxelsize=[1, 1, 1],
-    volume=(0, 0, 0),
+    volume=(256, 256, 256),
     xras=[-1, 0, 0],
     yras=[0, 0, -1],
     zras=[0, 1, 0],
@@ -283,61 +284,146 @@ def write_metric(engine, name, out_dir: Path):
     metric.to_pickle(out_dir / (name + ".pickle"))
 
 
+def write_curv(surface: brainnet.Surface, filename: Path | str):
+    """Write vertex data from a Surface object as a FreeSurfer curvature file."""
+    filename = str(filename) + ".{data}"
+    nbatch = len(surface.vertices)
+    for k, v in surface.vertex_data.items():
+        for i, vv in enumerate(v):
+            nib.freesurfer.write_morph_data(
+                f"{filename.format(data=k)}_{i:02d}"
+                if nbatch > 1
+                else filename.format(data=k),
+                vv.norm(dim=-1).detach().to(torch.float).cpu().numpy(),
+            )
+
+
 def write_surface(
-    surfaces: dict, vol_info: dict, out_dir: Path, prefix: str, tag: str, label: str
+    surface: brainnet.Surface,
+    filename: Path | str,
+    vol_info: dict | None = None,
 ):
-    for hemi, s in surfaces.items():
-        for surf, ss in s.items():
-            f = ss.faces.detach().to(torch.int).cpu().numpy()
-            for i, v in enumerate(ss.vertices):
-                name = ".".join([prefix, tag, hemi, surf, label, f"{i:02d}"])
+    """Write surface geometry as a FreeSurfer surface file."""
+    vol_info = vol_info or FREESURFER_VOLUME_INFO
+    nbatch = len(surface.vertices)
+    f = surface.faces.detach().to(torch.int).cpu().numpy()
+    for i, v in enumerate(surface.vertices):
+        nib.freesurfer.write_geometry(
+            f"{filename}_{i:02d}" if nbatch > 1 else filename,
+            v.detach().to(torch.float).cpu().numpy(),
+            f,
+            volume_info=vol_info,
+        )
+        if len(surface.vertex_data) > 0:
+            write_curv(surface, filename)
 
-                nib.freesurfer.write_geometry(
-                    out_dir / name,
-                    v.detach().to(torch.float).cpu().numpy(),
-                    f,
-                    volume_info=vol_info,
-                )
 
-            if "sigma" in ss.vertex_data:
-                for i, v in enumerate(ss.vertex_data["sigma"]):
-                    name = ".".join([prefix, "sigma", hemi, surf, label, f"{i:02d}"])
-                    nib.freesurfer.write_morph_data(
-                        out_dir / name,
-                        v.norm(dim=-1).detach().to(torch.float).cpu().numpy(),
-                    )
+def write_surfaces(
+    surfaces: dict[str, brainnet.Surface] | dict[str, dict[str, brainnet.Surface]],
+    out_dir: Path,
+    prefix: str | None = None,
+    tag: str | None = None,
+    label: str | None = None,
+    surf: str | None = None,
+    vol_info: dict | None = None,
+):
+    """Assemble filename as
+
+    [prefix.][tag.]hemi.surface[.label]
+    """
+    filename = "{hemi}.{surf}"
+    items = {}
+    if tag is not None:
+        filename = "{tag}." + filename
+        items["tag"] = tag
+    if prefix is not None:
+        filename = "{prefix}." + filename
+        items["prefix"] = prefix
+    if label is not None:
+        filename = filename + ".{label}"
+        items["label"] = label
+
+    for hemi, v in surfaces.items():
+        items["hemi"] = hemi
+        if isinstance(v, brainnet.Surface):
+            f = out_dir / filename.format(surf=surf, **items)
+            write_surface(v, f, vol_info)
+        else:  # assume dict
+            f = out_dir / filename.format(surf="{surf}", **items)
+            write_surfaces_dict(v, f, vol_info=vol_info)
+
+
+def write_surfaces_dict(
+    surfaces: dict[str, brainnet.Surface],
+    filename: Path | str,
+    surf: str | None = None,
+    vol_info: dict | None = None,
+):
+    for surf, surface in surfaces.items():
+        write_surface(surface, str(filename).format(surf=surf), vol_info)
 
 
 def write_volume(
-    vol: torch.Tensor, affine, out_dir: Path, prefix: str, tag: str, label: None | str
+    volume: torch.Tensor,
+    affine: torch.Tensor,
+    out_dir: Path | str,
+    prefix: str,
+    tag: str | None = None,
+    label: str | None = None,
+    extension: str = "nii.gz",
 ):
-    ext = "nii.gz"
-    # intensity_norm = IntensityNormalization()
+    """Assemble filename as
 
-    for i, v in enumerate(vol.detach()):  # loop over batch
-        if label is None:
-            name = ".".join((prefix, tag, f"{i:02d}", ext))
-        else:
-            name = ".".join((prefix, tag, label, f"{i:02d}", ext))
+        prefix[.tag][.label][.batch].ext
 
-        if v.is_floating_point():
+    where [.batch] is added if batch size > 1.
+
+    Parameters
+    ----------
+    vol : torch.Tensor
+        (N, C, *spatial_dims)
+    affine : _type_
+        (N, 4, 4)
+    out_dir : Path | str
+        _description_
+    prefix : str
+        _description_
+    tag : str | None, optional
+        _description_, by default None
+    label : str | None, optional
+        _description_, by default None
+    ext : str, optional
+        _description_, by default "nii.gz"
+    """
+    out_dir = Path(out_dir)
+
+    filename = prefix
+    if tag is not None:
+        filename = filename + f".{tag}"
+    if label is not None:
+        filename = filename + f".{label}"
+    if len(volume) > 1:
+        filename += "_{image_no:02d}"
+    filename = filename + f".{extension}"
+
+    batch = zip(volume.detach(), affine.detach())
+    for i, (vol, aff) in enumerate(batch):
+        if vol.is_floating_point():
             # v = v.float()
             # ql = v.amin()
             # qu = v.amax()
             # v = torch.clip((v - ql) / (qu - ql), 0.0, 1.0)
 
             # v = (255 * channel_last(v)).to(torch.uint8)
-            v = v.float()
+            vol = vol.float()
         else:
-            # assume a one-hot encoded image if n_channels > 1
-            v = v.to(torch.uint8).argmax(0)[None] if v.shape[0] > 1 else v
-            v = v.to(torch.uint8)
+            # assume a one-hot encoded image
+            vol = vol.to(torch.uint8).argmax(0)[None] if vol.shape[0] > 1 else vol
+            vol = vol.to(torch.uint8)
 
-        v = channel_last(v)
-
-        nib.Nifti1Image(v.cpu().numpy(), affine.cpu().numpy()).to_filename(
-            out_dir / name
-        )
+        vol = channel_last(vol).cpu().numpy()
+        aff = aff.cpu().numpy()
+        nib.Nifti1Image(vol, aff).to_filename(out_dir / filename.format(image_no=i))
 
 
 def write_example(
@@ -352,57 +438,17 @@ def write_example(
 
         vol_info["volume"] = tuple(x.shape[-3:])
 
-        st = f"epoch-{engine.state.epoch:05d}.{prefix}"
-        affine = torch.eye(4)
-
-        for label, y in zip((None, "pred", "true"), (dict(x=x), y_pred, y_true)):
-            for k, v in y.items():
-                if config.examples_keys is None or k in config.examples_keys:
-                    if k == "surface":
-                        write_surface(v, vol_info, config.examples_dir, st, k, label)
-                    else:
-                        v = v[:, :5] if "dec:" in k else v
-                        k = k.replace(":", "-")
-                        write_volume(v, affine, config.examples_dir, st, k, label)
-
-
-def write_input_image_with_affine(
-    engine: Engine,
-    evaluators: dict[str, Engine],
-    config: brainnet.config.ResultsParameters,
-):
-    for prefix, e in evaluators.items():
-        _, image, affine, _, _ = e.state.output
-
-        st = f"epoch-{engine.state.epoch:05d}.{prefix}"
-        k = "image"
-        label = None
-
-        write_volume(image, affine[0], config.examples_dir, st, k, label)
-
-
-def write_template(
-    engine: Engine,
-    evaluators: dict[str, Engine],
-    config: brainnet.config.ResultsParameters,
-):
-    vol_info = copy.deepcopy(FREESURFER_VOLUME_INFO)
-
-    for prefix, e in evaluators.items():
-        _, image, _, y_pred, y_true = e.state.output
-
-        vol_info["volume"] = tuple(image.shape[-3:])
-
         prefix = f"epoch-{engine.state.epoch:05d}.{prefix}"
-        for label, y in zip(("pred", "true"), (y_pred, y_true)):
-            for k, ss in y.items():
-                if config.examples_keys is None or k in config.examples_keys:
-                    f = ss.faces.detach().to(torch.int).cpu().numpy()
-                    for i, v in enumerate(ss.vertices):
-                        name = ".".join([prefix, "surface", k, label, f"{i:02d}"])
-                        nib.freesurfer.write_geometry(
-                            config.examples_dir / name,
-                            v.detach().to(torch.float).cpu().numpy(),
-                            f,
-                            volume_info=vol_info,
+        affine = torch.eye(4)[None]
+
+        for tag, y in zip((None, "pred", "true"), (dict(x=x), y_pred, y_true)):
+            for label, v in y.items():
+                if config.examples_keys is None or label in config.examples_keys:
+                    if label == "surface":
+                        write_surfaces(
+                            v, config.examples_dir, vol_info, prefix, tag, label
                         )
+                    else:
+                        v = v[:, :5] if "dec:" in label else v
+                        label = label.replace(":", "-")
+                        write_volume(v, affine, config.examples_dir, prefix, tag, label)

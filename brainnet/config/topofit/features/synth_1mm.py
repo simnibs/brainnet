@@ -1,7 +1,10 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="1mm",
-    # run_suffix="neglogprob-std",
+    # run_suffix="noUC",
+    pretrained_run="t1w-1mm",
+    pretrained_checkpoint=780,
+    save_example_on_every=None,
 )
 
 PHASES = {

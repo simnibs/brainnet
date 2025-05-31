@@ -1,4 +1,5 @@
 import argparse
+import importlib
 from pathlib import Path
 from typing import Any, Callable
 import torch
@@ -11,8 +12,52 @@ from ignite.metrics.metric import Metric
 import brainnet.config
 from brainnet.config.base import EventAction
 from brainnet import event_handlers
-import brainnet.initializers
 from brainnet.modules.criterion import CriterionAggregator
+
+
+def import_train_parameters(model):
+    return importlib.import_module(".train_parameters", f"brainnet.config.{model}")
+
+
+def train(
+    model: str, specs_name: str, create_trainer: Callable, no_wandb: bool = False
+):
+    """
+
+    python brainnet/train/topofit.py synth_1mm --no-wandb
+
+    args = brainnet.train.utilities.argparser_topofit(
+        "brainnet/train/topofit.py t1w_1mm --no-wandb".split()
+    )
+
+    """
+
+    print(f"Using training specs: {specs_name}", end="\n\n")
+
+    train_parameters = import_train_parameters(model)
+    specs = importlib.import_module(f".{specs_name}", f"brainnet.config.{model}")
+
+    try:
+        PHASES = dict(OVERRIDE=getattr(specs, "OVERRIDE"))
+        PHASES = specs.PHASES if PHASES is None else PHASES
+    except AttributeError:
+        PHASES = specs.PHASES
+
+    for name, phase in PHASES.items():
+        print(f"STARTING TRAINING PHASE: {name}")
+        print(79 * "=")
+        print(f"Specification\n    {phase}")
+        print(f"Defaults\n    {specs.DEFAULTS}")
+
+        setup = train_parameters.TrainParameters(**(specs.DEFAULTS | phase))
+        trainer, dataloader = create_trainer(setup, no_wandb)
+        trainer.run(
+            dataloader,
+            epoch_length=setup.trainer_epoch_length or len(iter(dataloader)),
+            max_epochs=setup.max_epochs,
+        )
+        print(f"TRAINING PHASE DONE: {name}", end="\n\n")
+        print(79 * "=")
 
 
 def print_memory_usage(device):
@@ -102,13 +147,19 @@ def load_checkpoint_from_setup(to_load, setup):
         load_checkpoint(to_load, ckpt, setup.device)
     else:
         state_dict = {}
-        if (ckpt := setup.load_body_from_checkpoint) is not None:
+        if (
+            hasattr(setup, "load_body_from_checkpoint")
+            and (ckpt := setup.load_body_from_checkpoint) is not None
+        ):
             print(f"Loading parameters for body from {ckpt}")
             checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
             state_dict.update(
                 {k: v for k, v in checkpoint_obj.items() if k.startswith("body")}
             )
-        if (ckpt := setup.load_head_from_checkpoint) is not None:
+        if (
+            hasattr(setup, "load_head_from_checkpoint")
+            and (ckpt := setup.load_head_from_checkpoint) is not None
+        ):
             print(f"Loading parameters for heads from {ckpt}")
             checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
             state_dict.update(
@@ -231,12 +282,13 @@ def write_example_to_disk(
     config: brainnet.config.ResultsParameters,
     writer=event_handlers.write_example,
 ):
-    engine.add_event_handler(
-        config.save_example_on,
-        writer,
-        evaluators=evaluators,
-        config=config,
-    )
+    if config.save_example_on is not None:
+        engine.add_event_handler(
+            config.save_example_on,
+            writer,
+            evaluators=evaluators,
+            config=config,
+        )
 
 
 def add_metric_to_engine(

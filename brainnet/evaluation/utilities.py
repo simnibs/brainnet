@@ -8,7 +8,7 @@ import torch
 from ignite.metrics.metric import Metric, reinit__is_reduced  # , sync_all_reduce
 from ignite.engine import Events
 
-from brainnet.utilities import flatten_dict
+from brainnet.dict_utils import flatten_dict
 from brainnet import event_handlers
 
 
@@ -25,17 +25,16 @@ def list_of_dicts_to_dataframe(data, index=None):
     # DataFrame: index = iterations; columns = multiindex of keys
     return pd.DataFrame(out, index)
 
-def add_metric_writer(
-    engine, out_dir: Path, metric: str = "loss"
-):
+
+def add_metric_writer(engine, out_dir: Path, metric: str = "loss"):
     if not out_dir.exists():
         out_dir.mkdir()
     engine.add_event_handler(
         Events.EPOCH_COMPLETED, event_handlers.write_metric, metric, out_dir
     )
 
-class MetricAggregator(Metric):
 
+class MetricAggregator(Metric):
     # required_output_keys: tuple[str,str] = ("raw", "weighted") #("y_pred", "y", "criterion_kwargs")
     # _state_dict_all_req_keys: tuple[str,str] = #("_sum", "_num_examples")
 
@@ -59,12 +58,15 @@ class MetricAggregator(Metric):
 
     @reinit__is_reduced
     def update(self, output: tuple) -> None:
-        if len(output) == 4:
-            loss, _, _, _ = output  # out signature: loss, x, y_pred, y_true
-        else:
-            ValueError(
-                f"Wrong output signature from engine for CriterionAggregator. Expected (loss, x, y_pred, y_true), got output of length {len(output)}."
-            )
+        loss = output[0]  # out signature: loss, x, y_pred, y_true
+
+        # if len(output) == 4:
+        #     loss, _, _, _ = output  # out signature: loss, x, y_pred, y_true
+
+        # else:
+        #     raise ValueError(
+        #         f"Wrong output signature from engine for CriterionAggregator. Expected (loss, x, y_pred, y_true), got output of length {len(output)}."
+        #     )
 
         # batch_size = self._batch_size(x)
         # if batch_size > 1:
@@ -75,5 +77,5 @@ class MetricAggregator(Metric):
         self._aggregated.append(loss)
 
     # @sync_all_reduce("_sum", "_num_examples")
-    def compute(self) -> pd.DataFrame:
-        return list_of_dicts_to_dataframe(self._aggregated)
+    def compute(self, index=None) -> pd.DataFrame:
+        return list_of_dicts_to_dataframe(self._aggregated, index)

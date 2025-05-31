@@ -29,31 +29,29 @@ loss_events = [
         handler=set_loss_weight,
         kwargs=dict(
             weights={
-                ("white", "neglogprob"): 0.5,
-                ("pial", "neglogprob"): 0.5,
+                ("white", "negloglik"): 0.5,
+                ("pial", "negloglik"): 0.5,
                 ("white", "chamfer"): 0.0,
                 ("pial", "chamfer"): 0.0,
+                ("white", "edge_var"): 2.0,
+                ("pial", "edge_var"): 1.0,
+                ("white", "tri_Q"): 1.0,
+                ("pial", "tri_Q"): 1.0,
                 # ("white", "spring"): 5.0,
                 # ("pial", "spring"): 5.0,
             }
         ),
     ),
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=301),
-        handler=set_loss_weight,
-        kwargs=dict(
-            weights={
-                # ("white", "spring"): 2.0,  # 1.0,
-                # ("pial", "spring"): 1.0,  # 0.5,
-                # ("white", "taubin"): 10.0,
-                # ("pial", "taubin"): 5.0,
-                ("white", "edge_var"): 2.0,  # 1.0,
-                ("pial", "edge_var"): 1.0,  # 0.5,
-                ("white", "tri_Q"): 1.0,  # 0.5,
-                ("pial", "tri_Q"): 1.0,  # 0.5,
-            }
-        ),
-    ),
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=301),
+    #     handler=set_loss_weight,
+    #     kwargs=dict(
+    #         weights={
+    #             # ("white", "spring"): 2.0,  # 1.0,
+    #             # ("pial", "spring"): 1.0,  # 0.5,
+    #         }
+    #     ),
+    # ),
     config.EventAction(
         event=Events.EPOCH_STARTED(once=401),
         handler=set_loss_weight,

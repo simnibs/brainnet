@@ -1,5 +1,3 @@
-
-
 def unsqueeze_and_expand(a, b):
     """Unsqueeze and expand `a` to match the remaining dimensions of
     `b`, e.g., if

@@ -16,15 +16,16 @@ class TrainParameters(train_parameters.TrainParameters):
 
     """
 
-    project: str = "TopoFit-UNet"
-
-    package: InitVar[str] = __package__
-
     # =========================================================================
     #   PRETRAINED
     # =========================================================================
+    pretrained_run: str  # the pretrained run defining the target features
+    pretrained_checkpoint: int  # checkpoint of the pretrained run
+    pretrained_project: str = "TopoFit"
 
-    load_pretrained_model_from_checkpoint = "/mnt/scratch/personal/jesperdn/results/TopoFit/t1w-1mm-neglogprob-std/checkpoint/state_checkpoint_00540.pt"
+    project: str = "TopoFit-Features"
+
+    package: InitVar[str] = __package__
 
     def __post_init__(self, *args):
         # split post init args for parent class and child class
@@ -43,6 +44,14 @@ class TrainParameters(train_parameters.TrainParameters):
         ) = args
         super().__post_init__(*args)
 
+        self.pretrained_checkpoint_filename = (
+            self.results_dir
+            / self.pretrained_project
+            / self.pretrained_run
+            / "checkpoint"
+            / f"state_checkpoint_{self.pretrained_checkpoint:05d}.pt"
+        )
+
         # =====================================================================
         # DATASET
         # =====================================================================
@@ -50,7 +59,7 @@ class TrainParameters(train_parameters.TrainParameters):
         self.dataset_kwargs["train"]["images"] += ["brain_dist_map", "t1w"]
         self.dataset_kwargs["validation"]["images"] += ["brain_dist_map"]
 
-        template_surface = dict(resolution=TOPOFIT_ORDER_IN, name="template")
+        template_surface = dict(resolution=TOPOFIT_ORDER_IN, types="template")
         target_vertices = None
 
         self.dataset = dict(
@@ -87,3 +96,5 @@ class TrainParameters(train_parameters.TrainParameters):
             body=pre_unet,
             heads=copy.deepcopy(self.model.heads),
         )
+
+        self.pretrained_dir = self.results.out_dir
