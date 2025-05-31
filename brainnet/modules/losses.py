@@ -67,6 +67,28 @@ class SquaredNormError(torch.nn.Module):
         return torch.sum((a - b) ** 2, self.dim)
 
 
+class NormError(torch.nn.Module):
+    def __init__(self, dim: int = -1) -> None:
+        """_summary_
+
+        Note that
+
+            norm error = 3 * L1 error
+
+        because the former sums whereas the latter averages over the last dim.
+
+        Parameters
+        ----------
+        dim : int, optional
+            _description_, by default -1
+        """
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, a, b):
+        return torch.linalg.vector_norm(a - b, dim=self.dim)
+
+
 class SquaredCosineSimilarityError(torch.nn.CosineSimilarity):
     def __init__(self, dim: int = -1, eps: float = 1e-8) -> None:
         super().__init__(dim, eps)
@@ -158,6 +180,24 @@ def wrap_mean_reduction(cls):
     return MeanReduction
 
 
+def wrap_quantile_reduction(cls):
+    class QuantileReduction(cls):
+        def __init__(self, quantile: float, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.quantile = quantile
+
+        def forward(self, y_pred, y_true, weight=None):
+            error = super().forward(y_pred, y_true)
+            if weight is None:
+                return error.quantile(self.quantile)
+            else:
+                msg = "Quantile reduction not implemented with weights!"
+                raise NotImplementedError(msg)
+                # return torch.sum(weight * error) / weight.sum()
+
+    return QuantileReduction
+
+
 def wrap_semi_hard_reduction(cls):
     class SemiHardReduction(cls):
         def __init__(self, hard_fraction: float, *args, **kwargs) -> None:
@@ -194,8 +234,14 @@ def wrap_semi_hard_reduction(cls):
 # LOSSES
 
 
+QuantileL1Loss = wrap_quantile_reduction(AbsoluteError)
+QuantileNormLoss = wrap_quantile_reduction(NormError)
+QuantileMSELoss = wrap_quantile_reduction(SquaredError)
+QuantileNSELoss = wrap_quantile_reduction(NormalizedSquaredError)
+
 MSELoss = wrap_mean_reduction(SquaredError)
 NSELoss = wrap_mean_reduction(NormalizedSquaredError)
+NormLoss = wrap_mean_reduction(NormError)
 L1Loss = wrap_mean_reduction(AbsoluteError)
 NL1Loss = wrap_mean_reduction(NormalizedAbsoluteError)
 MSNELoss = wrap_mean_reduction(SquaredNormError)

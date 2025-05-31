@@ -6,6 +6,10 @@ from brainnet.modules.body.unet import UNet
 class AffineCorticalAlignment(torch.nn.Module):
     def __init__(
         self,
+        spatial_dims: int = 3,
+        pre_conv_ch: int = 8,
+        encoder_channels: list[list[int]] | tuple = ((32,), (32,), (32,), (32,), (32,)),
+        decoder_channels: list[list[int]] | tuple = ((32,), (32,), (32,), (32,)),
         points_per_hemisphere: int = 12,
         weigh_by_feature_mass: bool = True,
         device: torch.device | str = "cpu",
@@ -28,20 +32,23 @@ class AffineCorticalAlignment(torch.nn.Module):
         # on a salient region of a subject-specific image which is useful for
         # predicting the registration.
 
-        # Pre-convolve image with strided conv
+        # Pre-convolve image with strided conv (downsampling)
         self.image_fx_pre = torch.nn.Sequential(
-            torch.nn.Conv3d(1, 8, kernel_size=3, stride=2, padding=1),
+            torch.nn.Conv3d(1, pre_conv_ch, kernel_size=3, stride=2, padding=1),
             torch.nn.PReLU(),
         )
         self.image_fx_unet = UNet(
-            spatial_dims=3,
-            in_channels=8,
-            encoder_channels=[[32], [32], [32], [32], [32]],
-            decoder_channels=[[32], [32], [32], [32]],
+            spatial_dims=spatial_dims,
+            in_channels=pre_conv_ch,
+            encoder_channels=encoder_channels,
+            decoder_channels=decoder_channels,
         )
+
         # Post-convolve to the number of predicted points
         self.image_fx_post = torch.nn.Sequential(
-            torch.nn.Conv3d(32, self.ppb, kernel_size=3, padding=1),
+            torch.nn.Conv3d(
+                self.image_fx_unet.final_channels, self.ppb, kernel_size=3, padding=1
+            ),
             # NOTE
             # ReLU is important as to ensure that the feature maps contain no
             # negative values and hence are valid as weights in a weighted

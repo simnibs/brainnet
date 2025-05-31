@@ -44,7 +44,9 @@ class Surface:
         self.vertices = vertices
         self.vertex_data = {}
         self.face_data = {}
-        self.interpolated = dict(points=None, face_index=None, baricenter=None, data={})
+        self.interpolated: dict[str, torch.Tensor | None | dict[str, torch.Tensor]] = (
+            dict(points=None, face_index=None, baricenter=None, data={})
+        )
 
     @property
     def topology(self):
@@ -215,8 +217,27 @@ class Surface:
         buffer = buffer.index_add(1, self.faces[:, 2], values)
         return buffer
 
-    def apply_affine(self, affine: torch.Tensor):
-        return apply_affine(affine, self.vertices)
+    def apply_affine(
+        self, affine: torch.Tensor, return_surface: bool = True, inplace: bool = False
+    ):
+        if inplace:
+            self.vertices = apply_affine(affine, self.vertices)
+            return self
+        else:
+            v = apply_affine(affine, self.vertices)
+            return Surface(v, self.faces) if return_surface else v
+
+    # def squeeze_batch(self):
+    #     self.vertices = self.vertices.squeeze(0)
+    #     for k, v in self.vertex_data.items():
+    #         self.vertex_data[k] = v.squeeze(0)
+    #     for k, v in self.interpolated.items():
+    #         if k == "data" and v is not None:
+    #             for kk, vv in self.interpolated[k].items():
+    #                 self.interpolated[k][kk] = vv.squeeze(0)
+    #         elif isinstance(v, torch.Tensor):
+    #             self.interpolated[k] = v.squeeze(0)
+    #     return self
 
     # def compute_cotangents(self, eps=1e-8):
     #     """
