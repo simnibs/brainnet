@@ -83,13 +83,14 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         # DATASET
         # =====================================================================
 
-        template_surface = dict(resolution=TOPOFIT_ORDER_IN, types="template")
-        target_vertices = dict(resolution=TOPOFIT_ORDER_OUT, name="resample")
+        surfaces = [
+            dict(types="white", resolution=TOPOFIT_ORDER_OUT, name="resample"),
+            dict(types="pial", resolution=TOPOFIT_ORDER_OUT, name="resample"),
+            dict(types="template", resolution=TOPOFIT_ORDER_IN),
+        ]
 
         self.dataset = {
-            k: DatasetConfig(
-                **v, target_vertices=target_vertices, template_surface=template_surface
-            )
+            k: DatasetConfig(**v, surfaces=surfaces)
             for k, v in self.dataset_kwargs.items()
         }
 
@@ -155,16 +156,13 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         if self.builder_validation is None:
             self.builder_validation = f"OnlySelect{builder_res}"
 
-        img_sel_train = None if self.contrast == "synth" else [self.contrast]
-        img_sel_val = ["t1w"] if self.contrast == "synth" else [self.contrast]
-
         self.synthesizer = dict(
             train=SynthesizerConfig(
                 builder=self.builder_train,
                 out_size=self.fov_out_size,
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
-                selectable_images=img_sel_train,
+                selectable_images=self.selectable_images_train,
                 device=self.device,
                 **self.builder_train_kw,
             ),
@@ -173,7 +171,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 out_size=self.fov_out_size,
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
-                selectable_images=img_sel_val,
+                selectable_images=self.selectable_images_validation,
                 device=self.device,
                 **self.builder_validation_kw,
             ),

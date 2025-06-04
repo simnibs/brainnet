@@ -1,22 +1,47 @@
-import functools
-import sys
 import torch
 
 from ignite.engine import Engine
 
 import brainsynth
 from brainsynth.transforms import EnsureDevice
-from brainsynth.utilities import squeeze_nd
+from brainsynth.transforms.utils import recursive_function
 
-from brainnet.dict_utils import (
-    recursively_apply_function,
-    recursively_apply_method,
-    recursive_dict_sum,
-)
-import brainnet.train.utilities
+from brainnet.config.alignment.train_parameters import TrainParameters
+from brainnet.dict_utils import recursive_dict_sum
+import brainnet.helpers.utils
 from brainnet import event_handlers
 import brainnet.initializers
 from brainnet.mesh.surface import load_deepsurfer_template, Surface
+
+"""The following classes/functions need to be defined as they are imported
+elsewhere.
+
+Step
+    Baseclass for the step.
+TrainingStep
+    Class defining actions in a training step, e.g., predict, loss and grad
+    calculation, and step.
+EvaluationStep
+    Class defining actions in an evaluation step, e.g., predict and loss
+    calculation.
+PredictionStep
+
+
+write_example_prediction
+    Function which writes a prediction to disk.
+write_example_event
+    Event handler attachable to an Engine.
+
+setup_model
+    Function that returns a model from an instance of TrainingParameters
+    (defining the model).
+
+create_trainer
+    Function that returns a trainer Engine and a dataloader.
+"""
+
+# Define some recursive versions of functions
+recursive_item = recursive_function(torch.Tensor.item)
 
 
 class Step:
@@ -40,8 +65,8 @@ class Step:
 
     def vertex_dict_to_surface_dict(self, templates):
         return {
-            (k0, k1): Surface(v, self.topologies[k0])
-            for (k0, k1), v in templates.items()
+            (hemi, affine): Surface(v, self.topologies[hemi])
+            for (hemi, affine), v in templates.items()
         }
 
     def prepare_batch(
@@ -64,19 +89,9 @@ class Step:
             # assume preprocessor was applied when loading the data
             return images["image"], vox2ras["affine"], y_true
         else:
-            # Remove batch dim, apply preprocessor, add batch dim back
-            func = functools.partial(squeeze_nd, n=4, dim=0)
-            images = recursively_apply_function(images, func)
-            func = functools.partial(squeeze_nd, n=2, dim=0)
-            vox2ras = recursively_apply_function(vox2ras, func)
-
             with torch.no_grad():
-                out = self.preprocessor(images, affines=vox2ras, unpack=False)
-
-            func = functools.partial(torch.unsqueeze, dim=0)
-            out = recursively_apply_function(out, func)
-
-            return out["image"], out["affine"], y_true
+                out = self.preprocessor(images, vox2ras)
+            return out.image, out.affine, y_true
 
     def prepare_for_loss(self, affines):
         keys = zip(("lh", "lh", "rh", "rh"), ("lh", "brain", "rh", "brain"))
@@ -146,7 +161,11 @@ class TrainingStep(Step):
                 # accumulate across multiple passes (whenever .backward is
                 # called)
                 self.optimizer.zero_grad()
-        loss = recursively_apply_method(loss, "item")
+
+        loss = recursive_item(loss)
+
+        y_pred = self.vertex_dict_to_surface_dict(y_pred)
+        y_true = self.vertex_dict_to_surface_dict(y_true)
 
         # these are stored in engine.state.output
         return loss, image, vox2ras, y_pred, y_true
@@ -174,7 +193,7 @@ class EvaluationStep(Step):
                 y_true = self.prepare_for_loss(y_true)
                 loss = self.compute_loss(y_pred, y_true)
 
-        loss = recursively_apply_method(loss, "item")
+        loss = recursive_item(loss)
 
         y_pred = self.vertex_dict_to_surface_dict(y_pred)
         y_true = self.vertex_dict_to_surface_dict(y_true)
@@ -183,13 +202,7 @@ class EvaluationStep(Step):
 
 
 class PredictionStep(Step):
-    def __init__(
-        self,
-        preprocessor,
-        model,
-        enable_amp: bool = False,
-        **kwargs,
-    ):
+    def __init__(self, preprocessor, model, enable_amp: bool = False, **kwargs):
         super().__init__(preprocessor, model, **kwargs)
         self.enable_amp = enable_amp
 
@@ -219,10 +232,10 @@ def write_example_event(
 ):
     vol_info = event_handlers.FREESURFER_VOLUME_INFO
 
-    for prefix, e in evaluators.items():
+    for prefix, e in (dict(trainer=engine) | evaluators).items():
         prefix = f"epoch-{engine.state.epoch:05d}.{prefix}"
 
-        match e:
+        match e._process_function:
             case TrainingStep():
                 _, image, vox2ras, y_pred, y_true = e.state.output
             case EvaluationStep():
@@ -230,7 +243,9 @@ def write_example_event(
             # case PredictionStep():
             #     y_pred = e.state.output
             case _:
-                raise ValueError(f"Unknown engine type {type(e)}")
+                raise ValueError(
+                    f"Unknown _process_function type {type(e._process_function)}"
+                )
 
         vol_info["volume"] = tuple(image.shape[-3:])
 
@@ -254,7 +269,9 @@ def setup_model(setup):
     return model
 
 
-def create_trainer(setup, no_wandb: bool = False):
+def create_trainer(
+    setup: TrainParameters, no_wandb: bool = False
+) -> tuple[Engine, torch.utils.data.DataLoader]:
     # Overwrite args from command line if provided
     if no_wandb:
         setup.wandb.enable = False
@@ -292,12 +309,12 @@ def create_trainer(setup, no_wandb: bool = False):
     # The order in which the events are added to the engine is important!
 
     # Aggregate average loss over epoch
-    brainnet.train.utilities.add_metric_to_engine(trainer)
-    brainnet.train.utilities.add_terminal_logger(trainer)
+    brainnet.helpers.utils.add_metric_to_engine(trainer)
+    brainnet.helpers.utils.add_terminal_logger(trainer)
 
     # Add evaluations
     evaluators = dict(
-        validation=brainnet.train.utilities.add_evaluation_event(
+        validation=brainnet.helpers.utils.add_evaluation_event(
             eval_step,
             engine=trainer,
             evaluate_on=setup.evaluator_evaluate_on,
@@ -307,12 +324,12 @@ def create_trainer(setup, no_wandb: bool = False):
         ),
     )
 
-    brainnet.train.utilities.add_wandb_logger(trainer, evaluators, setup.wandb)
+    brainnet.helpers.utils.add_wandb_logger(trainer, evaluators, setup.wandb)
 
     # Should be triggered after metrics has been computed!
-    brainnet.train.utilities.add_custom_events(trainer, setup.trainer_events)
+    brainnet.helpers.utils.add_custom_events(trainer, setup.trainer_events)
     for e in evaluators.values():
-        brainnet.train.utilities.add_custom_events(e, setup.evaluator_events)
+        brainnet.helpers.utils.add_custom_events(e, setup.evaluator_events)
 
     # Include this in the checkpoint
     to_save = dict(
@@ -324,23 +341,16 @@ def create_trainer(setup, no_wandb: bool = False):
     if setup.enable_amp:
         to_save["grad_scaler"] = train_step.grad_scaler
 
-    brainnet.train.utilities.add_model_checkpoint(trainer, to_save, setup.results)
-    # brainnet.train.utilities.write_example_to_disk(
+    brainnet.helpers.utils.add_model_checkpoint(trainer, to_save, setup.results)
+    # brainnet.helpers.utils.write_example_to_disk(
     #     trainer, evaluators, setup.results, event_handlers.write_input_image_with_affine
     # )
-    brainnet.train.utilities.write_example_to_disk(
+    brainnet.helpers.utils.write_example_to_disk(
         trainer, evaluators, setup.results, write_example_event
     )
-    brainnet.train.utilities.load_checkpoint_from_setup(to_save, setup)
+    brainnet.helpers.utils.load_checkpoint_from_setup(to_save, setup)
 
     print("Setup completed.", end="\n\n")
     print(setup)
 
     return trainer, dataloader["train"]
-
-
-if __name__ == "__main__":
-    args = brainnet.train.utilities.argparser_topofit(sys.argv)
-    brainnet.train.utilities.train(
-        "alignment", args.specs, create_trainer, args.no_wandb
-    )

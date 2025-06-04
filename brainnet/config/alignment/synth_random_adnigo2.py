@@ -1,12 +1,14 @@
 DEFAULTS = dict(
-    contrast="flair",
+    contrast="synth",
     resolution="random",
     datasets=["ADNI-GO2"],
     images_train=["flair"],
     images_validation=["flair"],
     builder_train="CropSelectIso",
     builder_validation="CropSelectIso",
-    resume_from_run="synth-random",
+    selectable_images_train="flair",
+    selectable_images_validation="flair",
+    # resume_from_run="synth-random",
     # run_suffix="TEST",
 )
 

@@ -1,0 +1,35 @@
+import argparse
+import sys
+
+from brainnet.evaluation import predict
+
+
+def parse_args(argv):
+    description = "Main interface to evaluating a BrainNet model."
+    parser = argparse.ArgumentParser(
+        prog="BrainNetEvaluator",
+        description=description,
+    )
+    help_model = "The model to predict."
+    help_specs = "Configuration file defining the parameters for training."
+    help_checkpoint = "Predict using this checkpoint."
+    help_subset = "Subset of data to evaluate on (e.g., train, validation, test)."
+
+    parser.add_argument("model", help=help_model)
+    parser.add_argument("specs", help=help_specs)
+    parser.add_argument("subset", type=str, help=help_subset)
+    parser.add_argument("checkpoint", type=int, help=help_checkpoint)
+    parser.add_argument("--csv", default=None, type=str, help="")
+    # parser.add_argument(
+    #     "--datasets",
+    #     default=None,
+    #     nargs="+",
+    #     help="Subset of data to evaluate on (e.g., train, validation, test).",
+    # )
+
+    return parser.parse_args(argv[1:])
+
+
+if __name__ == "__main__":
+    args = parse_args(sys.argv)
+    predict(args.model, args.specs, args.subset, args.checkpoint, args.csv)

@@ -31,6 +31,16 @@ echo $sub
 
 cd $sub
 
+
+# ?h.white is the predicted surface.
+
+# hemi=lh
+
+# mris_smooth -n 3 -nw $hemi.white $hemi.smoothwm
+# mris_inflate $hemi.smoothwm $hemi.inflated
+# mris_sphere $hemi.inflated $hemi.sphere
+# mris_register -curv $hemi.sphere $FREESURFER_HOME/average/$hemi.average.curvature.filled.buckner40.tif $hemi.sphere.reg
+
 for hemi in lh rh
 do
     echo $hemi

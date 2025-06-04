@@ -1,7 +1,6 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
-    # run_suffix="TEST",
 )
 
 PHASES = {"Phase 1": dict(max_epochs=2000)}

@@ -108,6 +108,9 @@ class TrainParameters(BaseObject):
     # validation
     builder_validation_kw: dict[str, Any] | None = None
 
+    selectable_images_train: list | tuple | None = None
+    selectable_images_validation: list | tuple | None = None
+
     # =========================================================================
     #   WANDB
     # =========================================================================
@@ -267,6 +270,22 @@ class TrainParameters(BaseObject):
                 )
             case _:
                 raise ValueError
+
+        if self.selectable_images_train is None:
+            if self.contrast == "synth":
+                self.selectable_images_train = None
+            else:
+                self.selectable_images_train = [self.contrast]
+        elif isinstance(self.selectable_images_train, str):
+            self.selectable_images_train = [self.selectable_images_train]
+
+        if self.selectable_images_validation is None:
+            if self.contrast == "synth":
+                self.selectable_images_validation = ["t1w"]
+            else:
+                self.selectable_images_validation = [self.contrast]
+        elif isinstance(self.selectable_images_validation, str):
+            self.selectable_images_validation = [self.selectable_images_validation]
 
         # =====================================================================
         # MODEL

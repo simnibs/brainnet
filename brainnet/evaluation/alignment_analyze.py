@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -9,9 +10,12 @@ global RUNS
 global SUBSET
 global METRIC
 
-RUNS = ["t1w-1mm", "synth-1mm", "synth-random", "flair-random"]
+RUNS = ["t1w-1mm", "synth-1mm", "synth-random"]
+RUNS = ["synth-random"]
 SUBSET = "validation"
-CHECKPOINTS = [2000]
+CHECKPOINTS = [1500, 2000]
+HEMI = "rh"
+AFFINE = "brain"
 METRIC = "distance"
 
 
@@ -32,16 +36,18 @@ def find_best(df):
     mean = df.groupby("checkpoint").mean()
     idx = mean.idxmin()
 
-    print("Surface    Metric       Checkpoint   Value")
-    print("--------------------------------------------")
-    for (s, m), ckpt in zip(idx.index, idx):
-        print(f"{s:10s} {m:10s} {ckpt:5d}       {mean.loc[ckpt, (s, m)]:10.5f}")
+    print("Hemi       Affine     Metric       Checkpoint   Value")
+    print("-----------------------------------------------------")
+    for (hemi, affine, m), ckpt in zip(idx.index, idx):
+        print(
+            f"{hemi:10s} {affine:10s} {m:10s} {ckpt:5d}       {mean.loc[ckpt, (hemi, affine, m)]:10.5f}"
+        )
 
     print()
 
     print(f"Best checkpoint based on metric '{METRIC}'")
-    print(idx[:, METRIC])
-    return idx[:, METRIC]
+    print(idx[:, :, METRIC])
+    return idx[:, :, METRIC]
 
 
 def plot(run_dict, metric=None):
@@ -65,11 +71,32 @@ runs = {run: load_dataframes(run) for run in RUNS}
 
 fig = plot(runs)
 
+best = {}
 for k, v in runs.items():
     print(f"Best checkpoint for {k}")
     print()
     idx = find_best(v)
+    best[k] = idx
     print("\n")
+
+
+for k, v in runs.items():
+    idx = best[k]
+    idx = idx[HEMI, AFFINE]
+    print(k)
+    values = v.loc[idx, pd.IndexSlice[HEMI, AFFINE, METRIC]].sort_values(
+        ascending=False
+    )
+    print(values[:10])
+    subs = values.index[:10]
+    subs = list(zip(subs.get_level_values("dataset"), subs.get_level_values("subject")))
+    filename = f"alignment_subjects_{k}.csv"
+
+    with open(filename, "w") as f:
+        csv_writer = csv.writer(f)
+        for row in subs:
+            csv_writer.writerow(row)
+
 
 names = df.index.unique(level="dataset")
 data = [df.loc[k]["white", "chamfer"] for k in names]

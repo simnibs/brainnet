@@ -8,9 +8,10 @@ import torch
 
 from ignite.engine import Engine
 
+from brainsynth.transforms.utils import channel_last
+
 import brainnet
-import brainnet.config
-from brainsynth.transforms.utilities import channel_last
+from brainnet.dict_utils import recursive_keys_to_str
 
 
 FREESURFER_VOLUME_INFO = dict(
@@ -156,6 +157,7 @@ class TerminalLogger:
         #     s += "\n"
         # return s
         for kk, vv in loss.items():
+            kk = kk if isinstance(kk, str) else ":".join(kk)
             s += f"{self._fmt_name.format(kk)}"
             s += " : "
             s += " | ".join([self._fmt_loss.format(x, y) for x, y in vv.items()])
@@ -263,7 +265,8 @@ def optimizer_reset(engine):
 
 
 def wandb_log_evaluator(engine, wandb_logger, name, evaluator):
-    data = {name: {"loss": evaluator.state.metrics["loss"]}}
+    loss = recursive_keys_to_str(evaluator.state.metrics["loss"])
+    data = {name: {"loss": loss}}
     wandb_logger.log(data, step=engine.state.epoch)
 
 
@@ -271,7 +274,7 @@ def wandb_log_engine(engine, logger, name):
     param_groups = engine._process_function.optimizer.param_groups
     data = {
         name: {
-            "loss": engine.state.metrics["loss"],
+            "loss": recursive_keys_to_str(engine.state.metrics["loss"]),
             "time[EPOCH_COMPLETED]": engine.state.times["EPOCH_COMPLETED"],
             "optimizer": {f"lr[{i}]": pg["lr"] for i, pg in enumerate(param_groups)},
         }
@@ -343,24 +346,25 @@ def write_surfaces(
         filename = filename + ".{label}"
         items["label"] = label
 
-    for hemi, v in surfaces.items():
-        items["hemi"] = hemi
+    for k, v in surfaces.items():
         if isinstance(v, brainnet.Surface):
+            items["hemi"] = k
             f = out_dir / filename.format(surf=surf, **items)
             write_surface(v, f, vol_info)
         else:  # assume dict
-            f = out_dir / filename.format(surf="{surf}", **items)
+            items["surf"] = k
+            f = out_dir / filename.format(hemi="{hemi}", **items)
             write_surfaces_dict(v, f, vol_info=vol_info)
 
 
 def write_surfaces_dict(
     surfaces: dict[str, brainnet.Surface],
     filename: Path | str,
-    surf: str | None = None,
+    hemi: str | None = None,
     vol_info: dict | None = None,
 ):
-    for surf, surface in surfaces.items():
-        write_surface(surface, str(filename).format(surf=surf), vol_info)
+    for hemi, surface in surfaces.items():
+        write_surface(surface, str(filename).format(hemi=hemi), vol_info)
 
 
 def write_volume(

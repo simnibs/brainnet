@@ -82,13 +82,13 @@ functions = dict(
         ),
     ),
     # The spherical coordinates are stored as vertex data on the white surface
-    sphere=dict(
-        arc=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss(value_key=("interpolated", "sphere")),
-            **kw_white,
-        ),
-        # tri_Q=
-    ),
+    # sphere=dict(
+    #     arc=SurfaceSupervisedLoss(
+    #         SampledSemiSymmetricMSNormLoss(value_key=("interpolated", "sphere")),
+    #         **kw_white,
+    #     ),
+    #     # tri_Q=
+    # ),
 )
 
 head_weights = dict(white=1.0, pial=1.0, thickness=1.0)

@@ -2,8 +2,6 @@ DEFAULTS = dict(
     contrast="t1w",
     resolution="1mm",
     # run_suffix="noUC",
-    # evaluate_on_every=1,
-    # save_example_on_every=1,
 )
 
 PHASES = {

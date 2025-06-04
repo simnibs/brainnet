@@ -190,25 +190,25 @@ class Criterion(torch.nn.Module):
         #     pial = (0.001, 0.999),
         # )
 
-        for h, surfaces in y_pred.items():
-            for s in surfaces:
+        for s, surfaces in y_pred.items():
+            for h in surfaces:
                 if self._needs_sampling:
                     # implies that we require chamfer
 
                     self._sample_points_curv_data(
-                        y_pred[h][s],
+                        y_pred[s][h],
                     )
                     self._sample_points_curv_data(
-                        y_true[h][s],
+                        y_true[s][h],
                         taubin_smoothing=smooth_y_true,
                     )
 
                     # NOTE these are indices into y_true!
-                    index = y_pred[h][s].nearest_neighbor_tensors(
-                        y_pred[h][s].interpolated["points"],
-                        y_true[h][s].interpolated["points"],
+                    index = y_pred[s][h].nearest_neighbor_tensors(
+                        y_pred[s][h].interpolated["points"],
+                        y_true[s][h].interpolated["points"],
                     )
-                    y_pred[h][s].interpolated["data"]["chamfer_index"] = index
+                    y_pred[s][h].interpolated["data"]["chamfer_index"] = index
 
                     # =============================================================
                     # NOTE
@@ -223,11 +223,11 @@ class Criterion(torch.nn.Module):
                     # =============================================================
 
                     # NOTE these are indices into y_pred!
-                    index = y_true[h][s].nearest_neighbor_tensors(
-                        y_true[h][s].interpolated["points"],
-                        y_pred[h][s].interpolated["points"],
+                    index = y_true[s][h].nearest_neighbor_tensors(
+                        y_true[s][h].interpolated["points"],
+                        y_pred[s][h].interpolated["points"],
                     )
-                    y_true[h][s].interpolated["data"]["chamfer_index"] = index
+                    y_true[s][h].interpolated["data"]["chamfer_index"] = index
 
                     # if "sigma" in y_pred[h][s].interpolated["data"]:
                     #     y_true[h][s].interpolated["data"]["sigma"] = torch.ones_like(
@@ -240,34 +240,34 @@ class Criterion(torch.nn.Module):
                     # interpolated data of the sampled points on y_pred to the
                     # value of the corresponding (closest) point on y_true
                     # (e.g., medial wall label)
-                    y_true_interp = y_true[h][s].interpolated["data"].keys()
-                    y_pred_interp = y_pred[h][s].interpolated["data"].keys()
+                    y_true_interp = y_true[s][h].interpolated["data"].keys()
+                    y_pred_interp = y_pred[s][h].interpolated["data"].keys()
 
-                    index = y_pred[h][s].interpolated["data"]["chamfer_index"]
+                    index = y_pred[s][h].interpolated["data"]["chamfer_index"]
                     for k in y_true_interp:
-                        if k not in y_pred[h][s].interpolated["data"]:
-                            x = y_true[h][s].interpolated["data"][k]
+                        if k not in y_pred[s][h].interpolated["data"]:
+                            x = y_true[s][h].interpolated["data"][k]
                             index = unsqueeze_and_expand(index, x)
-                            y_pred[h][s].interpolated["data"][k] = x.gather(-1, index)
+                            y_pred[s][h].interpolated["data"][k] = x.gather(-1, index)
 
                     # For data that is only present in *y_pred*, set the
                     # interpolated data of the sampled points on y_true to the
                     # value of the corresponding (closest) point on y_pred
                     # (e.g., uncertainty/sigma estimate from model)
-                    index = y_true[h][s].interpolated["data"]["chamfer_index"]
+                    index = y_true[s][h].interpolated["data"]["chamfer_index"]
                     for k in y_pred_interp:
-                        if k not in y_true[h][s].interpolated["data"]:
-                            x = y_pred[h][s].interpolated["data"][k]
+                        if k not in y_true[s][h].interpolated["data"]:
+                            x = y_pred[s][h].interpolated["data"][k]
                             index = unsqueeze_and_expand(index, x)
-                            y_true[h][s].interpolated["data"][k] = x.gather(1, index)
+                            y_true[s][h].interpolated["data"][k] = x.gather(1, index)
                     # =========================================================
 
                 elif self._needs_chamfer:
-                    index = y_pred[h][s].nearest_neighbor(y_true[h][s])
-                    y_pred[h][s].vertex_data["chamfer_index"] = index
+                    index = y_pred[s][h].nearest_neighbor(y_true[s][h])
+                    y_pred[s][h].vertex_data["chamfer_index"] = index
 
-                    index = y_true[h][s].nearest_neighbor(y_pred[h][s])
-                    y_true[h][s].vertex_data["chamfer_index"] = index
+                    index = y_true[s][h].nearest_neighbor(y_pred[s][h])
+                    y_true[s][h].vertex_data["chamfer_index"] = index
 
     def _sample_points_curv_data(
         self,

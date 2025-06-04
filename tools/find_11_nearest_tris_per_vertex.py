@@ -1,7 +1,7 @@
 
 import torch
 import brainnet.mesh.topology
-from brainnet.mesh.surface import TemplateSurfaces
+from brainnet.mesh.surface import Surface
 
 import brainsynth
 import nibabel as nib
@@ -22,7 +22,7 @@ topologies = brainnet.mesh.topology.get_recursively_subdivided_topology(
 
 top = topologies[-2]
 
-sphere = TemplateSurfaces(
+sphere = Surface(
             torch.tensor(nib.freesurfer.read_geometry(brainsynth.resources_dir / "sphere-reg.srf")[0][:top.n_vertices],
                          dtype=torch.float), top)
 

@@ -11,8 +11,11 @@ global METRIC
 
 RUNS = ["t1w-1mm", "t1w-1mm-noUC"]
 RUNS = ["synth-random", "synth-random-clinical"]
+
+RUNS = ["synth-random"]
 SUBSET = "validation"
 CHECKPOINTS = [600, 620, 640, 660, 680, 700, 720, 740, 760, 780, 800]
+CHECKPOINTS = [800]
 METRIC = "chamfer"
 
 
@@ -69,6 +72,24 @@ for k, v in runs.items():
     print()
     idx = find_best(v)
     print("\n")
+
+
+for k, v in runs.items():
+    idx = best[k]
+    print(k)
+    values = v.loc[idx, pd.IndexSlice[HEMI, AFFINE, METRIC]].sort_values(
+        ascending=False
+    )
+    print(values[:10])
+    subs = values.index[:10]
+    subs = list(zip(subs.get_level_values("dataset"), subs.get_level_values("subject")))
+    filename = f"topofit_subjects_{k}.csv"
+
+    with open(filename, "w") as f:
+        csv_writer = csv.writer(f)
+        for row in subs:
+            csv_writer.writerow(row)
+
 
 names = df.index.unique(level="dataset")
 data = [df.loc[k]["white", "chamfer"] for k in names]

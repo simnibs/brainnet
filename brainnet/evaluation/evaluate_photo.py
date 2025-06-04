@@ -32,7 +32,6 @@ from brainsynth.prepare_freesurfer_data import align_with_identity_affine
 import surfa
 from nibabel.affines import apply_affine
 from brainsynth import Synthesizer
-import monai
 
 f = trainer.model.heads.surface.topologies[0].faces
 img = nib.load("/home/jesperdn/nobackup/photo/native_ras_lr_flip_1mm_2.nii.gz")

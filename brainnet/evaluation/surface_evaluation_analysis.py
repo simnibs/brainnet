@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 root_dir = Path("/mnt/scratch/personal/jesperdn/")
 
-subdir = {"topofit-ds": "topofit", "topofit-ours": "topofit-ours", "v2c-flow": "vox2cortex"}
+subdir = {"topofit-ds": "topofit-ds", "topofit-ours": "topofit-ours", "v2c-flow": "vox2cortex"}
 
 
 def assd(a,b):
@@ -19,7 +19,7 @@ def hausdorff(a,b, p=90):
 metrics = dict(assd=assd, hd90=hausdorff)
 
 subset = "train"
-contrast = "synth_1mm"
+contrast = "synth-1mm"
 
 model = "topofit-ours"
 d = root_dir / subdir[model]  / contrast / subset

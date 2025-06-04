@@ -115,7 +115,7 @@ class SoftMaskedSupervisedLoss(SupervisedLoss):
 class SurfaceLossHandler:
     @staticmethod
     def extract_surface_data(data):
-        return data["surface"]
+        return data  # data["surfaces"]
 
     def average_over_hemispheres(self, loss_fn, y_pred, y_true=None, **kwargs):
         """Average loss over hemispheres."""
@@ -144,9 +144,4 @@ class SurfaceSupervisedLoss(SupervisedLoss, SurfaceLossHandler):
         super().__init__(*args, **kwargs)  # init of SupervisedLoss!
 
     def forward(self, y_pred, y_true, **kwargs):
-        return self.average_over_hemispheres(
-            super().forward,
-            y_pred,
-            y_true,
-            **kwargs,
-        )
+        return self.average_over_hemispheres(super().forward, y_pred, y_true, **kwargs)

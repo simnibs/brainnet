@@ -4,6 +4,7 @@ import torch
 import brainnet.mesh.topology
 from brainnet.mesh.surface import load_deepsurfer_template, Surface
 from brainnet.modules.graph import layers
+from brainnet.dict_utils import swap_levels
 
 
 class GenericSurfaceModule(torch.nn.Module):
@@ -252,7 +253,7 @@ class SurfaceModule(GenericSurfaceModule):
     def forward(
         self,
         features: dict[str, torch.Tensor],
-        template_vertices: dict[str, torch.Tensor],
+        template: dict[str, torch.Tensor],
     ):
         """
         Faces can be retrieved from
@@ -285,11 +286,12 @@ class SurfaceModule(GenericSurfaceModule):
         self.set_image_center(last_feature_map)
 
         dtype = last_feature_map.dtype
-        template_vertices = {k: v.to(dtype) for k, v in template_vertices.items()}
+        template = {k: v.to(dtype) for k, v in template.items()}
 
-        return {
-            h: self._forward_hemi(h, features, v) for h, v in template_vertices.items()
-        }
+        out = {h: self._forward_hemi(h, features, v) for h, v in template.items()}
+
+        # return as {surface: {hemi: ...}}
+        return swap_levels(out)
 
     def make_surface(self, hemi, vertices, vertex_data):
         s = Surface(vertices, self.out_topology[hemi])
@@ -299,7 +301,7 @@ class SurfaceModule(GenericSurfaceModule):
     def _forward_hemi(
         self, hemi: str, features: dict[str, torch.Tensor], vertices: torch.Tensor
     ):
-        """Predict placement of white matter surface and pial surface.."""
+        """Predict placement of white matter surface and pial surface."""
         white_v, white_u = self._estimate_white(features, vertices)
         white = self.make_surface(hemi, white_v, dict(sigma=white_u))
         pial_v, pial_u = self._esimate_pial(features, white.vertices)

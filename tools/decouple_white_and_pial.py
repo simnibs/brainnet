@@ -5,7 +5,7 @@ import tqdm
 import torch
 
 import brainsynth
-from brainnet.mesh.surface import TemplateSurfaces
+from brainnet.mesh.surface import Surface
 from brainnet.mesh.topology import get_recursively_subdivided_topology
 
 # rsync to /mnt/projects:
@@ -28,7 +28,7 @@ for res in (4, 5, 6):
 
     templates = {
         h: {
-            s: TemplateSurfaces(torch.zeros(t.n_vertices, 3), t)
+            s: Surface(torch.zeros(t.n_vertices, 3), t)
             for s in surface_names
         }
         for h, t in topology.items()

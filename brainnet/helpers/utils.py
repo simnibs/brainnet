@@ -1,5 +1,3 @@
-import argparse
-import importlib
 from pathlib import Path
 from typing import Any, Callable
 import torch
@@ -13,51 +11,6 @@ import brainnet.config
 from brainnet.config.base import EventAction
 from brainnet import event_handlers
 from brainnet.modules.criterion import CriterionAggregator
-
-
-def import_train_parameters(model):
-    return importlib.import_module(".train_parameters", f"brainnet.config.{model}")
-
-
-def train(
-    model: str, specs_name: str, create_trainer: Callable, no_wandb: bool = False
-):
-    """
-
-    python brainnet/train/topofit.py synth_1mm --no-wandb
-
-    args = brainnet.train.utilities.argparser_topofit(
-        "brainnet/train/topofit.py t1w_1mm --no-wandb".split()
-    )
-
-    """
-
-    print(f"Using training specs: {specs_name}", end="\n\n")
-
-    train_parameters = import_train_parameters(model)
-    specs = importlib.import_module(f".{specs_name}", f"brainnet.config.{model}")
-
-    try:
-        PHASES = dict(OVERRIDE=getattr(specs, "OVERRIDE"))
-        PHASES = specs.PHASES if PHASES is None else PHASES
-    except AttributeError:
-        PHASES = specs.PHASES
-
-    for name, phase in PHASES.items():
-        print(f"STARTING TRAINING PHASE: {name}")
-        print(79 * "=")
-        print(f"Specification\n    {phase}")
-        print(f"Defaults\n    {specs.DEFAULTS}")
-
-        setup = train_parameters.TrainParameters(**(specs.DEFAULTS | phase))
-        trainer, dataloader = create_trainer(setup, no_wandb)
-        trainer.run(
-            dataloader,
-            epoch_length=setup.trainer_epoch_length or len(iter(dataloader)),
-            max_epochs=setup.max_epochs,
-        )
-        print(f"TRAINING PHASE DONE: {name}", end="\n\n")
-        print(79 * "=")
 
 
 def print_memory_usage(device):
@@ -280,14 +233,11 @@ def write_example_to_disk(
     engine: Engine,
     evaluators: dict[str, Engine],
     config: brainnet.config.ResultsParameters,
-    writer=event_handlers.write_example,
+    writer,
 ):
     if config.save_example_on is not None:
         engine.add_event_handler(
-            config.save_example_on,
-            writer,
-            evaluators=evaluators,
-            config=config,
+            config.save_example_on, writer, evaluators=evaluators, config=config
         )
 
 
@@ -331,69 +281,3 @@ def add_evaluation_event(
     )
 
     return evaluator
-
-
-def parse_args(argv):
-    description = "Main interface to training a BrainNet model. For convenience, a few parameters are exposed on the command line. Values provided here will overwrite those set in the configuration file."
-    parser = argparse.ArgumentParser(
-        prog="BrainNetTrainer",
-        description=description,
-    )
-    parser.add_argument(
-        "config", help="Configuration file defining the parameters for training."
-    )
-    parser.add_argument(
-        "--load-checkpoint",
-        default=None,
-        type=int,
-        help="Resume training from this checkpoint.",
-    )
-    parser.add_argument(
-        "--max-epochs",
-        default=None,
-        type=int,
-        help="Terminate training when this number of epochs is reached.",
-    )
-    parser.add_argument(
-        "--no-wandb",
-        action="store_true",
-        default=False,
-        help="Disable logging with wandb.",
-    )
-    # parser.add_argument(
-    #     "--resume",
-    #     type=str,
-    #     default=None,
-    #     help="Resume from run.",
-    # )
-
-    return parser.parse_args(argv[1:])
-
-
-def argparser_topofit(argv):
-    parser = argparse.ArgumentParser(
-        prog="TopoFit Trainer",
-        description="Main interface to training a TopoFit model.",
-    )
-    parser.add_argument(
-        "specs", help="Configuration file defining the parameters for training."
-    )
-    # parser.add_argument(
-    #     "--load-checkpoint",
-    #     default=None,
-    #     type=int,
-    #     help="Resume training from this checkpoint.",
-    # )
-    # parser.add_argument(
-    #     "--max-epochs",
-    #     default=None,
-    #     type=int,
-    #     help="Terminate training when this number of epochs is reached.",
-    # )
-    parser.add_argument(
-        "--no-wandb",
-        action="store_true",
-        default=False,
-        help="Disable logging with wandb.",
-    )
-    return parser.parse_args(argv[1:])

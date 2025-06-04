@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
     subdir = {"topofit-ds": "topofit", "topofit-ours": "topofit-ours", "v2c-flow": "vox2cortex"}
 
-    d = root_dir / subdir[model] / "t2w" / "validation"
+    d = root_dir / subdir[model] / "synth-1mm" / "train"
 
     print(d)
 
@@ -136,12 +136,12 @@ if __name__ == "__main__":
     print(f"wrote {d / ds / sub / 'distances.npz'}")
     # np.savez("distances2.npz", **data)
 
-    # data = {}
-    # for surf in ("white", "pial"):
-    #     for h in ("lh", "rh"):
-    #         v, f = nib.freesurfer.read_geometry(d / ds / sub / filenames[model][h,surf])
-    #         s = Surface(v,f)
-    #         sif = np.unique(s.self_intersections().ravel()).size
-    #         data[f"{surf}_{h}"] = sif / s.n_faces * 100
+    data = {}
+    for surf in ("white", "pial"):
+        for h in ("lh", "rh"):
+            v, f = nib.freesurfer.read_geometry(d / ds / sub / filenames[model][h,surf])
+            s = Surface(v,f)
+            sif = np.unique(s.self_intersections().ravel()).size
+            data[f"{surf}_{h}"] = sif / s.n_faces * 100
 
-    # np.savez(d / ds / sub / "self_intersections.npz", **data)
+    np.savez(d / ds / sub / "self_intersections.npz", **data)

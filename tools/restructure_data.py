@@ -1,5 +1,7 @@
 from pathlib import Path
 
+"""Restructure data from flat to tree layout."""
+
 def process_dir(d, root_dest=None):
     # root = d if root is None else root
 

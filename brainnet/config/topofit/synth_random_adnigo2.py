@@ -1,11 +1,14 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
-    datasets=["ABIDE"],
-    # evaluate_on_every=1,
-    # save_example_on_every=1,
-    # run_suffix="TEST",
     load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random/checkpoint/state_checkpoint_00400.pt",
+    datasets=["ADNI-GO2"],
+    images_train=["flair"],
+    images_validation=["flair"],
+    builder_train="PredictionBuilder",
+    builder_validation="PredictionBuilder",
+    # selectable_images_train="flair",
+    # selectable_images_validation="flair",
 )
 
 PHASES = {

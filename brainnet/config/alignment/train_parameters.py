@@ -28,19 +28,10 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         # =====================================================================
         # DATASET
         # =====================================================================
-
         self.dataset = dict(
-            train=DatasetConfig(
-                **self.dataset_kwargs["train"],
-                target_vertices=None,
-                template_surface=None,
-                return_affine=True,
-            ),
+            train=DatasetConfig(**self.dataset_kwargs["train"], surfaces=None),
             validation=DatasetConfig(
-                **self.dataset_kwargs["validation"],
-                target_vertices=None,
-                template_surface=None,
-                return_affine=True,
+                **self.dataset_kwargs["validation"], surfaces=None
             ),
         )
 
@@ -82,9 +73,6 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 case "synth", "random":
                     self.builder_validation = "CropSelect"
 
-        img_sel_train = None if self.contrast == "synth" else [self.contrast]
-        img_sel_val = ["t1w"] if self.contrast == "synth" else [self.contrast]
-
         self.synthesizer = dict(
             train=SynthesizerConfig(
                 builder=self.builder_train,
@@ -92,7 +80,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
                 # photo_mode = False
-                selectable_images=img_sel_train,
+                selectable_images=self.selectable_images_train,
                 device=self.device,
                 **self.builder_train_kw,
             ),
@@ -102,7 +90,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
                 # photo_mode = False
-                selectable_images=img_sel_val,
+                selectable_images=self.selectable_images_validation,
                 device=self.device,
                 **self.builder_validation_kw,
             ),
