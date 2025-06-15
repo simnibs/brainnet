@@ -195,12 +195,9 @@ class Criterion(torch.nn.Module):
                 if self._needs_sampling:
                     # implies that we require chamfer
 
+                    self._sample_points_curv_data(y_pred[s][h])
                     self._sample_points_curv_data(
-                        y_pred[s][h],
-                    )
-                    self._sample_points_curv_data(
-                        y_true[s][h],
-                        taubin_smoothing=smooth_y_true,
+                        y_true[s][h], taubin_smoothing=smooth_y_true
                     )
 
                     # NOTE these are indices into y_true!

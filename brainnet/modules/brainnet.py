@@ -6,13 +6,12 @@ import torch
 
 import brainsynth
 import brainsynth.transforms
-from brainsynth.transforms.utilities import channel_last
-from brainsynth.transforms.spatial import ScaleAndSquare
+from brainsynth.transforms.utils import channel_last
 
 import brainnet.modules.head
 import brainnet.mesh.topology
 from brainnet.mesh.surface import Surface
-from brainnet.modules.graph.modules import UNetTransform
+from brainnet.modules.graph import UNetDeformBlock
 from brainnet.sphere_utils import change_sphere_size
 
 
@@ -28,7 +27,7 @@ class BrainReg(torch.nn.Module):
         self.body = body  # image feature extractor, e.g., unet
         self.svf = svf  # translates features to a stationary velocity field (SVF).
         self.svf_scales = body.decoder_scale[-len(svf) :]
-        self.SAS: None | ScaleAndSquare = None
+        self.SAS: None | brainsynth.transforms.ScaleAndSquare = None
 
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -266,14 +265,12 @@ class BrainInflate(torch.nn.Module):
         )
         UNetTransform_kwargs = dict(channels=channels, n_convolutions=2)
 
-        self.transform = UNetTransform(
+        self.transform = UNetDeformBlock(
             in_channels, out_channels, self.topologies, **UNetTransform_kwargs
         )
 
     def set_surfaces(self, vertices):
-        self.surface = {
-            k: Surface(v, self.topology[k]) for k, v in vertices.items()
-        }
+        self.surface = {k: Surface(v, self.topology[k]) for k, v in vertices.items()}
 
     def normalize_coordinates(self):
         """Normalize coordinates by centering the surface on the origin and
@@ -375,7 +372,6 @@ class SphericalReg(torch.nn.Module):
         #     brainnet.resources_dir / f"template.{n_topologies - 1}.nn_tri.pt"
         # ).to(self.device)
 
-
         # channels = dict(
         #     encoder=[128, 128, 128],
         #     ubend=128,
@@ -388,7 +384,7 @@ class SphericalReg(torch.nn.Module):
         )
         UNetTransform_kwargs = dict(channels=channels, n_convolutions=2)
 
-        self.transform = UNetTransform(
+        self.transform = UNetDeformBlock(
             in_channels, out_channels, self.topologies, **UNetTransform_kwargs
         )
 
@@ -403,7 +399,7 @@ class SphericalReg(torch.nn.Module):
         self.topology["rh"].reverse_face_orientation()
 
     def set_surfaces(self, vertices):
-        for k,v in vertices.items():
+        for k, v in vertices.items():
             self.surface[k].vertices = v
             self.surface[k].normalize_to_bounding_box()
 
@@ -561,7 +557,6 @@ class SphericalReg(torch.nn.Module):
 #         features = self.unet(image)
 
 #         features = self.head(features)
-
 
 
 #         saliency = {}

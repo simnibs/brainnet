@@ -10,10 +10,8 @@ from brainnet.config import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum, swap_levels
 import brainnet.helpers.utils
 
-from brainnet import event_handlers
+from brainnet import event_handlers, Surface
 import brainnet.initializers
-from brainnet.mesh.surface import Surface  # , load_deepsurfer_template
-from brainnet.modules.head import surface_modules
 
 # Define some recursive versions of functions
 recursive_apply_affine = recursive_function(Surface.apply_affine)
@@ -44,15 +42,7 @@ class Step:
                 data[typ][hemi] = template[typ][hemi]
 
     def set_prediction_topologies(self):
-        module = [
-            i for i in self.model.heads.values() if isinstance(i, surface_modules)
-        ]
-        if len(module) == 0:
-            return {}
-
-        assert len(module) == 1
-        module = module[0]
-        self.topology = copy.deepcopy(module.out_topology)
+        self.topology = copy.deepcopy(self.model.graph.out_topology)
 
     def get_surfaces(self, vertices, vertex_data: dict | None = None):
         surfaces = {}

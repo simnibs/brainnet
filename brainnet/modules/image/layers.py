@@ -1,27 +1,6 @@
 import itertools
 
 import torch
-from brainnet.modules.blocks import ConvolutionBlock
-
-class SuperResolution(torch.nn.Module):
-    def __init__(self, in_channels: int = 1, device=None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.device = torch.device(device)
-
-        self.transform = torch.nn.Sequential(
-            ConvolutionBlock(3, in_channels, 32, norm=False),
-            ConvolutionBlock(3, 32, 32, norm=False),
-            ConvolutionBlock(3, 32, 32, norm=False),
-            ConvolutionBlock(3, 32, 32, norm=False),
-        )
-        self.transform_final = ConvolutionBlock(3, 32, 6, norm=False, activation=False)
-        self.subpixel_conv = SubpixelConvolution(up_factor=6, up_dims=1, spatial_dims=3)
-
-    def forward(self, image):
-        features = self.transform(image)
-        features = self.transform_final(features)
-        subpixel = self.subpixel_conv(features)
-        return subpixel
 
 # class DenseConvolution(torch.nn.Module):
 #     def __init__(self, in_channels: int = 1,*args, **kwargs):
@@ -50,8 +29,16 @@ class SuperResolution(torch.nn.Module):
 #         for conv in self.transform:
 #             all_features = torch.cat((all_features, conv(all_features)), dim=1)
 
+
 class SubpixelConvolution(torch.nn.Module):
-    def __init__(self, up_factor: int = 2, spatial_dims: int = 3, up_dims: int | None = None, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        up_factor: int = 2,
+        spatial_dims: int = 3,
+        up_dims: int | None = None,
+        *args,
+        **kwargs,
+    ) -> None:
         """Sub-pixel convolution from Shi (2016).
 
         up_factor=2; spatial_dims=2, up_dims=2
@@ -112,7 +99,6 @@ class SubpixelConvolution(torch.nn.Module):
         Georgescu (2023). Convolutional Neural Networks with Intermediate Loss
             for 3D Super-Resolution of CT and MRI Scans.
             https://arxiv.org/pdf/2001.01330
-
         Bouter (2022). Deep learning-based single image super-resolution for
             low-field MR brain images.
             https://www.nature.com/articles/s41598-022-10298-6
@@ -121,10 +107,13 @@ class SubpixelConvolution(torch.nn.Module):
         """
         super().__init__(*args, **kwargs)
         up_dims = spatial_dims if up_dims is None else up_dims
-        self.up_scales = tuple(up_factor if i < up_dims else 1 for i in range(spatial_dims-1,-1,-1))
+        self.up_scales = tuple(
+            up_factor if i < up_dims else 1 for i in range(spatial_dims - 1, -1, -1)
+        )
         offsets = tuple(itertools.product(*[tuple(range(s)) for s in self.up_scales]))
-        self.slices = tuple(tuple(slice(j,None,s) for j,s in zip(i,self.up_scales)) for i in offsets )
-
+        self.slices = tuple(
+            tuple(slice(j, None, s) for j, s in zip(i, self.up_scales)) for i in offsets
+        )
 
     def forward(self, image):
         """
@@ -147,16 +136,15 @@ class SubpixelConvolution(torch.nn.Module):
         _type_
             _description_
         """
-        B,C,*SpaDim = image.size()
-        up_size = (B,1,*tuple(i*j for i,j in zip(self.up_scales, SpaDim)))
+        B, C, *SpaDim = image.size()
+        up_size = (B, 1, *tuple(i * j for i, j in zip(self.up_scales, SpaDim)))
 
         y = torch.zeros(up_size, dtype=image.dtype, device=image.device)
 
-        for i,sl in enumerate(self.slices):
+        for i, sl in enumerate(self.slices):
             y[..., *sl] = image[:, i]
 
         return y
-
 
 
 # x = torch.rand((1,2,3,3))

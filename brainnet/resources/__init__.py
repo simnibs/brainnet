@@ -1,23 +1,33 @@
-from nibabel.affines import apply_affine
-import numpy as np
+import json
+from pathlib import Path
 
-import brainnet
+import torch
 
-class Resources:
-    def __init__(self):
-        self.dir = brainnet.resources_dir
+RESOURCES_DIR = Path(__file__).parent
+PRETRAINED_MODELS_DIR = RESOURCES_DIR / "models"
 
-    def load_affine_lh_to_rh(self):
-        return np.load(self.dir / "affine-lh-to-rh.npy")
 
-    def load_template_vertices(self):
-        return np.load(self.dir / "vertices-white-lh.npy")
+def load_pretrained_state(model, contrast, resolution, device):
+    return torch.load(
+        PRETRAINED_MODELS_DIR / model / f"{contrast}_{resolution}_state.pt",
+        map_location=device,
+        weights_only=True,
+    )
 
-    def get_template_vertices(self):
-        """Template vertices are in RAS coordinate system in MNI305 (FreeSurfer
-        Talairach). We store the vertices for the left hemisphere along with
-        the affine to transform between left and right hemispheres.
-        """
-        vertices = dict(lh = self.load_template_vertices())
-        vertices["rh"] = apply_affine(self.load_affine_lh_to_rh(), vertices["lh"])
-        return vertices
+
+def load_pretrained_config(model, contrast, resolution):
+    with open(
+        PRETRAINED_MODELS_DIR / model / f"{contrast}_{resolution}_config.json", "r"
+    ) as f:
+        config = json.load(f)
+    return config
+
+
+#     def load_preprocessor(self):
+#         config = PredictionConfig(
+#             "PredictionBuilder",
+#             self.config["preprocessor"]["out_size"],
+#             self.config["preprocessor"]["out_center_str"],
+#             device=self.device,
+#         )
+#         return Synthesizer(config)
