@@ -301,6 +301,10 @@ def write_curv(surface: brainnet.Surface, filename: Path | str):
             )
 
 
+def _tensor_to_numpy(t, dtype=torch.float):
+    return t.detach().to(dtype).cpu().numpy()
+
+
 def write_surface(
     surface: brainnet.Surface,
     filename: Path | str,
@@ -309,11 +313,11 @@ def write_surface(
     """Write surface geometry as a FreeSurfer surface file."""
     vol_info = vol_info or FREESURFER_VOLUME_INFO
     nbatch = len(surface.vertices)
-    f = surface.faces.detach().to(torch.int).cpu().numpy()
+    f = _tensor_to_numpy(surface.get_faces(), torch.int)
     for i, v in enumerate(surface.vertices):
         nib.freesurfer.write_geometry(
             f"{filename}_{i:02d}" if nbatch > 1 else filename,
-            v.detach().to(torch.float).cpu().numpy(),
+            _tensor_to_numpy(v),
             f,
             volume_info=vol_info,
         )
@@ -413,20 +417,14 @@ def write_volume(
     batch = zip(volume.detach(), affine.detach())
     for i, (vol, aff) in enumerate(batch):
         if vol.is_floating_point():
-            # v = v.float()
-            # ql = v.amin()
-            # qu = v.amax()
-            # v = torch.clip((v - ql) / (qu - ql), 0.0, 1.0)
-
             # v = (255 * channel_last(v)).to(torch.uint8)
-            vol = vol.float()
+            vol = _tensor_to_numpy(channel_last(vol))
         else:
             # assume a one-hot encoded image
             vol = vol.to(torch.uint8).argmax(0)[None] if vol.shape[0] > 1 else vol
-            vol = vol.to(torch.uint8)
+            vol = _tensor_to_numpy(channel_last(vol), torch.uint8)
 
-        vol = channel_last(vol).cpu().numpy()
-        aff = aff.cpu().numpy()
+        aff = _tensor_to_numpy(aff)
         nib.Nifti1Image(vol, aff).to_filename(out_dir / filename.format(image_no=i))
 
 

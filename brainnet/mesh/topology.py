@@ -1,25 +1,17 @@
 import torch
 
 
-class Topology:
+class Topology(torch.nn.Module):
     def __init__(
         self,
         faces: torch.Tensor,
         edge_pairs: torch.Tensor | None = None,
         retain_edge_order: bool = True,
-        device: str | torch.device | None = None,
     ):
-        match device:
-            case str():
-                self.device = torch.device(device)
-            case None:
-                self.device = faces.device
-            case torch.device():
-                self.device = device
-            case _:
-                raise ValueError()
+        super().__init__()
+
+        self.register_buffer("faces", faces, persistent=False)
         self.subdivision_factor = 4
-        self.faces = faces.to(self.device)
         self.dtype = self.faces.dtype
         self.n_faces = self.faces.shape[0]
         self.vertices_per_face = self.faces.shape[1]
@@ -27,13 +19,13 @@ class Topology:
         self._reversed_face_order = (0, 2, 1)
 
         if edge_pairs is None:
-            self.edge_pairs = torch.tensor(
-                [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=self.device
-            )
-        else:
-            self.edge_pairs = edge_pairs
+            edge_pairs = torch.tensor([[0, 1], [1, 2], [2, 0]], dtype=torch.int)
+        self.register_buffer("edge_pairs", edge_pairs, persistent=False)
 
         self.set_topology_information(retain_edge_order)
+
+    def device(self):
+        return self.faces.device
 
     def reverse_face_orientation(self):
         self.faces = self.faces[:, self._reversed_face_order]
@@ -131,12 +123,12 @@ class Topology:
         """
         s = self.faces.ravel().sort()
 
-        one = torch.tensor([1], device=self.device)
+        one = torch.tensor([1], device=self.device())
         indptr = s.values.diff(prepend=one, append=one).nonzero().squeeze(-1)
         counts = s.values.bincount()
 
         # face indices
-        indices = torch.arange(self.n_faces, device=self.device).repeat_interleave(
+        indices = torch.arange(self.n_faces, device=self.device()).repeat_interleave(
             self.vertices_per_face
         )[s.indices]
 
@@ -184,7 +176,7 @@ class Topology:
         edges : torch.Tensor
             shape (# edges, 2)
         """
-        vs = torch.arange(self.vertices_per_face, device=self.device)
+        vs = torch.arange(self.vertices_per_face, device=self.device())
         self.vertex_opposite_edge = torch.cat(
             [
                 vs[torch.isin(vs, e, assume_unique=True, invert=True)]
@@ -211,7 +203,7 @@ class Topology:
         if retain_edge_order:
             # remap the hashed edges to 0, ..., n_edges-1 preserving original
             # order of the edges
-            x = torch.zeros(h.shape, dtype=self.dtype, device=self.device)
+            x = torch.zeros(h.shape, dtype=self.dtype, device=self.device())
             hb = h.argsort(stable=True).to(self.dtype)
             x[hb] = hb[::2].repeat_interleave(2)  # each edge occurs exactly twice
             u, idx = x.unique(return_inverse=True)
@@ -233,7 +225,7 @@ class Topology:
         #     ind_sorted = idx.argsort(stable=True)
         #     # each edge occurs twice so we do not need the counts
         #     cum_sum = torch.arange(
-        #         0, len(edges), 2, dtype=self.dtype, device=self.device
+        #         0, len(edges), 2, dtype=self.dtype, device=self.device()
         #     )
         #     # the more general solution
         #     # cum_sum = counts.cumsum(0)
@@ -246,7 +238,7 @@ class Topology:
         #     # )
 
         #     mapper = torch.zeros(h.amax() + 1, dtype=self.dtype)
-        #     mapper[u_orig_order] = torch.arange(len(edges) / 2, dtype=self.dtype, device=self.device)
+        #     mapper[u_orig_order] = torch.arange(len(edges) / 2, dtype=self.dtype, device=self.device())
         #     faces_to_edges = mapper[h].reshape(self.n_faces, 3)
 
         # else:
@@ -268,18 +260,22 @@ class Topology:
         # s2 = s1[a2] # the sorted edges
 
         faces_enum = (
-            torch.arange(self.n_faces, dtype=self.dtype, device=self.device)[:, None]
+            torch.arange(self.n_faces, dtype=self.dtype, device=self.device())[:, None]
             .expand_as(self.faces)
             .ravel()
         )
         face_adjacency = faces_enum[a0[a1[a2]]].reshape(-1, 2)
 
-        self.vertex_adjacency = self.unique_edges = u_edges
-        self.face_adjacency = face_adjacency
-        self.faces_to_edges = faces_to_edges
-
-        self.pool_index_reduce = u_edges_prev_order[:, 0]
-        self.pool_index_gather = u_edges_prev_order[:, 1]
+        self.register_buffer("vertex_adjacency", u_edges, persistent=False)
+        self.register_buffer("unique_edges", u_edges, persistent=False)
+        self.register_buffer("face_adjacency", face_adjacency, persistent=False)
+        self.register_buffer("faces_to_edges", faces_to_edges, persistent=False)
+        self.register_buffer(
+            "pool_index_reduce", u_edges_prev_order[:, 0], persistent=False
+        )
+        self.register_buffer(
+            "pool_index_gather", u_edges_prev_order[:, 1], persistent=False
+        )
 
         # Either array can be used as reduce or gather
 
@@ -292,8 +288,12 @@ class Topology:
         #   x.index_reduce_(
         #       1, reduce_index, gather_index, reduce="mean", include_self=True
         #   )
-        self.conv_index_reduce = self.vertex_adjacency.ravel()
-        self.conv_index_gather = self.vertex_adjacency.flip(1).ravel()
+        self.register_buffer(
+            "conv_index_reduce", self.vertex_adjacency.ravel(), persistent=False
+        )
+        self.register_buffer(
+            "conv_index_gather", self.vertex_adjacency.flip(1).ravel(), persistent=False
+        )
 
     def subdivide_faces(self):
         raise NotImplementedError("This method should be defined in a subclass.")
@@ -315,7 +315,7 @@ class Topology:
         assert n >= 0
 
         topology = cls(**kwargs)
-        topologies = [topology]
+        topologies = torch.nn.ModuleList([topology])
         if "faces" in kwargs:
             del kwargs["faces"]
         for _ in range(0, n):
@@ -330,13 +330,10 @@ class DeepSurferTopology(Topology):
         self,
         faces: torch.Tensor | None = None,
         edge_pairs: str | torch.Tensor | None = None,
-        device: str | torch.device | None = None,
     ):
         """Topology from the DeepSurfer package. This is defined for the left
         hemisphere. Hence, to be valid for right hemisphere, we need to reverse
         the vertex order."""
-        device = torch.device(device) if device is not None else device
-
         if faces is None:
             faces = torch.tensor(
                 [
@@ -462,16 +459,10 @@ class DeepSurferTopology(Topology):
                     [60, 61, 59],
                 ],
                 dtype=torch.int,
-                device=device,
             )
-        else:
-            if device is None:
-                device = faces.device
 
-        edge_pairs = torch.tensor(
-            [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=device
-        )
-        super().__init__(faces, edge_pairs, retain_edge_order=False, device=device)
+        edge_pairs = torch.tensor([[0, 1], [1, 2], [2, 0]], dtype=torch.int)
+        super().__init__(faces, edge_pairs, retain_edge_order=False)
 
     def subdivide_faces(self):
         """Subdivide all faces, increasing the face count by a factor of four.
@@ -560,10 +551,7 @@ class FsAverageTopology(Topology):
         self,
         faces: torch.Tensor | None = None,
         edge_pairs: str | torch.Tensor | None = None,
-        device: str | torch.device | None = None,
     ):
-        device = torch.device(device) if device is not None else device
-
         if faces is None:
             faces = torch.tensor(
                 [
@@ -589,16 +577,10 @@ class FsAverageTopology(Topology):
                     [7, 11, 8],
                 ],
                 dtype=torch.int,
-                device=device,
             )
-        else:
-            if device is None:
-                device = faces.device
 
-        edge_pairs = torch.tensor(
-            [[2, 0], [1, 2], [0, 1]], dtype=torch.int, device=device
-        )
-        super().__init__(faces, edge_pairs, retain_edge_order=True, device=device)
+        edge_pairs = torch.tensor([[2, 0], [1, 2], [0, 1]], dtype=torch.int)
+        super().__init__(faces, edge_pairs, retain_edge_order=True)
 
     @staticmethod
     def reorder_subdivided_faces(faces):
@@ -640,7 +622,7 @@ class FsAverageTopology(Topology):
             self.n_vertices,
             4 * self.n_faces,
             dtype=self.faces.dtype,
-            device=self.device,
+            device=self.device(),
         )
 
         # the vertex to be inserted at each edge

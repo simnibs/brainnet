@@ -1,11 +1,7 @@
 from ignite.engine import Events
 
 from brainnet import config
-from brainnet.event_handlers import (
-    set_loss_weight,
-    optimizer_multiply_lr,
-    optimizer_reset,
-)
+from brainnet.event_handlers import optimizer_multiply_lr
 
 loss_events = []
 optimizer_events = [

@@ -14,13 +14,26 @@ import brainnet.helpers.utils
 from brainnet.evaluation.utilities import MetricAggregator
 
 
-def create_evaluator(model, setup, subset: str = "validation"):
+def restrict_datasets_(setup, subset, datasets=None):
+    if datasets is not None:
+        setup.dataset[subset].dataset_kwargs = {
+            k: v
+            for k, v in setup.dataset[subset].dataset_kwargs.items()
+            if k in datasets
+        }
+    assert len(setup.dataset[subset].dataset_kwargs) > 0
+
+
+def create_evaluator(
+    model, setup, subset: str = "validation", datasets: list[str] | tuple | None = None
+):
     model_helper = importlib.import_module(f"brainnet.helpers.{model}")
 
     criterion = brainnet.initializers.init_criterion(setup.criterion)[subset]
     model = model_helper.setup_model(setup)
     synth = brainnet.initializers.init_synthesizer(setup.synthesizer)[subset]
 
+    restrict_datasets_(setup, subset, datasets)
     dataloaders = brainsynth.dataset.setup_dataloader(
         setup.dataset[subset], separate_datasets=True, **setup.dataloader
     )
@@ -39,14 +52,17 @@ def create_evaluator(model, setup, subset: str = "validation"):
     print("Setup completed.")
     print(setup)
 
+    print()
     print("Evaluation settings")
-    print(f"  Output dir    {out_dir}")
-    print(f"  Subset        {subset}", end="\n\n")
+    print(f"  Output dir        {out_dir}")
+    print(f"  Subset            {subset}", end="\n\n")
 
     return eval_step, dataloaders, out_dir
 
 
-def create_predictor(model, setup, subset: str = "validation"):
+def create_predictor(
+    model, setup, subset: str = "validation", datasets: list[str] | tuple | None = None
+):
     model_helper = importlib.import_module(f"brainnet.helpers.{model}")
 
     model = model_helper.setup_model(setup)
@@ -54,6 +70,7 @@ def create_predictor(model, setup, subset: str = "validation"):
     _valid_pred_contrasts = {"t1w", "t2w", "flair", "ct"}
 
     # We need the affine as well
+    restrict_datasets_(setup, subset, datasets)
     for v in setup.dataset[subset].dataset_kwargs.values():
         found = [i for i in _valid_pred_contrasts if i in v["images"]]
         n_found = len(found)
@@ -72,7 +89,9 @@ def create_predictor(model, setup, subset: str = "validation"):
         )
     )
 
-    pred_step = model_helper.PredictionStep(preprocessor, model, setup.enable_amp)
+    pred_step = model_helper.PredictionStep(
+        preprocessor, model, setup.enable_amp, setup.device
+    )
     write_step = model_helper.write_example_prediction
 
     to_load = dict(model=model)
@@ -112,10 +131,10 @@ def get_setup_at_checkpoint(specs_name, model, checkpoint):
     return tp.TrainParameters(**(specs.DEFAULTS | phase))
 
 
-def evaluate_checkpoint(model, specs_name, subset, checkpoint):
+def evaluate_checkpoint(model, specs_name, subset, checkpoint, datasets=None):
     setup = get_setup_at_checkpoint(specs_name, model, checkpoint)
 
-    eval_step, dataloaders, out_dir = create_evaluator(model, setup, subset)
+    eval_step, dataloaders, out_dir = create_evaluator(model, setup, subset, datasets)
     if not out_dir.exists():
         out_dir.mkdir(parents=True)
     metric = MetricAggregator()
@@ -151,7 +170,9 @@ def evaluate_checkpoint(model, specs_name, subset, checkpoint):
     print(f"Total time to evaluate {t_total:7.2f} s")
 
 
-def evaluate(model, specs, subset, checkpoints):
+def evaluate(
+    model, specs, subset, checkpoints, datasets: list[str] | tuple | None = None
+):
     """
 
     model = "topofit"
@@ -169,21 +190,32 @@ def evaluate(model, specs, subset, checkpoints):
 
     for checkpoint in checkpoints:
         print(f"Evaluating checkpoint {checkpoint:05d}")
-        evaluate_checkpoint(model, specs, subset, checkpoint)
+        evaluate_checkpoint(model, specs, subset, checkpoint, datasets)
 
 
-def predict(model, specs, subset, checkpoint, csv_file: str | None = None):
+def predict(
+    model,
+    specs,
+    subset,
+    checkpoint,
+    datasets: list[str] | tuple | None = None,
+    csv_file: str | None = None,
+):
     """
 
     args = parse_args("blabla alignment t1w_1mm 1500 validation".split())
 
     """
+    if csv_file is not None:
+        assert datasets is None, "Cannot specify `datasets` when using `csv_file`."
 
     setup = get_setup_at_checkpoint(specs, model, checkpoint)
-    pred_step, write_step, dataloaders = create_predictor(model, setup, subset)
+    pred_step, write_step, dataloaders = create_predictor(
+        model, setup, subset, datasets
+    )
 
     out_dir = setup.results.evaluation_dir / subset / f"checkpoint-{checkpoint:05d}"
-    print(f"Output dir    {out_dir}")
+    print(f"Output dir      {out_dir}")
 
     if csv_file is None:
         content = list(

@@ -25,11 +25,17 @@ class Step:
         preprocessor: None | brainsynth.Synthesizer,
         model,
         enable_amp: bool = False,
+        device: str | torch.device = "cpu",
     ) -> None:
+        device = torch.device(device)
+        if device.type == "cpu":
+            assert not enable_amp, "Cannot use AMP with device type 'cpu'."
+
         self.preprocessor = preprocessor
         self.model = model
+        self.model.to(device)
         self.enable_amp = enable_amp
-        self.device = self.model.device
+        self.device = device
         self.set_prediction_topologies()
 
     def update_surface_template(self, template, data):
@@ -42,7 +48,7 @@ class Step:
                 data[typ][hemi] = template[typ][hemi]
 
     def set_prediction_topologies(self):
-        self.topology = copy.deepcopy(self.model.graph.out_topology)
+        self.topology = self.model.graph.out_topology
 
     def get_surfaces(self, vertices, vertex_data: dict | None = None):
         surfaces = {}
@@ -83,13 +89,13 @@ class Step:
             return image, vox2ras, template, y_true
 
     def _amp_prediction(self, image: torch.Tensor, template: dict[str, torch.Tensor]):
-        with torch.autocast(self.model.device.type, enabled=self.enable_amp):
+        with torch.autocast(self.device.type, enabled=self.enable_amp):
             # y_pred = self.model(image, template)
 
-            features = self.model.body(image)
+            features = self.model.unet(image)
             # we cast to float32 during training
             features = recursive_float(features)
-            return self.model.forward_heads(features, template)["surface"]
+            return self.model.graph(features, template)
 
     def postprocess(self, y_pred):
         return y_pred
@@ -103,10 +109,11 @@ class TrainingStep(Step):
         criterion: brainnet.Criterion,
         optimizer: torch.optim.Optimizer,
         enable_amp: bool = False,
+        device: str | torch.device = "cpu",
         gradient_accumulation_steps: int = 1,
         freeze_body: bool = False,
     ) -> None:
-        super().__init__(preprocessor, model, enable_amp)
+        super().__init__(preprocessor, model, enable_amp, device)
         self.criterion = criterion
         self.optimizer = optimizer
         self.freeze_body = freeze_body
@@ -139,11 +146,11 @@ class TrainingStep(Step):
 
             if self.freeze_body:
                 with torch.no_grad():
-                    features = self.model.body(image)
+                    features = self.model.unet(image)
             else:
-                features = self.model.body(image)
+                features = self.model.unet(image)
             features = recursive_float(features)
-            y_pred = self.model.forward_heads(features, template)["surface"]
+            y_pred = self.model.graph(features, template)
 
             # Loss
             y_true = self.get_surfaces(y_true)
@@ -183,8 +190,9 @@ class EvaluationStep(Step):
         model,
         criterion: brainnet.Criterion,
         enable_amp: bool = False,
+        device: str | torch.device = "cpu",
     ):
-        super().__init__(preprocessor, model, enable_amp)
+        super().__init__(preprocessor, model, enable_amp, device)
         self.criterion = criterion
 
     def compute_loss(self, y_pred, y_true):
@@ -285,7 +293,8 @@ def write_example_event(
 
 
 def setup_model(setup):
-    return brainnet.initializers.init_model(setup.model)
+    return setup.model
+    # return brainnet.initializers.init_model(setup.model)
 
 
 def create_trainer(
@@ -315,6 +324,7 @@ def create_trainer(
         criterion["train"],
         optimizer,
         setup.enable_amp,
+        setup.device,
         setup.trainer_gradient_accumulation_steps,
         setup.UNET_FREEZE,
     )
@@ -323,6 +333,7 @@ def create_trainer(
         model,
         criterion["validation"],
         setup.enable_amp,
+        setup.device,
     )
     trainer = Engine(train_step)
 

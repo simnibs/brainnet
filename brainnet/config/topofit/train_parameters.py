@@ -4,7 +4,7 @@ from brainsynth.config import DatasetConfig, SynthesizerConfig
 
 from brainnet import config
 import brainnet.config.train_parameters
-from brainnet.modules import body, head
+from brainnet.networks import TopoFit
 
 
 @dataclass(kw_only=True)
@@ -115,27 +115,25 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             encoder_post=None,
             decoder_post=UNET_DECODER_CHANNELS_POST[self.contrast, self.resolution],
         )
-        unet = body.UNet(**unet_kwargs)
-
-        topofit_kwargs = dict(
-            in_channels=unet.num_features,
+        graph_kwargs = dict(
+            # in_channels=unet.num_features,
             in_order=TOPOFIT_ORDER_IN,
             out_order=TOPOFIT_ORDER_OUT,
             max_order=TOPOFIT_ORDER_MAX,
-            white_feature_maps=[unet.decoder_features]
-            * (TOPOFIT_ORDER_MAX - TOPOFIT_ORDER_IN + 1),
+            # white_feature_maps=[unet.decoder_features]
+            # * (TOPOFIT_ORDER_MAX - TOPOFIT_ORDER_IN + 1),
             white_channels=TOPOFIT_WHITE_MATTER_CHANNELS,
-            pial_feature_maps=unet.decoder_features,
+            # pial_feature_maps=unet.decoder_features,
             pial_channels=TOPOFIT_GRAY_MATTER_CHANNELS,
             pial_deform_module=TOPOFIT_GRAY_MATTER_MODULE,
         )
-        topofit = head.TopoFit(**topofit_kwargs, device=self.device)
+        self.model = TopoFit(unet_kwargs, graph_kwargs)
 
-        self.model = config.BrainNetParameters(
-            device=self.device,
-            body=unet,
-            heads=dict(surface=topofit),
-        )
+        # self.model = config.BrainNetParameters(
+        #     device=self.device,
+        #     body=unet,
+        #     heads=dict(surface=topofit),
+        # )
 
         # =====================================================================
         # SYNTHESIZER
@@ -182,6 +180,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             preprocessor=dict(
                 out_size=self.fov_out_size, out_center_str=self.fov_out_center_str
             ),
-            unet=unet_kwargs,
-            topofit=topofit_kwargs,
+            model=dict(
+                topofit=graph_kwargs,
+                unet=unet_kwargs,
+            ),
         )

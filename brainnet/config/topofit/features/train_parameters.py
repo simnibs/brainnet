@@ -5,7 +5,7 @@ from brainsynth.config import DatasetConfig
 
 from brainnet import config
 from brainnet.config.topofit import train_parameters
-from brainnet.modules import body
+from brainnet.modules.image import UNet
 
 
 @dataclass(kw_only=True)
@@ -79,7 +79,7 @@ class TrainParameters(train_parameters.TrainParameters):
         # PRETRAINED MODEL
         # =====================================================================
 
-        pre_unet = body.UNet(
+        pre_unet = UNet(
             spatial_dims=3,
             in_channels=1,
             encoder_channels=UNET_ENCODER_CHANNELS["t1w", "1mm"],

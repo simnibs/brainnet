@@ -120,25 +120,25 @@ def wrap_index_matched_data(cls):
                         pw = y_pred.vertex_data[self.weight_key]
                         tw = y_true.vertex_data[self.weight_key]
                 case ("interpolated", "points"):
-                    pv = y_pred.interpolated["points"]
-                    tv = y_true.interpolated["points"]
-                    pi = y_pred.interpolated["data"][self.index_key]
-                    ti = y_true.interpolated["data"][self.index_key]
+                    pv = y_pred.interpolated.points
+                    tv = y_true.interpolated.points
+                    pi = y_pred.interpolated.data[self.index_key]
+                    ti = y_true.interpolated.data[self.index_key]
                     if self.weight_key is None:
                         pw = tw = None
                     else:
-                        pw = y_pred.interpolated["data"][self.weight_key]
-                        tw = y_true.interpolated["data"][self.weight_key]
+                        pw = y_pred.interpolated.data[self.weight_key]
+                        tw = y_true.interpolated.data[self.weight_key]
                 case ("interpolated", _):
-                    pv = y_pred.interpolated["data"][self.value_key[1]]
-                    tv = y_true.interpolated["data"][self.value_key[1]]
-                    pi = y_pred.interpolated["data"][self.index_key]
-                    ti = y_true.interpolated["data"][self.index_key]
+                    pv = y_pred.interpolated.data[self.value_key[1]]
+                    tv = y_true.interpolated.data[self.value_key[1]]
+                    pi = y_pred.interpolated.data[self.index_key]
+                    ti = y_true.interpolated.data[self.index_key]
                     if self.weight_key is None:
                         pw = tw = None
                     else:
-                        pw = y_pred.interpolated["data"][self.weight_key]
-                        tw = y_true.interpolated["data"][self.weight_key]
+                        pw = y_pred.interpolated.data[self.weight_key]
+                        tw = y_true.interpolated.data[self.weight_key]
 
             return super().forward(pv, tv, pi, ti, pw, tw)
 
@@ -450,40 +450,40 @@ class IndexedSmoothnessLoss(MSNELoss):
         # )
 
 
-class MeanCurvatureSmoothnessLoss(torch.nn.Module):
-    def __init__(self, *args, **kwargs) -> None:
-        """Penalize smoothness of the surface as measured by the Laplacian."""
-        super().__init__(*args, **kwargs)
+# class MeanCurvatureSmoothnessLoss(torch.nn.Module):
+#     def __init__(self, *args, **kwargs) -> None:
+#         """Penalize smoothness of the surface as measured by the Laplacian."""
+#         super().__init__(*args, **kwargs)
 
-    def forward(self, y_pred):
-        K = y_pred.compute_laplace_beltrami_operator()
-        H = y_pred.compute_mean_curvature(K)
-        ri, gi = y_pred.topology.get_convolution_indices()
+#     def forward(self, y_pred):
+#         K = y_pred.compute_laplace_beltrami_operator()
+#         H = y_pred.compute_mean_curvature(K)
+#         ri, gi = y_pred.topology.get_convolution_indices()
 
-        normalizer = torch.index_reduce(
-            torch.zeros_like(H),
-            1,
-            ri,
-            H_other.abs(),
-            "mean",
-            include_self=False,
-        )
-        H_self = H.index_select(1, ri)
-        H_other = H.index_select(1, gi)
-        error = torch.pow(H_self - H_other, 2.0)
-        error = torch.pow(
-            1.0 - H_other / torch.maximum(torch.ones_like(H_self), H_self.abs()), 2.0
-        )
-        return error.mean()
+#         normalizer = torch.index_reduce(
+#             torch.zeros_like(H),
+#             1,
+#             ri,
+#             H_other.abs(),
+#             "mean",
+#             include_self=False,
+#         )
+#         H_self = H.index_select(1, ri)
+#         H_other = H.index_select(1, gi)
+#         error = torch.pow(H_self - H_other, 2.0)
+#         error = torch.pow(
+#             1.0 - H_other / torch.maximum(torch.ones_like(H_self), H_self.abs()), 2.0
+#         )
+#         return error.mean()
 
-        x = torch.index_reduce(
-            torch.zeros_like(H),
-            1,
-            ri,
-            error,
-            "amax",
-            include_self=False,
-        )
+#         x = torch.index_reduce(
+#             torch.zeros_like(H),
+#             1,
+#             ri,
+#             error,
+#             "amax",
+#             include_self=False,
+#         )
 
 
 class VertexNormalLoss(MSCosSimLoss):
@@ -665,7 +665,7 @@ class TriangleQualityLoss(torch.nn.Module):
         super().__init__()
 
     def forward(self, s: Surface):
-        a = 4 * torch.sqrt(torch.tensor(3.0, device=s.device))
+        a = 4 * torch.sqrt(torch.tensor(3.0, device=s.get_device()))
         A = s.compute_face_areas()
         E = s.compute_edge_norm()
         # q=0 is worst

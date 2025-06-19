@@ -1,4 +1,3 @@
-import copy
 import functools
 import importlib
 import sys
@@ -14,7 +13,7 @@ from brainnet.dict_utils import (
     recursively_apply_method,
     recursive_dict_sum,
 )
-import brainnet.train.utilities
+import brainnet.helpers.utils
 from brainnet import event_handlers
 import brainnet.initializers
 
@@ -25,7 +24,7 @@ class SupervisedStep:
     def __init__(
         self,
         synthesizer: None | brainsynth.Synthesizer,
-        model: brainnet.BrainNet,
+        model: torch.nn.Module,
         criterion: brainnet.Criterion,
         # subdivision: int,
     ) -> None:
@@ -266,13 +265,13 @@ def create_trainer(setup, no_wandb: bool = False):
     # The order in which the events are added to the engine is important!
 
     # Aggregate average loss over epoch
-    brainnet.train.utilities.add_metric_to_engine(trainer)
-    brainnet.train.utilities.add_terminal_logger(trainer)
+    brainnet.helpers.utils.add_metric_to_engine(trainer)
+    brainnet.helpers.utils.add_terminal_logger(trainer)
 
     # Add evaluations
 
     evaluators = dict(
-        # train = brainnet.train.utilities.add_evaluation_event(
+        # train = brainnet.helpers.utils.add_evaluation_event(
         #     EvaluationStep(
         #         synth["train"],
         #         model,
@@ -283,7 +282,7 @@ def create_trainer(setup, no_wandb: bool = False):
         #     logger=event_handlers.MetricLogger(key="loss", name="train"),
         #     **kwargs,
         # ),
-        validation=brainnet.train.utilities.add_evaluation_event(
+        validation=brainnet.helpers.utils.add_evaluation_event(
             eval_step,
             engine=trainer,
             evaluate_on=setup.evaluator_evaluate_on,
@@ -293,12 +292,12 @@ def create_trainer(setup, no_wandb: bool = False):
         ),
     )
 
-    brainnet.train.utilities.add_wandb_logger(trainer, evaluators, setup.wandb)
+    brainnet.helpers.utils.add_wandb_logger(trainer, evaluators, setup.wandb)
 
     # Should be triggered after metrics has been computed!
-    brainnet.train.utilities.add_custom_events(trainer, setup.trainer_events)
+    brainnet.helpers.utils.add_custom_events(trainer, setup.trainer_events)
     for e in evaluators.values():
-        brainnet.train.utilities.add_custom_events(e, setup.evaluator_events)
+        brainnet.helpers.utils.add_custom_events(e, setup.evaluator_events)
 
     # Include this in the checkpoint
     to_save = dict(
@@ -310,11 +309,11 @@ def create_trainer(setup, no_wandb: bool = False):
     if setup.enable_amp:
         to_save["grad_scaler"] = train_step.grad_scaler
 
-    brainnet.train.utilities.add_model_checkpoint(trainer, to_save, setup.results)
-    brainnet.train.utilities.write_example_to_disk(trainer, evaluators, setup.results)
-    brainnet.train.utilities.load_checkpoint_from_setup(to_save, setup)
+    brainnet.helpers.utils.add_model_checkpoint(trainer, to_save, setup.results)
+    brainnet.helpers.utils.write_example_to_disk(trainer, evaluators, setup.results)
+    brainnet.helpers.utils.load_checkpoint_from_setup(to_save, setup)
 
-    brainnet.train.utilities.load_checkpoint(
+    brainnet.helpers.utils.load_checkpoint(
         dict(model=pretrained_model),
         setup.pretrained_checkpoint_filename,
         setup.device,
@@ -331,7 +330,7 @@ def train(args):
 
     python brainnet/train/topofit.py synth_1mm --no-wandb
 
-    args = brainnet.train.utilities.argparser_topofit(
+    args = brainnet.helpers.utils.argparser_topofit(
         "brainnet/train/topofit.py t1w_1mm --no-wandb".split()
     )
 
@@ -367,5 +366,5 @@ def train(args):
 
 
 if __name__ == "__main__":
-    args = brainnet.train.utilities.argparser_topofit(sys.argv)
+    args = brainnet.helpers.utils.argparser_topofit(sys.argv)
     train(args)

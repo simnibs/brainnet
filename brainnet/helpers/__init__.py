@@ -1,3 +1,3 @@
-from brainnet.helpers import alignment, topofit
+from brainnet.helpers import topofit, topofit_features, trega
 
-__all__ = ["alignment", "topofit"]
+__all__ = ["topofit", "topofit_features", "trega"]

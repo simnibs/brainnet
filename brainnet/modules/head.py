@@ -1,7 +1,7 @@
 import torch
 
 from brainnet.modules.blocks import ConvolutionBlock
-from brainnet.modules.topofit import TopoFit  # , TopoInit #, TopoReg
+# from brainnet.modules.topofit import TopoFit  # , TopoInit #, TopoReg
 
 """
 image -> feature extractor -> task nets -> prediction
@@ -109,6 +109,3 @@ class ContrastiveModule(torch.nn.Module):
     #     for output in outputs:
     #         output['feat'][-1] = F.normalize(output['feat'][-1], dim = 1)
     #     return outputs
-
-
-surface_modules = (TopoFit,)  # TopoInit)

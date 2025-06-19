@@ -1,10 +1,17 @@
+builder_kw = dict(resolution_transforms_kw=dict(resolution_sampler="RandClinicalSlice"))
+
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
-    # evaluate_on_every=1,
-    # save_example_on_every=1,
-    # run_suffix="TEST",
+    run_suffix="clinical",
+    # builder_train_kw=builder_kw,
+    # builder_validation_kw=builder_kw,
     load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random/checkpoint/state_checkpoint_00400.pt",
+    datasets=["ADNI-GO2"],
+    images_train=["flair"],
+    images_validation=["flair"],
+    builder_train="PredictionBuilder",
+    builder_validation="PredictionBuilder",
 )
 
 PHASES = {

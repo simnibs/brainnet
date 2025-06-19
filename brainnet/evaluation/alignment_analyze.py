@@ -3,6 +3,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import torch
 
 
 global CHECKPOINTS
@@ -13,16 +14,19 @@ global METRIC
 RUNS = ["t1w-1mm", "synth-1mm", "synth-random"]
 RUNS = ["synth-random"]
 SUBSET = "validation"
-CHECKPOINTS = [1500, 2000]
+CHECKPOINTS = list(range(1800, 2000 + 1, 20))
 HEMI = "rh"
 AFFINE = "brain"
 METRIC = "distance"
 
+RESULTS_DIR = Path("/mnt/scratch/personal/jesperdn/results")
+MODEL = "AffineCorticalAlignment"
+
+CHECKPOINTS = sorted(CHECKPOINTS)
+
 
 def load_dataframes(run):
-    eval_dir = Path(
-        f"/mnt/scratch/personal/jesperdn/results/AffineCorticalAlignment/{run}/evaluation"
-    )
+    eval_dir = RESULTS_DIR / MODEL / run / "evaluation"
 
     # load multiple evluations
     dfs = {}
@@ -40,30 +44,47 @@ def find_best(df):
     print("-----------------------------------------------------")
     for (hemi, affine, m), ckpt in zip(idx.index, idx):
         print(
-            f"{hemi:10s} {affine:10s} {m:10s} {ckpt:5d}       {mean.loc[ckpt, (hemi, affine, m)]:10.5f}"
+            f"{hemi:10s} {affine:10s} {m:15s} {ckpt:5d}       {mean.loc[ckpt, (hemi, affine, m)]:10.5f}"
         )
 
     print()
 
     print(f"Best checkpoint based on metric '{METRIC}'")
     print(idx[:, :, METRIC])
-    return idx[:, :, METRIC]
+
+    print(f"Best checkpoint based on metric '{METRIC}' (avg. over hemispheres)")
+    idx = mean.loc[:, pd.IndexSlice[:, "brain", METRIC]].mean(axis=1).idxmin()
+    print(idx)
+    return idx
+
+
+def write_best(run, idx):
+    ckpt_dir = RESULTS_DIR / MODEL / run / "checkpoint"
+    src_ckpt = ckpt_dir / f"state_checkpoint_{idx:05d}.pt"
+    dest_ckpt = ckpt_dir / f"state_checkpoint_best_{idx:05d}.pt"
+
+    print(f"Run: {run}")
+    print(f"Copying {src_ckpt.name} -> {dest_ckpt.name}")
+
+    ckpt = torch.load(src_ckpt)
+    state_dict = ckpt["model"]
+    torch.save(state_dict, dest_ckpt)
 
 
 def plot(run_dict, metric=None):
     if metric is None:
         metric = METRIC
-    fig, axes = plt.subplots(2, 1, sharex=True, constrained_layout=True)
-    for s, ax in zip(("white", "pial"), axes):
+    fig, axes = plt.subplots(1, 1, sharex=True, constrained_layout=True)
+    for s in ("lh", "rh"):
         for k, df in run_dict.items():
-            mean = df[s, metric].groupby("checkpoint").mean()
+            mean = df[s, AFFINE, metric].groupby("checkpoint").mean()
             res = mean.idxmin()
             # label = k if s == "pial" else None
-            _ = ax.plot(mean, label=k)
-            ax.scatter(res, mean.loc[res], c="red")
-        ax.set_title(s)
-        ax.grid(alpha=0.25)
-    axes[-1].legend()
+            _ = axes.plot(mean, label=(k, s))
+            axes.scatter(res, mean.loc[res], c="red")
+        axes.set_title(METRIC)
+        axes.grid(alpha=0.25)
+    axes.legend()
     return fig
 
 
@@ -71,14 +92,17 @@ runs = {run: load_dataframes(run) for run in RUNS}
 
 fig = plot(runs)
 
-best = {}
+best_idx = {}
 for k, v in runs.items():
     print(f"Best checkpoint for {k}")
     print()
     idx = find_best(v)
-    best[k] = idx
+    best_idx[k] = idx
     print("\n")
 
+
+for k, v in best_idx.items():
+    write_best(k, v)
 
 for k, v in runs.items():
     idx = best[k]

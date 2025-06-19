@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from brainnet.config.base import (
     BrainNetParameters,
     BrainRegParameters,
@@ -8,3 +10,5 @@ from brainnet.config.base import (
     TrainParameters,
     WandbParameters,
 )
+
+CONFIG_DIR = Path(__file__).parent

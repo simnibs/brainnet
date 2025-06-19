@@ -1,4 +1,6 @@
 import copy
+from typing import Type
+
 import torch
 
 from brainnet.dict_utils import swap_levels
@@ -16,8 +18,8 @@ class UNetDeformBlock(torch.nn.Sequential):
         out_channels: int,
         topologies: list[brainnet.mesh.topology.Topology],
         channels: None | dict = None,
-        unet_conv_module: torch.nn.Module = EdgeConvolutionBlock,
-        deform_conv_module: torch.nn.Module = EdgeConvolution,
+        unet_conv_module: Type[torch.nn.Module] = EdgeConvolutionBlock,
+        deform_conv_module: Type[torch.nn.Module] = EdgeConvolution,
         reduction: str = "amax",
         max_depth: int = 4,
         n_convolutions: int = 1,
@@ -67,10 +69,8 @@ class GenericSurfaceModule(torch.nn.Module):
         out_order: int,
         max_order: int,  # n_topologies: int = 7, # 0 - n_topologies
         topology: str = "DeepSurferTopology",
-        device: str | torch.device = "cpu",
     ):
         super().__init__()
-        self.device = torch.device(device)
         self.in_order = in_order
         self.max_order = max_order
         self.initialize_topologies(topology)
@@ -90,10 +90,7 @@ class GenericSurfaceModule(torch.nn.Module):
 
         self.topologies = getattr(
             brainnet.mesh.topology, topology
-        ).recursive_subdivision(
-            self.max_order,
-            device=self.device,
-        )
+        ).recursive_subdivision(self.max_order)
         self.all_topologies = list(range(self.in_order, self.max_order + 1))
         self.n_topologies = len(self.all_topologies)
 
@@ -103,7 +100,9 @@ class GenericSurfaceModule(torch.nn.Module):
         self.active_topologies = list(range(self.in_order, self.out_order + 1))
 
         topology = self.topologies[self.active_topologies[-1]]
-        self.out_topology = dict(lh=topology, rh=copy.deepcopy(topology))
+        self.out_topology = torch.nn.ModuleDict(
+            dict(lh=topology, rh=copy.deepcopy(topology))
+        )
         if isinstance(
             self.out_topology["rh"], brainnet.mesh.topology.DeepSurferTopology
         ):
@@ -198,9 +197,8 @@ class SurfaceModule(GenericSurfaceModule):
         white_n_steps: int | list[int] | None = None,
         pial_n_steps: int = 10,
         topology: str = "DeepSurferTopology",
-        device: str | torch.device = "cpu",
     ) -> None:
-        super().__init__(in_order, out_order, max_order, topology, device)
+        super().__init__(in_order, out_order, max_order, topology)
 
         # WHITE MATTER CONFIG
         if white_n_steps is None:
@@ -221,7 +219,7 @@ class SurfaceModule(GenericSurfaceModule):
         self.white_deform = torch.nn.ModuleDict()
         self.pial_deform = torch.nn.Module()
 
-        self.sphere_reg = load_deepsurfer_template(self.in_order, self.device)
+        self.sphere_reg = load_deepsurfer_template(self.in_order)
 
     def forward(
         self,

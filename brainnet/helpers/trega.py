@@ -6,7 +6,7 @@ import brainsynth
 from brainsynth.transforms import EnsureDevice
 from brainsynth.transforms.utils import recursive_function
 
-from brainnet.config.alignment.train_parameters import TrainParameters
+from brainnet.config.trega.train_parameters import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
 from brainnet import event_handlers
@@ -48,15 +48,20 @@ class Step:
     def __init__(
         self,
         preprocessor: brainsynth.Synthesizer | None,
-        model: brainnet.BrainNet,
+        model: torch.nn.Module,
+        device: str | torch.device = "cpu",
         template_resolution: int = 0,
     ) -> None:
+        device = torch.device(device)
+        self.device = device
+
         self.preprocessor = preprocessor
         self.model = model
-        self.device = self.model.device
-        self.ensure_device = EnsureDevice(self.device)
+        self.model.to(device)
+        self.ensure_device = EnsureDevice(device)
 
-        self.template = load_deepsurfer_template(template_resolution, self.device)
+        self.template = load_deepsurfer_template(template_resolution)
+        self.template.to(device)
         self.topologies = {h: s.topology for h, s in self.template.items()}
 
     def apply_affine(self, affine: torch.Tensor):
@@ -112,9 +117,10 @@ class TrainingStep(Step):
         criterion,
         optimizer: torch.optim.Optimizer,
         enable_amp: bool = False,
+        device: str | torch.device = "cpu",
         gradient_accumulation_steps: int = 1,
     ) -> None:
-        super().__init__(preprocessor, model)
+        super().__init__(preprocessor, model, device)
         self.criterion = criterion
         self.optimizer = optimizer
         self.enable_amp = enable_amp
@@ -172,8 +178,15 @@ class TrainingStep(Step):
 
 
 class EvaluationStep(Step):
-    def __init__(self, preprocessor, model, criterion, enable_amp: bool = False):
-        super().__init__(preprocessor, model)
+    def __init__(
+        self,
+        preprocessor,
+        model,
+        criterion,
+        enable_amp: bool = False,
+        device: str | torch.device = "cpu",
+    ):
+        super().__init__(preprocessor, model, device)
         self.criterion = criterion
         self.enable_amp = enable_amp
 
@@ -215,7 +228,7 @@ class PredictionStep(Step):
         image, vox2ras, _ = self.prepare_batch(*batch)
 
         with torch.inference_mode():
-            with torch.autocast(self.model.device.type, enabled=self.enable_amp):
+            with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, vox2ras)
 
         return y_pred
@@ -296,6 +309,7 @@ def create_trainer(
         criterion["train"],
         optimizer,
         setup.enable_amp,
+        setup.device,
         setup.trainer_gradient_accumulation_steps,
     )
     eval_step = EvaluationStep(
@@ -303,6 +317,7 @@ def create_trainer(
         model,
         criterion["validation"],
         setup.enable_amp,
+        setup.device,
     )
     trainer = Engine(train_step)
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
-
+import torch
 
 global CHECKPOINTS
 global RUNS
@@ -10,21 +10,26 @@ global SUBSET
 global METRIC
 
 RUNS = ["t1w-1mm", "t1w-1mm-noUC"]
-RUNS = ["synth-random", "synth-random-clinical"]
-
-RUNS = ["synth-random"]
+RUNS = ["synth-random", "synth-random-clinical", "synth-random-clinical-axial"]
+RUNS = ["t1w-1mm", "synth-1mm", "synth-random"]
 SUBSET = "validation"
+
 CHECKPOINTS = [600, 620, 640, 660, 680, 700, 720, 740, 760, 780, 800]
-CHECKPOINTS = [800]
+# CHECKPOINTS = {"synth-random": [780],"synth-random-clinical": [760],"synth-random-clinical-axial": [760]}
 METRIC = "chamfer"
 
+RESULTS_DIR = Path("/mnt/scratch/personal/jesperdn/results")
+MODEL = "TopoFit"
 
-def load_dataframes(run):
-    eval_dir = Path(f"/mnt/scratch/personal/jesperdn/results/TopoFit/{run}/evaluation")
+
+def load_dataframes(run, checkpoints=None):
+    eval_dir = RESULTS_DIR / MODEL / run / "evaluation"
+
+    checkpoints = checkpoints or CHECKPOINTS
 
     # load multiple evluations
     dfs = {}
-    for ckpt in CHECKPOINTS:
+    for ckpt in checkpoints:
         dfs[ckpt] = pd.read_pickle(eval_dir / f"{SUBSET}-checkpoint-{ckpt:05d}.pickle")
         dfs[ckpt].index = dfs[ckpt].index.set_names(["dataset", "subject"])
     return pd.concat(dfs, names=["checkpoint"])
@@ -46,6 +51,19 @@ def find_best(df):
     return idx[:, METRIC]
 
 
+def write_best(run, idx):
+    ckpt_dir = RESULTS_DIR / MODEL / run / "checkpoint"
+    src_ckpt = ckpt_dir / f"state_checkpoint_{idx:05d}.pt"
+    dest_ckpt = ckpt_dir / f"state_checkpoint_best_{idx:05d}.pt"
+
+    print(f"Run: {run}")
+    print(f"Copying {src_ckpt.name} -> {dest_ckpt.name}")
+
+    ckpt = torch.load(src_ckpt)
+    state_dict = ckpt["model"]
+    torch.save(state_dict, dest_ckpt)
+
+
 def plot(run_dict, metric=None):
     if metric is None:
         metric = METRIC
@@ -63,15 +81,20 @@ def plot(run_dict, metric=None):
     return fig
 
 
-runs = {run: load_dataframes(run) for run in RUNS}
+# runs = {run: load_dataframes(run, CHECKPOINTS[run]) for run in RUNS}
+runs = {run: load_dataframes(run) for run in RUNS}|
 
 fig = plot(runs)
 
+best_idx = {}
 for k, v in runs.items():
     print(f"Best checkpoint for {k}")
     print()
-    idx = find_best(v)
+    best_idx[k] = find_best(v)
     print("\n")
+
+for k, v in best_idx.items():
+    write_best(k, v["white"])
 
 
 for k, v in runs.items():

@@ -202,10 +202,10 @@ class Criterion(torch.nn.Module):
 
                     # NOTE these are indices into y_true!
                     index = y_pred[s][h].nearest_neighbor_tensors(
-                        y_pred[s][h].interpolated["points"],
-                        y_true[s][h].interpolated["points"],
+                        y_pred[s][h].interpolated.points,
+                        y_true[s][h].interpolated.points,
                     )
-                    y_pred[s][h].interpolated["data"]["chamfer_index"] = index
+                    y_pred[s][h].interpolated.data["chamfer_index"] = index
 
                     # =============================================================
                     # NOTE
@@ -214,21 +214,21 @@ class Criterion(torch.nn.Module):
                     # weights) of the sampled points on y_pred to the value of the
                     # corresponding (closest) point on y_true
                     # for k in y_pred[h][s].vertex_data:
-                    #     y_pred[h][s].interpolated["data"][k] = (
-                    #         y_true[h][s].interpolated["data"][k].gather(-1, index)
+                    #     y_pred[h][s].interpolated.data[k] = (
+                    #         y_true[h][s].interpolated.data[k].gather(-1, index)
                     #     )
                     # =============================================================
 
                     # NOTE these are indices into y_pred!
                     index = y_true[s][h].nearest_neighbor_tensors(
-                        y_true[s][h].interpolated["points"],
-                        y_pred[s][h].interpolated["points"],
+                        y_true[s][h].interpolated.points,
+                        y_pred[s][h].interpolated.points,
                     )
-                    y_true[s][h].interpolated["data"]["chamfer_index"] = index
+                    y_true[s][h].interpolated.data["chamfer_index"] = index
 
-                    # if "sigma" in y_pred[h][s].interpolated["data"]:
-                    #     y_true[h][s].interpolated["data"]["sigma"] = torch.ones_like(
-                    #         y_pred[h][s].interpolated["data"]["sigma"]
+                    # if "sigma" in y_pred[h][s].interpolated.data:
+                    #     y_true[h][s].interpolated.data["sigma"] = torch.ones_like(
+                    #         y_pred[h][s].interpolated.data["sigma"]
                     #     )
 
                     # =========================================================
@@ -237,26 +237,26 @@ class Criterion(torch.nn.Module):
                     # interpolated data of the sampled points on y_pred to the
                     # value of the corresponding (closest) point on y_true
                     # (e.g., medial wall label)
-                    y_true_interp = y_true[s][h].interpolated["data"].keys()
-                    y_pred_interp = y_pred[s][h].interpolated["data"].keys()
+                    y_true_interp = y_true[s][h].interpolated.data.keys()
+                    y_pred_interp = y_pred[s][h].interpolated.data.keys()
 
-                    index = y_pred[s][h].interpolated["data"]["chamfer_index"]
+                    index = y_pred[s][h].interpolated.data["chamfer_index"]
                     for k in y_true_interp:
-                        if k not in y_pred[s][h].interpolated["data"]:
-                            x = y_true[s][h].interpolated["data"][k]
+                        if k not in y_pred[s][h].interpolated.data:
+                            x = y_true[s][h].interpolated.data[k]
                             index = unsqueeze_and_expand(index, x)
-                            y_pred[s][h].interpolated["data"][k] = x.gather(-1, index)
+                            y_pred[s][h].interpolated.data[k] = x.gather(-1, index)
 
                     # For data that is only present in *y_pred*, set the
                     # interpolated data of the sampled points on y_true to the
                     # value of the corresponding (closest) point on y_pred
                     # (e.g., uncertainty/sigma estimate from model)
-                    index = y_true[s][h].interpolated["data"]["chamfer_index"]
+                    index = y_true[s][h].interpolated.data["chamfer_index"]
                     for k in y_pred_interp:
-                        if k not in y_true[s][h].interpolated["data"]:
-                            x = y_pred[s][h].interpolated["data"][k]
+                        if k not in y_true[s][h].interpolated.data:
+                            x = y_pred[s][h].interpolated.data[k]
                             index = unsqueeze_and_expand(index, x)
-                            y_true[s][h].interpolated["data"][k] = x.gather(1, index)
+                            y_true[s][h].interpolated.data[k] = x.gather(1, index)
                     # =========================================================
 
                 elif self._needs_chamfer:
@@ -274,11 +274,7 @@ class Criterion(torch.nn.Module):
         # H_clip_to_percentile: None | tuple[float, float] = None,
         H_clip_to_values: None | tuple[float, float] = None,
     ):
-        samp_p, samp_face, samp_coo = surface.sample_points(n_samples)
-        # samp_p, samp_face, samp_coo = surface.sample_points(n_samples, sample_weights=None)
-        surface.interpolated["points"] = samp_p
-        surface.interpolated["face_index"] = samp_face
-        surface.interpolated["baricenter"] = samp_coo
+        _ = surface.sample_points(n_samples, set_interpolated=True)
 
         # ss = Surface(
         #     surface.smooth_taubin(
@@ -288,7 +284,7 @@ class Criterion(torch.nn.Module):
         # )
         # n = ss.compute_vertex_normals()
         # n = ss.interpolate_vertex_features(n, samp_face, samp_coo)
-        # surface.interpolated["data"]["normal"] = n / n.norm(dim=-1, keepdim=True)
+        # surface.interpolated.data["normal"] = n / n.norm(dim=-1, keepdim=True)
 
         if self._needs_curvature:
             if taubin_smoothing:
@@ -308,16 +304,16 @@ class Criterion(torch.nn.Module):
 
             # surface.vertex_data["H"] = H
 
-            # surface.interpolated["data"]["K"] = surface.interpolate_vertex_features(
+            # surface.interpolated.data["K"] = surface.interpolate_vertex_features(
             #     K, samp_face, samp_coo
             # )
-            surface.interpolated["data"]["H"] = surface.interpolate_vertex_features(
-                H, samp_face, samp_coo
+            surface.interpolated.data["H"] = surface.interpolate_vertex_features(
+                H, surface.interpolated.face_index, surface.interpolated.baricenter
             )
 
         for k, v in surface.vertex_data.items():
-            surface.interpolated["data"][k] = surface.interpolate_vertex_features(
-                v, samp_face, samp_coo
+            surface.interpolated.data[k] = surface.interpolate_vertex_features(
+                v, surface.interpolated.face_index, surface.interpolated.baricenter
             )
 
     def forward(self, y_pred, y_true):

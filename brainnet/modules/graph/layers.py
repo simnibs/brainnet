@@ -1,3 +1,5 @@
+from typing import Type
+
 import torch
 
 
@@ -28,14 +30,16 @@ class GraphConvolution(torch.nn.Module):
         out_channels: int,
         reduce_index: torch.Tensor,
         gather_index: torch.Tensor,
-        bias=True,
+        bias: bool = True,
         init_values: float | list[float] | None | tuple = None,
     ):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.reduce_index = reduce_index.long()  # repeats of vertex
-        self.gather_index = gather_index.long()  # neighbors of vertex
+        # repeats of vertex
+        self.register_buffer("reduce_index", reduce_index.long(), persistent=False)
+        # neighbors of vertex
+        self.register_buffer("gather_index", gather_index.long(), persistent=False)
 
         kwargs = dict(kernel_size=1, stride=1, bias=bias)
 
@@ -92,7 +96,7 @@ class EdgeConvolution(GraphConvolution):
         return features_self + out - features_other
 
 
-def convolution_block(Convolution):
+def convolution_block(Convolution: Type[torch.nn.Module]):
     class ConvolutionBlock(Convolution):
         """Graph convolution followed by normalization, activation, and dropout."""
 
