@@ -1,4 +1,3 @@
-import copy
 import torch
 
 from ignite.engine import Engine
@@ -10,13 +9,20 @@ from brainnet.config import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum, swap_levels
 import brainnet.helpers.utils
 
+from brainnet.mesh.surface import load_deepsurfer_template
 from brainnet import event_handlers, Surface
 import brainnet.initializers
 
 # Define some recursive versions of functions
 recursive_apply_affine = recursive_function(Surface.apply_affine)
 recursive_float = recursive_function(torch.Tensor.float)
+# recursive_Module_to = recursive_function(torch.nn.Module.to)
 recursive_item = recursive_function(torch.Tensor.item)
+
+DESCRIPTION = (
+    "TopoFit is a network that predicts cortical surfaces (i.e., at the"
+    "white-gray matter and gray matter-CSF interfaces)."
+)
 
 
 class Step:
@@ -90,12 +96,11 @@ class Step:
 
     def _amp_prediction(self, image: torch.Tensor, template: dict[str, torch.Tensor]):
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            # y_pred = self.model(image, template)
-
             features = self.model.unet(image)
-            # we cast to float32 during training
-            features = recursive_float(features)
-            return self.model.graph(features, template)
+
+        # with torch.autocast(self.device.type, torch.float32, enabled=self.enable_amp):
+        features = recursive_float(features)
+        return self.model.graph(features, template)
 
     def postprocess(self, y_pred):
         return y_pred
@@ -117,46 +122,48 @@ class TrainingStep(Step):
         self.criterion = criterion
         self.optimizer = optimizer
         self.freeze_body = freeze_body
+        if self.freeze_body:
+            self.model.unet.requires_grad_(False)
+
         self.gradient_accumulation_steps = gradient_accumulation_steps
         if self.enable_amp:
             self.grad_scaler = torch.amp.GradScaler("cuda")
 
-    def compute_loss(self, y_pred, y_true):
-        self.criterion.prepare_for_surface_loss(y_pred, y_true)
-        # swap to {hemi: {surface: ...}} for loss calculation
-        raw = self.criterion(swap_levels(y_pred), swap_levels(y_true))
-        return dict(raw=raw, weighted=self.criterion.apply_weights(raw))
+        self.y_true_reg = load_deepsurfer_template(
+            self.model.graph.out_order, "sphere.reg"
+        )
+        self.y_true_reg.to(self.device)
+
+    def _amp_compute_loss(self, y_pred, y_true):
+        with torch.autocast(self.device.type, enabled=self.enable_amp):
+            self.criterion.prepare_for_surface_loss(y_pred, y_true)
+
+            # recursive_Module_to(y_pred, torch.float32)
+            # recursive_Module_to(y_true, torch.float32)
+
+            # swap to {hemi: {surface: ...}} for loss calculation
+            y_pred = swap_levels(y_pred)
+            y_true = swap_levels(y_true)
+            return self.criterion(y_pred, y_true)
 
     def __call__(self, engine, batch) -> tuple:
         self.model.train()
 
         image, vox2ras, template, y_true = self.prepare_batch(*batch)
 
-        # with torch.autocast(self.device.type, enabled=self.enable_amp):
-        #     mni305_to_ras = self.model(image, vox2mri)["brain"]
-
-        # template = apply_affine(mni305_to_ras, self.template)
+        y_true = self.get_surfaces(y_true)
+        y_true["registration"] = self.y_true_reg
 
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
-        with torch.autocast(self.device.type, enabled=self.enable_amp):
-            # do loss calculations in float32
-            # y_pred = self.model(image, template)
-            # y_pred = recursive_float(y_pred)
 
-            if self.freeze_body:
-                with torch.no_grad():
-                    features = self.model.unet(image)
-            else:
-                features = self.model.unet(image)
-            features = recursive_float(features)
-            y_pred = self.model.graph(features, template)
+        y_pred = self._amp_prediction(image, template)
+        loss = self._amp_compute_loss(y_pred, y_true)
+        loss = dict(raw=loss, weighted=self.criterion.apply_weights(loss))
+        total_loss = recursive_dict_sum(loss["weighted"])
+        total_loss /= self.gradient_accumulation_steps
 
-            # Loss
-            y_true = self.get_surfaces(y_true)
-            loss = self.compute_loss(y_pred, y_true)
-            total_loss = recursive_dict_sum(loss["weighted"])
-            total_loss /= self.gradient_accumulation_steps
+        del y_true["registration"]  # no need to save this
 
         # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
@@ -195,24 +202,36 @@ class EvaluationStep(Step):
         super().__init__(preprocessor, model, enable_amp, device)
         self.criterion = criterion
 
-    def compute_loss(self, y_pred, y_true):
-        self.criterion.prepare_for_surface_loss(y_pred, y_true)
-        # swap to {hemi: {surface: ...}} for loss calculation
-        y_pred = swap_levels(y_pred)
-        y_true = swap_levels(y_true)
-        return recursive_item(self.criterion(y_pred, y_true))
+        self.y_true_reg = load_deepsurfer_template(
+            self.model.graph.out_order, "sphere.reg"
+        )
+        self.y_true_reg.to(self.device)
+
+    def _amp_compute_loss(self, y_pred, y_true):
+        with torch.autocast(self.device.type, enabled=self.enable_amp):
+            self.criterion.prepare_for_surface_loss(y_pred, y_true)
+
+            # recursive_Module_to(y_pred, torch.float32)
+            # recursive_Module_to(y_true, torch.float32)
+
+            # swap to {hemi: {surface: ...}} for loss calculation
+            y_pred = swap_levels(y_pred)
+            y_true = swap_levels(y_true)
+            return self.criterion(y_pred, y_true)
 
     def __call__(self, engine, batch: tuple):
         self.model.eval()
 
         image, vox2ras, template, y_true = self.prepare_batch(*batch)
+        y_true = self.get_surfaces(y_true)
+        y_true["registration"] = self.y_true_reg
 
         with torch.inference_mode():
             y_pred = self._amp_prediction(image, template)
+            loss = self._amp_compute_loss(y_pred, y_true)
+            loss = recursive_item(loss)
 
-            # Loss
-            y_true = self.get_surfaces(y_true)
-            loss = self.compute_loss(y_pred, y_true)
+        del y_true["registration"]
 
         return loss, image, vox2ras, y_pred, y_true
 

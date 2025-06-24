@@ -298,17 +298,14 @@ class Topology(torch.nn.Module):
     def subdivide_faces(self):
         raise NotImplementedError("This method should be defined in a subclass.")
 
-    def subdivide_vertices(self, vertices):
+    def subdivide_vertices(self, vertices: torch.Tensor):
         """From V0-V1-V2, insert v3, v4, v5, at the midpoint of the edges
         (V0, V1), (V0, V2), (V1, V2).
         """
         assert (
-            self.n_vertices == vertices.shape[-1]
-        ), f"Expected {self.n_vertices} but got {vertices.shape[-1]}"
-
-        return torch.cat(
-            [vertices, vertices[..., self.vertex_adjacency].mean(-1)], dim=-1
-        )
+            self.n_vertices == vertices.shape[1]
+        ), f"Expected {self.n_vertices} but got {vertices.shape[1]}"
+        return torch.cat([vertices, vertices[:, self.vertex_adjacency].mean(2)], dim=1)
 
     @classmethod
     def recursive_subdivision(cls, n: int, **kwargs):

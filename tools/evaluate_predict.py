@@ -19,17 +19,20 @@ def parse_args(argv):
     parser.add_argument("specs", help=help_specs)
     parser.add_argument("subset", type=str, help=help_subset)
     parser.add_argument("checkpoint", type=int, help=help_checkpoint)
+    parser.add_argument(
+        "-d",
+        "--datasets",
+        default=None,
+        nargs="+",
+        help="Subset of data to evaluate on (e.g., ABIDE, HCP, ...).",
+    )
     parser.add_argument("--csv", default=None, type=str, help="")
-    # parser.add_argument(
-    #     "--datasets",
-    #     default=None,
-    #     nargs="+",
-    #     help="Subset of data to evaluate on (e.g., train, validation, test).",
-    # )
 
     return parser.parse_args(argv[1:])
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv)
-    predict(args.model, args.specs, args.subset, args.checkpoint, args.csv)
+    predict(
+        args.model, args.specs, args.subset, args.checkpoint, args.datasets, args.csv
+    )

@@ -87,6 +87,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             dict(types="white", resolution=TOPOFIT_ORDER_OUT, name="resample"),
             dict(types="pial", resolution=TOPOFIT_ORDER_OUT, name="resample"),
             dict(types="template", resolution=TOPOFIT_ORDER_IN),
+            # dict(types="sphere.reg", resolution=TOPOFIT_ORDER_OUT, name="resample"),
         ]
 
         self.dataset = {

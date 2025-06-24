@@ -23,15 +23,16 @@ def parse_args(argv):
         type=int,
         help="Evaluate the model at checkpoint.",
     )
-    # parser.add_argument(
-    #     "--datasets",
-    #     default=None,
-    #     nargs="+",
-    #     help="Subset of data to evaluate on (e.g., ABIDE, HCP, ...).",
-    # )
+    parser.add_argument(
+        "-d",
+        "--datasets",
+        default=None,
+        nargs="+",
+        help="Subset of data to evaluate on (e.g., ABIDE, HCP, ...).",
+    )
     return parser.parse_args(argv[1:])
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv)
-    evaluate(args.model, args.specs, args.subset, args.checkpoints)
+    evaluate(args.model, args.specs, args.subset, args.checkpoints, args.datasets)

@@ -40,6 +40,11 @@ create_trainer
     Function that returns a trainer Engine and a dataloader.
 """
 
+DESCRIPTION = (
+    "TREGA (Template REGistration Affine) is a network that predicts affine "
+    "registration between MNI305 and subject space"
+)
+
 # Define some recursive versions of functions
 recursive_item = recursive_function(torch.Tensor.item)
 
@@ -60,7 +65,7 @@ class Step:
         self.model.to(device)
         self.ensure_device = EnsureDevice(device)
 
-        self.template = load_deepsurfer_template(template_resolution)
+        self.template = load_deepsurfer_template(template_resolution, "white")
         self.template.to(device)
         self.topologies = {h: s.topology for h, s in self.template.items()}
 

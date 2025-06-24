@@ -19,19 +19,54 @@ smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, cu
 """
 
 
+def rotate(x, k: torch.Tensor, alpha: torch.Tensor, normalize: bool = True):
+    """Rotate `v` by `alpha` (angle) around `k` (axis).
+
+    Rodrigues' rotation formula.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        Points to rotate
+    k : torch.Tensor
+        Axis around which to rotate. Either one axis for all vertices
+        (k.shape = (3,)) or one axis per vertex (k.shape = (..., 3)).
+    alpha : torch.Tensor
+    normalize : bool
+
+
+    References
+    ----------
+    https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
+
+    """
+    cos_angle = alpha.cos()
+
+    k = torch.nn.functional.normalize(k, dim=-1) if normalize else k
+    k_as_v = k.expand_as(x)
+
+    return (
+        x * cos_angle
+        + torch.linalg.cross(x, k_as_v) * alpha.sin()
+        + torch.sum(x * k_as_v, dim=-1, keepdim=True, dtype=x.dtype)
+        * k_as_v
+        * (1 - cos_angle)
+    )
+
+
 class InterpolatedData(torch.nn.Module):
     def __init__(
         self,
         points: torch.Tensor | None = None,
         face_index: torch.Tensor | None = None,
-        baricenter: torch.Tensor | None = None,
+        weights: torch.Tensor | None = None,
         data: dict[str, torch.Tensor] | None = None,
     ):
         super().__init__()
 
         self.points = points
         self.face_index = face_index
-        self.baricenter = baricenter
+        self.weights = weights
 
         self.data = data
 
@@ -56,14 +91,14 @@ class InterpolatedData(torch.nn.Module):
         self.register_buffer("_face_index", value, persistent=False)
 
     @property
-    def baricenter(self):
-        return self._baricenter
+    def weights(self):
+        return self._weights
 
-    @baricenter.setter
-    def baricenter(self, value):
+    @weights.setter
+    def weights(self, value):
         if value is None:
             value = torch.tensor([])
-        self.register_buffer("_baricenter", value, persistent=False)
+        self.register_buffer("_weights", value, persistent=False)
 
     @property
     def data(self):
@@ -121,11 +156,11 @@ class Surface(torch.nn.Module):
         return self.topology.faces
 
     @property
-    def vertices(self):
+    def vertices(self) -> torch.Tensor:
         return self._vertices
 
     @vertices.setter
-    def vertices(self, value):
+    def vertices(self, value: torch.Tensor):
         value = atleast_nd_prepend(value, 3)
         assert (
             value.shape[1] == self.topology.n_vertices
@@ -167,8 +202,8 @@ class Surface(torch.nn.Module):
     def sample_points(
         self,
         n_samples: int,
-        set_interpolated: bool = False,
-        replacement=True,
+        set_interpolated: bool = True,
+        replacement: bool = True,
         sample_weights: torch.Tensor | str | None = "face areas",
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample a number of points on each surface. Points are sampled from
@@ -177,9 +212,12 @@ class Surface(torch.nn.Module):
         Parameters
         ----------
         n_samples : int
-            _description_
+            Number of samples to draw.
+        set_interpolated: bool
+            Set the internal state with the result of the sampling
+            (self.interpolated) (default = True).
         replacement : bool, optional
-            _description_, by default True
+            Whether or not to allow sampling with replacement (default = True).
 
         Returns
         -------
@@ -214,16 +252,16 @@ class Surface(torch.nn.Module):
             0
         )
         sq_u = u.sqrt()
-        sampled_coords = torch.stack(((1 - sq_u), sq_u * (1 - w), sq_u * w), dim=2)
+        sampled_weights = torch.stack(((1 - sq_u), sq_u * (1 - w), sq_u * w), dim=2)
 
         samples = self.interpolate_vertex_features(
-            self.vertices, sampled_faces, sampled_coords
+            self.vertices, sampled_faces, sampled_weights
         )
         if set_interpolated:
             self.interpolated.points = samples
             self.interpolated.face_index = sampled_faces
-            self.interpolated.baricenter = sampled_coords
-        return samples, sampled_faces, sampled_coords
+            self.interpolated.weights = sampled_weights
+        return samples, sampled_faces, sampled_weights
 
     def interpolate_vertex_features(self, x, faces, barycentric_coords):
         """Sample a set of features (B, N[, C]) onto the barycentric coordinates
@@ -256,23 +294,16 @@ class Surface(torch.nn.Module):
 
     def compute_face_normals(self, return_face_areas: bool = False):
         normals = self._compute_unnormalized_face_normals()
-        if return_face_areas:
-            norms = normals.norm(dim=-1, keepdim=True)
-            face_areas = 0.5 * norms.squeeze(-1)
-            normals = normals / norms.clamp_min(min=1e-12)
-            return normals, face_areas
-        else:
-            return torch.nn.functional.normalize(normals, p=2.0, dim=-1)
+        norms = torch.linalg.vector_norm(normals, dim=-1, keepdim=True)
+        normals = normals / norms.clamp_min(min=1e-12)
+        return (normals, 0.5 * norms.squeeze(-1)) if return_face_areas else normals
 
     def compute_vertex_normals(self):
         face_normals = self.compute_face_normals()
         vertex_normals = self._collect_face_values_(face_normals)
         return torch.nn.functional.normalize(vertex_normals, p=2.0, dim=-1)
 
-    def compute_vertex_normals_from_face_normals(
-        self,
-        face_normals: torch.Tensor,
-    ):
+    def compute_vertex_normals_from_face_normals(self, face_normals: torch.Tensor):
         """Save a computation - perhaps delete."""
         vertex_normals = self._collect_face_values_(face_normals)
         return torch.nn.functional.normalize(vertex_normals, p=2.0, dim=-1)
@@ -384,8 +415,8 @@ class Surface(torch.nn.Module):
 
         m = self.as_mesh()
         E = torch.stack([m[:, :, i] - m[:, :, j] for i, j in EI])
-        EN = E.norm(dim=-1).maximum(
-            torch.tensor(min_edge_length, device=self.get_device)
+        EN = torch.linalg.vector_norm(E, dim=-1).maximum(
+            torch.tensor(min_edge_length, device=self.get_device())
         )
 
         # we need to clamp due to numerical inaccuracies
@@ -599,7 +630,7 @@ class Surface(torch.nn.Module):
         if signed:
             return 0.5 * torch.sum(self.compute_vertex_normals() * K, -1)
         else:
-            return 0.5 * K.norm(dim=-1)
+            return 0.5 * torch.linalg.vector_norm(K, dim=-1)
 
     def compute_gaussian_curvature(self):
         angles = self.compute_angles()
@@ -685,12 +716,12 @@ class Surface(torch.nn.Module):
 
     def compute_edge_norm(self, unique: bool = False):
         """ """
-        if unique:
-            edges = self.vertices[:, self.topology.get_unique_edges()]
-        else:
-            edges = self.vertices[:, self.topology.get_edges()]
+        indices = (
+            self.topology.get_unique_edges() if unique else self.topology.get_edges()
+        )
+        edges = self.vertices[:, indices]
 
-        return edges.diff(dim=-2).squeeze(-2).norm(dim=-1)
+        return torch.linalg.vector_norm(edges.diff(dim=-2).squeeze(-2), dim=-1)
 
     @staticmethod
     def nearest_neighbor_tensors(a: torch.Tensor, b: torch.Tensor):
@@ -987,22 +1018,10 @@ class Surface(torch.nn.Module):
         https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
 
         """
-        cos_angle = alpha.cos()
-
-        k = torch.nn.functional.normalize(k, dim=-1)
-        k_as_v = k.expand_as(self.vertices)
-
-        res = (
-            self.vertices * cos_angle
-            + torch.cross(self.vertices, k_as_v) * alpha.sin()
-            + torch.sum(self.vertices * k_as_v, dim=-1, keepdim=True)
-            * k_as_v
-            * (1 - cos_angle)
-        )
+        res = rotate(self.vertices, k, alpha)
         if inplace:
             self.vertices = res
-        else:
-            return res
+        return res
 
     def rotate_dim(self, dim, alpha, inplace: bool = False):
         """Rotate around one of the major axes as specified by `dim`."""
@@ -1018,7 +1037,7 @@ class Surface(torch.nn.Module):
 
         res = (
             self.vertices * cos_angle
-            + torch.cross(self.vertices, k_as_v) * alpha.sin()
+            + torch.linalg.cross(self.vertices, k_as_v) * alpha.sin()
             + q * (1 - cos_angle)
         )
         if inplace:
@@ -1027,7 +1046,7 @@ class Surface(torch.nn.Module):
             return res
 
 
-def load_deepsurfer_template(subdivision: int):
+def load_deepsurfer_template(subdivision: int, surface: str):
     """Load DeepSurfer template surface at `subdivision` level."""
     assert (
         0 <= subdivision <= 6
@@ -1042,13 +1061,13 @@ def load_deepsurfer_template(subdivision: int):
     return torch.nn.ModuleDict(
         dict(
             lh=Surface(
-                brainsynth.resources.load_cortical_template("lh")["vertices"][
+                brainsynth.resources.load_cortical_template("lh", surface)["vertices"][
                     : topo_lh.n_vertices
                 ],
                 topo_lh,
             ),
             rh=Surface(
-                brainsynth.resources.load_cortical_template("rh")["vertices"][
+                brainsynth.resources.load_cortical_template("rh", surface)["vertices"][
                     : topo_rh.n_vertices
                 ],
                 topo_rh,

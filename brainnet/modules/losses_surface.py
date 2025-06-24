@@ -86,6 +86,8 @@ def wrap_index_matched_data(cls):
             value_key: tuple[str, str] = ("interpolated", "points"),
             index_key: str = "chamfer_index",
             weight_key: str | None = None,
+            weight_invert: bool = False,
+            weight_norm_dim: int | None = None,
             *args,
             **kwargs,
         ) -> None:
@@ -96,6 +98,8 @@ def wrap_index_matched_data(cls):
             self.value_key = value_key
             self.index_key = index_key
             self.weight_key = weight_key
+            self.weight_invert = weight_invert
+            self.weight_norm_dim = weight_norm_dim
 
         def forward(self, y_pred: Surface, y_true: Surface):
             match self.value_key:
@@ -104,41 +108,38 @@ def wrap_index_matched_data(cls):
                     tv = y_true.vertices
                     pi = y_pred.vertex_data[self.index_key]
                     ti = y_true.vertex_data[self.index_key]
-                    if self.weight_key is None:
-                        pw = tw = None
-                    else:
-                        pw = y_pred.vertex_data[self.weight_key]
-                        tw = y_true.vertex_data[self.weight_key]
                 case ("mesh", _):
                     pv = y_pred.vertex_data[self.value_key[1]]
                     tv = y_true.vertex_data[self.value_key[1]]
                     pi = y_pred.vertex_data[self.index_key]
                     ti = y_true.vertex_data[self.index_key]
-                    if self.weight_key is None:
-                        pw = tw = None
-                    else:
-                        pw = y_pred.vertex_data[self.weight_key]
-                        tw = y_true.vertex_data[self.weight_key]
                 case ("interpolated", "points"):
                     pv = y_pred.interpolated.points
                     tv = y_true.interpolated.points
                     pi = y_pred.interpolated.data[self.index_key]
                     ti = y_true.interpolated.data[self.index_key]
-                    if self.weight_key is None:
-                        pw = tw = None
-                    else:
-                        pw = y_pred.interpolated.data[self.weight_key]
-                        tw = y_true.interpolated.data[self.weight_key]
                 case ("interpolated", _):
                     pv = y_pred.interpolated.data[self.value_key[1]]
                     tv = y_true.interpolated.data[self.value_key[1]]
                     pi = y_pred.interpolated.data[self.index_key]
                     ti = y_true.interpolated.data[self.index_key]
-                    if self.weight_key is None:
-                        pw = tw = None
-                    else:
+
+            if self.weight_key is None:
+                pw = tw = None
+            else:
+                match self.value_key:
+                    case ("mesh", _):
+                        pw = y_pred.vertex_data[self.weight_key]
+                        tw = y_true.vertex_data[self.weight_key]
+                    case ("interpolated", _):
                         pw = y_pred.interpolated.data[self.weight_key]
                         tw = y_true.interpolated.data[self.weight_key]
+                if self.weight_norm_dim is not None:
+                    pw = torch.linalg.vector_norm(pw, dim=self.weight_norm_dim)
+                    tw = torch.linalg.vector_norm(tw, dim=self.weight_norm_dim)
+                if self.weight_invert:
+                    pw = 1.0 / pw
+                    tw = 1.0 / tw
 
             return super().forward(pv, tv, pi, ti, pw, tw)
 
@@ -611,37 +612,10 @@ class EdgeLengthVarianceLoss(MSELoss):
         edge_length = surfaces.compute_edge_norm(unique=True)
         n = edge_length.shape[1]
         # new mean is 1
-        edge_length_mu1 = edge_length * n / edge_length.sum(1)[:, None]
+        normalizer = n / edge_length.sum(1)[:, None]
+        edge_length_mu1 = edge_length * normalizer
         # MSE to the mean
         return super().forward(edge_length_mu1, 1)
-
-
-# class TriangleLengthVarianceLoss(MSELoss):
-#     def __init__(self):
-#         super().__init__()
-
-#     def forward(self, s: Surface):
-#         """Variance of normalized edge length. Edge lengths are normalized so that
-#         their sum is equal to the number of edges. Otherwise, zero error can be
-#         achieved simply by shrinking the mesh.
-
-#         The idea is to encourage equilateral triangles.
-
-#         Parameters
-#         ----------
-#         surfaces : Surface
-
-
-#         Returns
-#         -------
-#         loss : float
-#             Average variance over batch.
-#         """
-#         edge_norm = self.compute_edge_norm()
-#         # new mean *of each triangle* is 1
-#         edge_norm_mu1 = 3.0 * edge_norm/edge_norm.sum(-1, keepdim=True)
-#         # MSE to the mean
-#         return super().forward(edge_norm_mu1, 1.0)
 
 
 class TriangleQualityLoss(torch.nn.Module):
@@ -686,6 +660,42 @@ class AreaLoss(MSELoss):
         area_mu1 = area * n / area.sum(1)[:, None]
 
         return super().forward(area_mu1, 1)
+
+
+class OrientedAreaLoss(MSELoss):
+    def __init__(self, key: str = "original_area", *args, **kwargs) -> None:
+        """Penalize negative areas proportionally to the original area."""
+        super().__init__(*args, **kwargs)
+        self.key = key
+
+    def forward(self, surface):
+        area_orig = surface.face_data[self.key].detach()
+
+        n, area = surface.compute_face_normals(return_face_areas=True)
+        b = surface.compute_face_barycenters()
+        d = torch.sum(n * b, dim=2)
+        folded = d < 0.0
+        if folded.any():
+            # oriented_area = d.sign() * area
+            # oriented_area = oriented_area * area_orig.sum() / oriented_area.sum()
+            # return super().forward(oriented_area, area_orig)
+            scale = area.sum() / area_orig.sum()
+            return super().forward(area[folded].neg(), area_orig[folded] * scale)
+        else:
+            return torch.tensor(0.0, device=area.device)
+
+
+class MetricDistortionLoss(MSELoss):
+    def __init__(self, key: str = "original_edge_norm", *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.key = key
+
+    def forward(self, surface):
+        en_orig = surface.face_data[self.key].detach()
+
+        en = surface.compute_edge_norm()
+        scale = en.sum() / en_orig.sum()
+        return super().forward(en, en_orig * scale)
 
 
 # OTHER

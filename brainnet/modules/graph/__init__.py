@@ -6,7 +6,7 @@ import torch
 from brainnet.dict_utils import swap_levels
 
 import brainnet.mesh.topology
-from brainnet.mesh.surface import load_deepsurfer_template, Surface
+from brainnet.mesh.surface import load_deepsurfer_template, rotate, Surface
 from .layers import EdgeConvolution, EdgeConvolutionBlock
 from .unet import UNet
 
@@ -38,6 +38,8 @@ class UNetDeformBlock(torch.nn.Sequential):
         # self.n_steps = n_steps
         # self.step_size = torch.nn.Parameter(torch.empty([1]))
         # torch.nn.init.constant_(self.step_size, 1.0 / n_steps)
+
+        self.out_groups = out_channels
 
         unet = UNet(
             in_channels,
@@ -112,6 +114,13 @@ class GenericSurfaceModule(torch.nn.Module):
         """Solve dv/dt = f(t, v) using Euler's method."""
         return v + h * dv
 
+    def solve_ode_euler_rotate(self, h, v, dv):
+        """Rotate v about dv by an angle of h * |dv|."""
+        v = v.mT
+        dv = dv.mT
+        k = torch.linalg.vector_norm(dv, dim=2, keepdim=True, dtype=dv.dtype)
+        return rotate(v, dv, h * k, normalize=False).mT
+
     # def solve_ode_RK4(self, h, v, dv):
     #     k1 = dv
     #     k2 = self.pial_deform(self.grid_sample_features(fmaps, v + h * 0.5 * k1))
@@ -123,11 +132,14 @@ class GenericSurfaceModule(torch.nn.Module):
         # return (torch.cat([features[m] for m in maps], dim=1), )
         return tuple(features[m] for m in maps)
 
+        # with torch.autocast("cuda", torch.float32, enabled=True):
+
     def grid_sample_features(
         self, features: list[torch.Tensor] | tuple, vertices: torch.Tensor
     ):
         return torch.cat(tuple(self.grid_sample(f, vertices) for f in features), dim=1)
 
+    # @torch.autocast("cuda", torch.float32, enabled=True)
     def grid_sample(self, image, vertices):
         """
 
@@ -219,7 +231,13 @@ class SurfaceModule(GenericSurfaceModule):
         self.white_deform = torch.nn.ModuleDict()
         self.pial_deform = torch.nn.Module()
 
-        self.sphere_reg = load_deepsurfer_template(self.in_order)
+        self.sphere_reg = load_deepsurfer_template(self.in_order, "sphere.reg")
+        for k, v in self.sphere_reg.items():
+            self.sphere_reg[k].vertices /= torch.linalg.vector_norm(
+                v.vertices, dim=2, keepdim=True
+            )
+        # Output radius
+        self.sphere_reg_radius = 100.0
 
     def forward(
         self,
@@ -264,27 +282,36 @@ class SurfaceModule(GenericSurfaceModule):
         # return as {surface: {hemi: ...}}
         return swap_levels(out)
 
-    def make_surface(self, hemi, vertices, vertex_data):
+    def make_surface(self, hemi, vertices, vertex_data: dict | None = None):
         s = Surface(vertices, self.out_topology[hemi])
-        s.vertex_data |= vertex_data
+        if vertex_data is not None:
+            s.vertex_data |= vertex_data
         return s
 
     def _forward_hemi(
         self, hemi: str, features: dict[str, torch.Tensor], vertices: torch.Tensor
     ):
         """Predict placement of white matter surface and pial surface."""
-        white_v, white_u = self._estimate_white(features, vertices)
-        white = self.make_surface(hemi, white_v, dict(sigma=white_u))
-        pial_v, pial_u = self._esimate_pial(features, white.vertices)
-        pial = self.make_surface(hemi, pial_v, dict(sigma=pial_u))
-        return dict(white=white, pial=pial)
+        reg = self.sphere_reg[hemi].vertices
+        reg = reg.to(vertices.dtype)
 
-    def _estimate_white(self, features: dict[str, torch.Tensor], v: torch.Tensor):
+        wv, wu, wr = self._estimate_white(features, vertices, reg)
+        pv, pu = self._esimate_pial(features, wv, wu)
+
+        return dict(
+            white=self.make_surface(hemi, wv, dict(sigma=wu)),
+            pial=self.make_surface(hemi, pv, dict(sigma=pu)),
+            registration=self.make_surface(hemi, wr),
+        )
+
+    def _estimate_white(
+        self, features: dict[str, torch.Tensor], v: torch.Tensor, r: torch.Tensor
+    ):
         # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
         # (feature) dimension
         v = v.mT
-
         u = torch.zeros_like(v)
+        r = r.mT
         for order in self.active_topologies:
             step_size = self.white_step_size[order]
             deform = self.white_deform[str(order)]
@@ -292,41 +319,43 @@ class SurfaceModule(GenericSurfaceModule):
             for _ in range(self.white_n_steps[order]):
                 v_features = self.grid_sample_features(fmaps, v)
 
-                dv, du = deform(v_features).split([3, 3], dim=1)
-                # dv, du, dr = deform(v_features).split([3, 3, 3], dim=1)
-
+                dv, du, dr = deform(v_features).split(self.white_out_groups, dim=1)
                 v = self.solve_ode_euler(step_size, v, dv)
                 u = self.solve_ode_euler(step_size, u, du)
-            if order < self.out_order:
-                v = self.topologies[order].subdivide_vertices(v)
-                u = self.topologies[order].subdivide_vertices(u)
+                r = self.solve_ode_euler_rotate(step_size, r, dr)
+                # r = self.solve_ode_euler(step_size, r, dr)
+                # r = r / torch.linalg.vector_norm(r, dim=1, keepdim=True, dtype=r.dtype)
 
-        # print("white")
-        # print(v.mT)
-        # print(u.mT)
+            if order < self.out_order:
+                v = self.topologies[order].subdivide_vertices(v.mT).mT
+                u = self.topologies[order].subdivide_vertices(u.mT).mT
+                r = self.topologies[order].subdivide_vertices(r.mT).mT
+                r = r / torch.linalg.vector_norm(r, dim=1, keepdim=True, dtype=r.dtype)
+
+        r = r * self.sphere_reg_radius
 
         # Transpose back to (N, M, 3)
-        return v.mT, u.mT.exp()
+        return v.mT, u.mT.exp(), r.mT
 
-    def _esimate_pial(self, features: dict[str, torch.Tensor], v: torch.Tensor):
+    def _esimate_pial(
+        self,
+        features: dict[str, torch.Tensor],
+        v: torch.Tensor,
+        init_sigma: torch.Tensor | None = None,
+    ):
         # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
         # (feature) dimension
         v = v.mT
 
-        u = torch.zeros_like(v)
+        u = torch.zeros_like(v) if init_sigma is None else init_sigma.mT
         fmaps = self._get_features(features, self.pial_feature_maps)
         for _ in range(self.pial_n_steps):
             v_features = self.grid_sample_features(fmaps, v)
-            # dv = self.pial_deform(v_features)
-            dv, du = self.pial_deform(v_features).split([3, 3], dim=1)
-            # du = du.abs()
+
+            dv, du = self.pial_deform(v_features).split(self.pial_out_groups, dim=1)
 
             v = self.solve_ode_euler(self.pial_step_size, v, dv)
             u = self.solve_ode_euler(self.pial_step_size, u, du)
-
-        # print("pial")
-        # print(v.mT)
-        # print(u.mT)
 
         # Transpose back to (N, M, 3)
         return v.mT, u.mT.exp()
@@ -336,15 +365,56 @@ class TopoFit(SurfaceModule):
     def __init__(
         self,
         in_channels: dict[str, int],
-        # out_channels: int = 3,
-        out_channels: int = 6,
+        out_channels: int = 3,
         white_channels: dict | None = None,
         pial_channels: list | None = None,
         pial_deform_module: str = "LinearDeformationBlock",
+        predict_uncertainty: bool = True,
+        predict_registration: bool = True,
         *args,
         **kwargs,
     ) -> None:
+        """_summary_
+
+        Parameters
+        ----------
+        in_channels : dict[str, int]
+            _description_
+        out_channels : int, optional
+            _description_, by default 9
+        white_channels : dict | None, optional
+            _description_, by default None
+        pial_channels : list | None, optional
+            _description_, by default None
+        pial_deform_module : str, optional
+            _description_, by default "LinearDeformationBlock"
+
+        Raises
+        ------
+        ValueError
+            _description_
+        """
         super().__init__(*args, **kwargs)
+
+        # Define output channels and initial values of the last layer
+        self.white_out_groups = [out_channels]
+        white_deform_init = out_channels * [0.0]
+        if predict_uncertainty:
+            self.white_out_groups.append(out_channels)
+            white_deform_init += out_channels * [0.0]
+        if predict_registration:
+            self.white_out_groups.append(out_channels)
+            # it is important that we do not initialize with 0.0 or nothing
+            # will happen.
+            # However, we also don't want very large values as the orientations
+            # of the vectors are random initially
+            white_deform_init += out_channels * [0.00001]
+
+        self.pial_out_groups = [out_channels]
+        pial_deform_init = out_channels * [0.01]
+        if predict_uncertainty:
+            self.pial_out_groups.append(out_channels)
+            pial_deform_init += out_channels * [0.0]
 
         if white_channels is None:
             white_channels = dict(encoder=[64, 64, 64, 64], decoder=[64, 64, 64])
@@ -353,47 +423,44 @@ class TopoFit(SurfaceModule):
         UNetTransform_kwargs = dict(channels=white_channels)
         UNetTransform_kwargs = dict(
             channels=white_channels,
-            # deform_init_values=3 * [0.0] + 3 * [0.001],
-            deform_init_values=3 * [0.0] + 3 * [0.0],
+            deform_init_values=white_deform_init,
         )
 
         for topo in self.all_topologies:  # e.g., 1, 2, ..., 7
             self.white_deform[str(topo)] = UNetDeformBlock(
                 sum(in_channels[j] for j in self.white_feature_maps[topo]),
-                out_channels,
+                sum(self.white_out_groups),
                 self.topologies[: topo + 1],
                 **UNetTransform_kwargs,
             )
 
-        pial_init_values = 3 * [0.01] + 3 * [0.0]
-        # pial_init_values = 3 * [0.01] + 3 * [0.1]
         m = getattr(brainnet.modules.graph.layers, pial_deform_module)
         match pial_deform_module:
             case "LinearDeformationBlock":
                 self.pial_deform = m(
                     sum(in_channels[j] for j in self.pial_feature_maps),
                     pial_channels,
-                    out_channels,
-                    out_init_values=pial_init_values,
+                    sum(self.pial_out_groups),
+                    out_init_values=pial_deform_init,
                 )
             case "GraphConvolutionDeformationBlock" | "EdgeConvolutionDeformationBlock":
                 self.pial_deform = m(
                     sum(in_channels[j] for j in self.pial_feature_maps),
                     pial_channels,
-                    out_channels,
+                    sum(self.pial_out_groups),
                     self.out_topology.conv_index_reduce,
                     self.out_topology.conv_index_gather,
-                    out_init_values=pial_init_values,
+                    out_init_values=pial_deform_init,
                 )
             case "ResidualGraphConvolutionDeformationBlock":
                 self.pial_deform = m(
                     sum(in_channels[j] for j in self.pial_feature_maps),
                     pial_channels,
-                    out_channels,
+                    sum(self.pial_out_groups),
                     self.out_topology.conv_index_reduce,
                     self.out_topology.conv_index_gather,
                     n_residual_blocks=3,
-                    out_init_values=pial_init_values,
+                    out_init_values=pial_deform_init,
                 )
             case _:
                 raise ValueError(

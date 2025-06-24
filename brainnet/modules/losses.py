@@ -98,11 +98,12 @@ class SquaredCosineSimilarityError(torch.nn.CosineSimilarity):
 
 
 class NegLogLikDiagonalMultivariateNormal(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, detach_scale: bool = False):
         """Simplified version of torch.distributions.MultivariateNormal that
         assumes a diagonal covariance matrix.
         """
         super().__init__()
+        self.detach_scale = detach_scale
 
     def log_prob(self, loc, scale, value):
         # compute the Mahalanobis distance (x-mu).T @ SIGMA**-1 @ (x-mu) when
@@ -142,6 +143,7 @@ class NegLogLikDiagonalMultivariateNormal(torch.nn.Module):
         neg_log_prob
             (n_batch, n_vertices)
         """
+        scale = scale.detach() if self.detach_scale else scale
         return self.log_prob(loc, scale, query_points).neg()
 
 
@@ -175,6 +177,7 @@ def wrap_mean_reduction(cls):
             if weight is None:
                 return error.mean()
             else:
+                weight = weight.detach()
                 return torch.sum(weight * error) / weight.sum()
 
     return MeanReduction
@@ -256,8 +259,8 @@ SemiHardSNELoss = wrap_semi_hard_reduction(SquaredNormError)
 # input pattern of `wrap_mean_reduction` but where the third arg is passed to
 # the super method rather than being used to weigh the error post hoc!
 class NegLogLikLoss(NegLogLikDiagonalMultivariateNormal):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, detach_scale: bool = False):
+        super().__init__(detach_scale)
 
     def forward(self, y_pred, y_true, y_pred_scale):
         error = super().forward(y_pred, y_pred_scale, y_true)

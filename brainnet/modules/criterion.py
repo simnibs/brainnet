@@ -173,98 +173,97 @@ class Criterion(torch.nn.Module):
             for head, losses in loss_dict.items()
         }
 
-    def prepare_for_surface_loss(
-        self,
-        y_pred: dict,
-        y_true: dict,
-        smooth_y_true=True,
-    ):
+    def _symmetrize_interpolated_data(self, y_pred, y_true):
+        # For data that is only present in *y_true*, set the
+        # interpolated data of the sampled points on y_pred to the
+        # value of the corresponding (closest) point on y_true
+        # (e.g., medial wall label)
+        y_true_interp = y_true.interpolated.data.keys()
+        y_pred_interp = y_pred.interpolated.data.keys()
+
+        index = y_pred.interpolated.data["chamfer_index"]
+        for k in y_true_interp:
+            if k not in y_pred.interpolated.data:
+                x = y_true.interpolated.data[k]
+                index = unsqueeze_and_expand(index, x)
+                y_pred.interpolated.data[k] = x.gather(-1, index)
+
+        # For data that is only present in *y_pred*, set the
+        # interpolated data of the sampled points on y_true to the
+        # value of the corresponding (closest) point on y_pred
+        # (e.g., uncertainty/sigma estimate from model)
+        index = y_true.interpolated.data["chamfer_index"]
+        for k in y_pred_interp:
+            if k not in y_true.interpolated.data:
+                x = y_pred.interpolated.data[k]
+                index = unsqueeze_and_expand(index, x)
+                y_true.interpolated.data[k] = x.gather(1, index)
+
+        # return y_pred, y_true
+
+    def _set_interpolated(self, y_to, y_from):
+        """Set the interpolated state of `y_to` with the state of `y_from`.
+        That is, use the interpolated points and interpolated data (e.g.,
+        chamfer indices) estimated on one surface"""
+        y_to.interpolated.face_index = y_from.interpolated.face_index
+        y_to.interpolated.weights = y_from.interpolated.weights
+        y_to.interpolated.points = y_to.interpolate_vertex_features(
+            y_to.vertices, y_to.interpolated.face_index, y_to.interpolated.weights
+        )
+
+        y_to.interpolated.data |= y_from.interpolated.data
+
+    def prepare_for_surface_loss(self, y_pred: dict, y_true: dict, smooth_y_true=True):
         """Precompute useful things for calculating the losses."""
 
         if not (self._needs_chamfer or self._needs_sampling):
             return
 
-        # clip H of y_true before interpolating to sampled points
-        # H_clip_to_percentile = dict(
-        #     white = (0.001, 0.999),
-        #     pial = (0.001, 0.999),
-        # )
-
         for s, surfaces in y_pred.items():
             for h in surfaces:
+                ypsh = y_pred[s][h]
+                ytsh = y_true[s][h]
                 if self._needs_sampling:
-                    # implies that we require chamfer
+                    if s == "registration":
+                        ypwh = y_pred["white"][h]
+                        ytwh = y_true["white"][h]
+                        self._set_interpolated(ypsh, ypwh)
+                        self._set_interpolated(ytsh, ytwh)
 
-                    self._sample_points_curv_data(y_pred[s][h])
-                    self._sample_points_curv_data(
-                        y_true[s][h], taubin_smoothing=smooth_y_true
-                    )
+                        # Add quantities for area and metric distortion losses
+                        ypsh.face_data["original_area"] = ypwh.compute_face_areas()
+                        ypsh.face_data["original_edge_norm"] = ypwh.compute_edge_norm()
 
-                    # NOTE these are indices into y_true!
-                    index = y_pred[s][h].nearest_neighbor_tensors(
-                        y_pred[s][h].interpolated.points,
-                        y_true[s][h].interpolated.points,
-                    )
-                    y_pred[s][h].interpolated.data["chamfer_index"] = index
+                    else:
+                        # implies that we require chamfer
 
-                    # =============================================================
-                    # NOTE
-                    # Since we do not know where a face/vertex is located exactly
-                    # on y_pred, set the interpolated data (e.g., medial wall
-                    # weights) of the sampled points on y_pred to the value of the
-                    # corresponding (closest) point on y_true
-                    # for k in y_pred[h][s].vertex_data:
-                    #     y_pred[h][s].interpolated.data[k] = (
-                    #         y_true[h][s].interpolated.data[k].gather(-1, index)
-                    #     )
-                    # =============================================================
+                        self._sample_points_curv_data(ypsh)
+                        self._sample_points_curv_data(
+                            ytsh, taubin_smoothing=smooth_y_true
+                        )
 
-                    # NOTE these are indices into y_pred!
-                    index = y_true[s][h].nearest_neighbor_tensors(
-                        y_true[s][h].interpolated.points,
-                        y_pred[s][h].interpolated.points,
-                    )
-                    y_true[s][h].interpolated.data["chamfer_index"] = index
+                        # NOTE these are indices into y_true!
+                        index = ypsh.nearest_neighbor_tensors(
+                            ypsh.interpolated.points,
+                            ytsh.interpolated.points,
+                        )
+                        ypsh.interpolated.data["chamfer_index"] = index
 
-                    # if "sigma" in y_pred[h][s].interpolated.data:
-                    #     y_true[h][s].interpolated.data["sigma"] = torch.ones_like(
-                    #         y_pred[h][s].interpolated.data["sigma"]
-                    #     )
+                        # NOTE these are indices into y_pred!
+                        index = ytsh.nearest_neighbor_tensors(
+                            ytsh.interpolated.points,
+                            ypsh.interpolated.points,
+                        )
+                        ytsh.interpolated.data["chamfer_index"] = index
 
-                    # =========================================================
-                    # NOTE
-                    # For data that is only present in *y_true*, set the
-                    # interpolated data of the sampled points on y_pred to the
-                    # value of the corresponding (closest) point on y_true
-                    # (e.g., medial wall label)
-                    y_true_interp = y_true[s][h].interpolated.data.keys()
-                    y_pred_interp = y_pred[s][h].interpolated.data.keys()
-
-                    index = y_pred[s][h].interpolated.data["chamfer_index"]
-                    for k in y_true_interp:
-                        if k not in y_pred[s][h].interpolated.data:
-                            x = y_true[s][h].interpolated.data[k]
-                            index = unsqueeze_and_expand(index, x)
-                            y_pred[s][h].interpolated.data[k] = x.gather(-1, index)
-
-                    # For data that is only present in *y_pred*, set the
-                    # interpolated data of the sampled points on y_true to the
-                    # value of the corresponding (closest) point on y_pred
-                    # (e.g., uncertainty/sigma estimate from model)
-                    index = y_true[s][h].interpolated.data["chamfer_index"]
-                    for k in y_pred_interp:
-                        if k not in y_true[s][h].interpolated.data:
-                            x = y_pred[s][h].interpolated.data[k]
-                            index = unsqueeze_and_expand(index, x)
-                            y_true[s][h].interpolated.data[k] = x.gather(1, index)
-                    # =========================================================
+                        self._symmetrize_interpolated_data(ypsh, ytsh)
 
                 elif self._needs_chamfer:
-                    index = y_pred[s][h].nearest_neighbor(y_true[s][h])
-                    y_pred[s][h].vertex_data["chamfer_index"] = index
+                    index = ypsh.nearest_neighbor(ytsh)
+                    ypsh.vertex_data["chamfer_index"] = index
 
-                    index = y_true[s][h].nearest_neighbor(y_pred[s][h])
-                    y_true[s][h].vertex_data["chamfer_index"] = index
+                    index = ytsh.nearest_neighbor(ypsh)
+                    ytsh.vertex_data["chamfer_index"] = index
 
     def _sample_points_curv_data(
         self,
@@ -274,7 +273,7 @@ class Criterion(torch.nn.Module):
         # H_clip_to_percentile: None | tuple[float, float] = None,
         H_clip_to_values: None | tuple[float, float] = None,
     ):
-        _ = surface.sample_points(n_samples, set_interpolated=True)
+        _ = surface.sample_points(n_samples)
 
         # ss = Surface(
         #     surface.smooth_taubin(
@@ -308,12 +307,12 @@ class Criterion(torch.nn.Module):
             #     K, samp_face, samp_coo
             # )
             surface.interpolated.data["H"] = surface.interpolate_vertex_features(
-                H, surface.interpolated.face_index, surface.interpolated.baricenter
+                H, surface.interpolated.face_index, surface.interpolated.weights
             )
 
         for k, v in surface.vertex_data.items():
             surface.interpolated.data[k] = surface.interpolate_vertex_features(
-                v, surface.interpolated.face_index, surface.interpolated.baricenter
+                v, surface.interpolated.face_index, surface.interpolated.weights
             )
 
     def forward(self, y_pred, y_true):
