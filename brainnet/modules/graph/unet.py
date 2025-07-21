@@ -1,3 +1,5 @@
+from typing import Type
+
 import torch
 
 import brainnet.mesh.topology
@@ -69,7 +71,7 @@ class UNet(torch.nn.Module):
         self,
         in_channels: int,
         topologies: list[brainnet.mesh.topology.Topology],
-        conv_module: torch.nn.Module,
+        conv_module: Type[torch.nn.Module],
         reduce: str = "amax",
         channels: int | dict = 32,
         max_depth: int = 4,

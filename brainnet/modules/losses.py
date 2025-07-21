@@ -14,18 +14,6 @@ class SquaredError(torch.nn.Module):
         # return torch.mean((a - b) ** 2, dim=-1)
 
 
-class NormalizedSquaredError(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, a, b):
-        # return (a - b) ** 2 / torch.clamp(b**2, min=1.0/b.abs().amax()**2)
-        # return torch.mean((a - b) ** 2 / torch.clamp(b**2, self.tol), dim=-1)
-        d = a**2 + b**2
-        d = d.clamp(min=1.0 / d.amax())
-        return (a - b) ** 2 / d
-
-
 class AbsoluteError(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -34,15 +22,27 @@ class AbsoluteError(torch.nn.Module):
         return torch.abs(a - b)  # .mean(dim=-1)
 
 
-class NormalizedAbsoluteError(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
+# class NormalizedSquaredError(torch.nn.Module):
+#     def __init__(self) -> None:
+#         super().__init__()
 
-    def forward(self, a, b):
-        # return torch.abs(a - b) / b.clamp(min=1.0/b.abs().amax())
-        d = a.abs() + b.abs()
-        d = d.clamp(min=1.0 / d.amax())
-        return torch.abs(a - b) / d
+#     def forward(self, a, b):
+#         # return (a - b) ** 2 / torch.clamp(b**2, min=1.0/b.abs().amax()**2)
+#         # return torch.mean((a - b) ** 2 / torch.clamp(b**2, self.tol), dim=-1)
+#         d = a**2 + b**2
+#         d = d.clamp(min=1.0 / d.amax())
+#         return (a - b) ** 2 / d
+
+
+# class NormalizedAbsoluteError(torch.nn.Module):
+#     def __init__(self) -> None:
+#         super().__init__()
+
+#     def forward(self, a, b):
+#         # return torch.abs(a - b) / b.clamp(min=1.0/b.abs().amax())
+#         d = a.abs() + b.abs()
+#         d = d.clamp(min=1.0 / d.amax())
+#         return torch.abs(a - b) / d
 
 
 class SquaredNormError(torch.nn.Module):
@@ -167,7 +167,7 @@ class NegLogLikStandardMultivariateNormal(NegLogLikDiagonalMultivariateNormal):
 # DECORATORS
 
 
-def wrap_mean_reduction(cls):
+def mean_reduction(cls):
     class MeanReduction(cls):
         def __init__(self, *args, **kwargs) -> None:
             super().__init__(*args, **kwargs)
@@ -183,7 +183,23 @@ def wrap_mean_reduction(cls):
     return MeanReduction
 
 
-def wrap_quantile_reduction(cls):
+def sum_reduction(cls):
+    class SumReduction(cls):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+
+        def forward(self, y_pred, y_true, weight=None):
+            return super().forward(y_pred, y_true).sum()
+            # if weight is None:
+            #     return error.sum()
+            # else:
+            #     weight = weight.detach()
+            #     return torch.sum(weight * error) / weight.sum()
+
+    return SumReduction
+
+
+def quantile_reduction(cls):
     class QuantileReduction(cls):
         def __init__(self, quantile: float, *args, **kwargs) -> None:
             super().__init__(*args, **kwargs)
@@ -201,7 +217,7 @@ def wrap_quantile_reduction(cls):
     return QuantileReduction
 
 
-def wrap_semi_hard_reduction(cls):
+def semi_hard_reduction(cls):
     class SemiHardReduction(cls):
         def __init__(self, hard_fraction: float, *args, **kwargs) -> None:
             super().__init__(*args, **kwargs)
@@ -237,24 +253,6 @@ def wrap_semi_hard_reduction(cls):
 # LOSSES
 
 
-QuantileL1Loss = wrap_quantile_reduction(AbsoluteError)
-QuantileNormLoss = wrap_quantile_reduction(NormError)
-QuantileMSELoss = wrap_quantile_reduction(SquaredError)
-QuantileNSELoss = wrap_quantile_reduction(NormalizedSquaredError)
-
-MSELoss = wrap_mean_reduction(SquaredError)
-NSELoss = wrap_mean_reduction(NormalizedSquaredError)
-NormLoss = wrap_mean_reduction(NormError)
-L1Loss = wrap_mean_reduction(AbsoluteError)
-NL1Loss = wrap_mean_reduction(NormalizedAbsoluteError)
-MSNELoss = wrap_mean_reduction(SquaredNormError)
-MSCosSimLoss = wrap_mean_reduction(SquaredCosineSimilarityError)
-
-SemiHardSELoss = wrap_semi_hard_reduction(SquaredError)
-SemiHardL1Loss = wrap_semi_hard_reduction(AbsoluteError)
-SemiHardSNELoss = wrap_semi_hard_reduction(SquaredNormError)
-
-
 # Make a mean reduction of the negative log probability loss mimicking the
 # input pattern of `wrap_mean_reduction` but where the third arg is passed to
 # the super method rather than being used to weigh the error post hoc!
@@ -274,3 +272,38 @@ class NegLogLikStandardLoss(NegLogLikStandardMultivariateNormal):
     def forward(self, y_pred, y_true, y_pred_scale):
         error = super().forward(y_pred, y_pred_scale, y_true)
         return error.mean()
+
+
+# decorated_losses = [
+#     "SquaredError",
+#     "SquaredNormError",
+#     "AbsoluteError",
+#     "NormError",
+#     "SquaredCosineSimilarityError",
+# ]
+
+# MeanReductionLoss = {k: mean_reduction(getattr(".", k)) for k in decorated_losses}
+# MeanReductionLoss["NegLogLik"] = NegLogLikLoss
+
+# QuantileReductionLoss = {
+#     k: quantile_reduction(getattr(".", k)) for k in decorated_losses
+# }
+# SemiHardReductionLoss = {
+#     k: quantile_reduction(getattr(".", k)) for k in decorated_losses
+# }
+
+QuantileL1Loss = quantile_reduction(AbsoluteError)
+QuantileNormLoss = quantile_reduction(NormError)
+QuantileSquaredLoss = quantile_reduction(SquaredError)
+
+MeanSquaredLoss = mean_reduction(SquaredError)
+MeanSquaredNormLoss = mean_reduction(SquaredNormError)
+MeanL1Loss = mean_reduction(AbsoluteError)
+MeanNormLoss = mean_reduction(NormError)
+MeanSquaredCosSimLoss = mean_reduction(SquaredCosineSimilarityError)
+
+SemiHardSquaredLoss = semi_hard_reduction(SquaredError)
+SemiHardL1Loss = semi_hard_reduction(AbsoluteError)
+SemiHardSquaredNormLoss = semi_hard_reduction(SquaredNormError)
+
+SumSquaredLoss = sum_reduction(SquaredError)

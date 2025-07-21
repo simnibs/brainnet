@@ -115,11 +115,19 @@ class GenericSurfaceModule(torch.nn.Module):
         return v + h * dv
 
     def solve_ode_euler_rotate(self, h, v, dv):
-        """Rotate v about dv by an angle of h * |dv|."""
+        """Rotate v about the (normalized) vector dv by an angle of h * |dv|."""
         v = v.mT
         dv = dv.mT
-        k = torch.linalg.vector_norm(dv, dim=2, keepdim=True, dtype=dv.dtype)
-        return rotate(v, dv, h * k, normalize=False).mT
+        theta = torch.linalg.vector_norm(dv, dim=2, keepdim=True, dtype=dv.dtype)
+        k = dv / theta
+        return rotate(v, k, h * theta, normalize=False).mT
+
+    def _project_to_sphere(self, r, dim: int = 1):
+        return (
+            r
+            * self.sphere_reg_radius
+            / torch.linalg.vector_norm(r, dim=dim, keepdim=True, dtype=r.dtype)
+        )
 
     # def solve_ode_RK4(self, h, v, dv):
     #     k1 = dv
@@ -231,13 +239,13 @@ class SurfaceModule(GenericSurfaceModule):
         self.white_deform = torch.nn.ModuleDict()
         self.pial_deform = torch.nn.Module()
 
+        self.sphere_reg_radius = 100.0  # Output radius
         self.sphere_reg = load_deepsurfer_template(self.in_order, "sphere.reg")
         for k, v in self.sphere_reg.items():
             self.sphere_reg[k].vertices /= torch.linalg.vector_norm(
                 v.vertices, dim=2, keepdim=True
             )
-        # Output radius
-        self.sphere_reg_radius = 100.0
+            self.sphere_reg[k].vertices *= self.sphere_reg_radius
 
     def forward(
         self,
@@ -292,11 +300,14 @@ class SurfaceModule(GenericSurfaceModule):
         self, hemi: str, features: dict[str, torch.Tensor], vertices: torch.Tensor
     ):
         """Predict placement of white matter surface and pial surface."""
-        reg = self.sphere_reg[hemi].vertices
+        reg = self.sphere_reg[hemi].vertices.detach().clone()
         reg = reg.to(vertices.dtype)
 
         wv, wu, wr = self._estimate_white(features, vertices, reg)
         pv, pu = self._esimate_pial(features, wv, wu)
+
+        wu = wu.exp()  # log(wu) -> wu
+        pu = pu.exp()
 
         return dict(
             white=self.make_surface(hemi, wv, dict(sigma=wu)),
@@ -322,20 +333,17 @@ class SurfaceModule(GenericSurfaceModule):
                 dv, du, dr = deform(v_features).split(self.white_out_groups, dim=1)
                 v = self.solve_ode_euler(step_size, v, dv)
                 u = self.solve_ode_euler(step_size, u, du)
-                r = self.solve_ode_euler_rotate(step_size, r, dr)
-                # r = self.solve_ode_euler(step_size, r, dr)
-                # r = r / torch.linalg.vector_norm(r, dim=1, keepdim=True, dtype=r.dtype)
-
+                # r = self.solve_ode_euler_rotate(step_size, r, dr)
+                r = self.solve_ode_euler(step_size, r, dr)
+                r = self._project_to_sphere(r)
             if order < self.out_order:
                 v = self.topologies[order].subdivide_vertices(v.mT).mT
                 u = self.topologies[order].subdivide_vertices(u.mT).mT
                 r = self.topologies[order].subdivide_vertices(r.mT).mT
-                r = r / torch.linalg.vector_norm(r, dim=1, keepdim=True, dtype=r.dtype)
-
-        r = r * self.sphere_reg_radius
+                r = self._project_to_sphere(r)
 
         # Transpose back to (N, M, 3)
-        return v.mT, u.mT.exp(), r.mT
+        return v.mT, u.mT, r.mT
 
     def _esimate_pial(
         self,
@@ -358,7 +366,7 @@ class SurfaceModule(GenericSurfaceModule):
             u = self.solve_ode_euler(self.pial_step_size, u, du)
 
         # Transpose back to (N, M, 3)
-        return v.mT, u.mT.exp()
+        return v.mT, u.mT
 
 
 class TopoFit(SurfaceModule):
@@ -404,11 +412,7 @@ class TopoFit(SurfaceModule):
             white_deform_init += out_channels * [0.0]
         if predict_registration:
             self.white_out_groups.append(out_channels)
-            # it is important that we do not initialize with 0.0 or nothing
-            # will happen.
-            # However, we also don't want very large values as the orientations
-            # of the vectors are random initially
-            white_deform_init += out_channels * [0.00001]
+            white_deform_init += out_channels * [0.0]
 
         self.pial_out_groups = [out_channels]
         pial_deform_init = out_channels * [0.01]
@@ -420,7 +424,6 @@ class TopoFit(SurfaceModule):
             white_channels = dict(encoder=[64, 64, 64, 64], decoder=[64, 64, 64])
         pial_channels = [32] if pial_channels is None else pial_channels
 
-        UNetTransform_kwargs = dict(channels=white_channels)
         UNetTransform_kwargs = dict(
             channels=white_channels,
             deform_init_values=white_deform_init,
@@ -466,3 +469,143 @@ class TopoFit(SurfaceModule):
                 raise ValueError(
                     f"Invalid module for pial deformation ({pial_deform_module})"
                 )
+
+
+# class TopoReg(GenericSurfaceModule):
+#     def __init__(
+#         self,
+#         in_channels: int,
+#         out_channels: int = 3,
+#         in_order: int = 0,
+#         out_order: int = 6,
+#         max_order: int = 6,
+#         topology: str = "DeepSurferTopology",
+#         n_steps: int | list[int] | None = None,
+#     ):
+#         super().__init__(in_order, out_order, max_order, topology)
+
+#         if n_steps is None:
+#             n_steps = [2] * (self.n_topologies - 1) + [1]
+#         elif isinstance(n_steps, int):
+#             n_steps = [n_steps] * self.n_topologies
+
+#         self.n_steps = dict(zip(self.all_topologies, n_steps))
+#         self.step_size = {k: 1.0 / v for k, v in self.n_steps.items()}
+
+
+#         feature_extractor_channels = dict(encoder=[64, 64, 64, 64], decoder=[64, 64, 64])
+#         registration_channels = dict(encoder=[64, 64, 64, 64], decoder=[64, 64, 64])
+
+#         # surface feature extractor
+#         self.unet = UNet(
+#             in_channels,
+#             self.topologies,
+#             EdgeConvolutionBlock,
+#             reduce="amax",
+#             channels=feature_extractor_channels,
+#             max_depth=4,
+#             n_conv=1,
+#         )
+#         out_ch = feature_extractor_channels["decoder"][-1]
+
+
+#         # surface registration
+#         self.deform = torch.nn.ModuleDict()
+#         for topo in self.all_topologies:  # e.g., 1, 2, ..., 7
+#             self.deform[str(topo)] = UNetDeformBlock(
+#                 2 * out_ch,
+#                 out_channels,
+#                 self.topologies[: topo + 1],
+#                 registration_channels,
+#                 deform_init_values=deform_init,
+#             )
+
+
+#         self.sphere_reg_radius = 100.0  # Output radius
+#         self.sphere_reg = load_deepsurfer_template(self.max_order, "sphere.reg")
+#         for k, v in self.sphere_reg.items():
+#             self.sphere_reg[k].vertices /= torch.linalg.vector_norm(
+#                 v.vertices, dim=2, keepdim=True
+#             )
+#             self.sphere_reg[k].vertices *= self.sphere_reg_radius
+
+
+#         self.white = load_deepsurfer_template(self.max_order, "white")
+
+#         self.interpolater =
+
+
+#     def to_gridded_data(self, order, f):
+#         return f[]
+
+
+#     def grid_sample_features(
+#         self, features: list[torch.Tensor] | tuple, vertices: torch.Tensor
+#     ):
+#         return torch.cat(tuple(self.grid_sample(f, vertices) for f in features), dim=1)
+
+#     # @torch.autocast("cuda", torch.float32, enabled=True)
+#     def grid_sample(self, image, vertices):
+#         """
+
+#         Parameters
+#         ----------
+#         image :
+#             image shape is (N, C, W, H)
+#         vertices :
+#             vertices shape is (N, 2, M)
+
+#         Returns
+#         -------
+#         samples :
+#             samples shape (N, C, M)
+#         """
+#         # vertices are in voxel coordinates
+#         vertices = self.normalize_coordinates(vertices)
+
+#         # samples is N,C,D,H,W where C is from `image` and D,H,W are from `points`
+#         samples = torch.nn.functional.grid_sample(
+#             image, # N,C,H,W
+#             # N,2,M -> N,M,2 -> N,H,W,2 where H=M; W=1
+#             vertices.mT[:, :, None],
+#             align_corners=True,
+#         )
+#         return samples[..., 0, 0]  # squeeze out H, W
+
+
+#     def forward(self, vertices: dict[str,torch.Tensor]):
+
+#         out = {h: self._forward_hemi(v, self.white[h].vertices) for h, v in vertices.items()}
+
+
+#     def _forward_hemi(self, v0: torch.Tensor, v1: torch.Tensor):
+
+
+#         for order in self.active_topologies:
+#             # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
+#             # (feature) dimension
+#             nv = self.topologies[order].n_vertices
+#             f0 = self.unet(v0[:, :v].mT) # Moving surface
+#             f1 = self.unet(v1[:, :v].mT) # Fixed surface
+#             f1 = self.to_gridded_data(order, f1) # Interpolate to 2D grid
+
+#             step_size = self.step_size[order]
+#             deform = self.deform[str(order)]
+#             fmaps = self._get_features(features, self.white_feature_maps[order])
+#             for _ in range(self.n_steps[order]):
+#                 v_features = self.grid_sample_features(fmaps, v)
+
+#                 dv, du, dr = deform(v_features).split(self.white_out_groups, dim=1)
+#                 v = self.solve_ode_euler(step_size, v, dv)
+#                 u = self.solve_ode_euler(step_size, u, du)
+#                 # r = self.solve_ode_euler_rotate(step_size, r, dr)
+#                 r = self.solve_ode_euler(step_size, r, dr)
+#                 r = self._project_to_sphere(r)
+#             if order < self.out_order:
+#                 v = self.topologies[order].subdivide_vertices(v.mT).mT
+#                 u = self.topologies[order].subdivide_vertices(u.mT).mT
+#                 r = self.topologies[order].subdivide_vertices(r.mT).mT
+#                 r = self._project_to_sphere(r)
+
+#         # Transpose back to (N, M, 3)
+#         return v.mT, u.mT.exp(), r.mT

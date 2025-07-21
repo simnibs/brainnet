@@ -3,23 +3,25 @@ import torch
 from brainnet.mesh.surface import Surface
 from brainnet import sphere_utils
 
-from brainnet.modules.losses import (
-    L1Loss,
-    NL1Loss,
-    NegLogLikLoss,
-    NSELoss,
-    MSELoss,
-    MSNELoss,
-    MSCosSimLoss,
-    SemiHardSNELoss,
-)
+from brainnet.modules import losses
 
 from brainnet.utils import unsqueeze_and_expand
+
+
+decorated_losses = [
+    "MeanSquaredLoss",
+    "MeanSquaredNormLoss",
+    "MeanL1Loss",
+    "MeanNormLoss",
+    "NegLogLikLoss",
+    "MeanSquaredCosSimLoss",
+]
+
 
 # DECORATORS
 
 
-def wrap_semi_symmetric(cls):
+def semi_symmetric(cls):
     """Decorator to compute symmetric loss of inputs."""
 
     class SemiSymmetric(cls):
@@ -79,7 +81,7 @@ def wrap_semi_symmetric(cls):
     return SemiSymmetric
 
 
-def wrap_index_matched_data(cls):
+def index_matched_data(cls):
     class IndexMatchedData(cls):
         def __init__(
             self,
@@ -146,7 +148,17 @@ def wrap_index_matched_data(cls):
     return IndexMatchedData
 
 
-class MatchedDistanceLoss(MSNELoss):
+SemiSymmetric = {k: semi_symmetric(getattr(losses, k)) for k in decorated_losses}
+SampledSemiSymmetric = {k: index_matched_data(v) for k, v in SemiSymmetric.items()}
+
+# SemiHard
+SemiSymSemiHardSquaredNormLoss = semi_symmetric(losses.SemiHardSquaredNormLoss)
+SampledSemiSymmetricSemiHardSNormLoss = index_matched_data(
+    SemiSymSemiHardSquaredNormLoss
+)
+
+
+class MatchedDistanceLoss(losses.MeanSquaredNormLoss):
     def __init__(self, n_vertices: int | None = None, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.n_vertices = n_vertices
@@ -294,12 +306,12 @@ class SphericalAxisAlignedArcLoss(torch.nn.Module):
 #         y_pred_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
 
 #         edge_vertices = y_true.vertices[:, y_true.topology.vertex_adjacency]
-#         y_true_dist = self.saaa(edge_vertices[:, :, 0], edge_vertices[:, :, 1])
+#         y_true_dist = seMeanSquaredNormLossedge_vertices[:, :, 0], edge_vertices[:, :, 1])
 
 #         return super().forward(y_pred_dist, y_true_dist)
 
 
-class SphericalNormalLoss(MSNELoss):
+class SphericalNormalLoss(losses.MeanSquaredNormLoss):
     def __init__(self) -> None:
         super().__init__()
 
@@ -317,39 +329,10 @@ class SphericalNormalLoss(MSNELoss):
         return super().forward(n, bc)
 
 
-SemiSymmetricMSELoss = wrap_semi_symmetric(MSELoss)
-SampledSemiSymmetricMSELoss = wrap_index_matched_data(SemiSymmetricMSELoss)
-
-SemiSymmetricMSNELoss = wrap_semi_symmetric(MSNELoss)
-SampledSemiSymmetricMSNormLoss = wrap_index_matched_data(SemiSymmetricMSNELoss)
-
-SemiSymmetricL1Loss = wrap_semi_symmetric(L1Loss)
-SampledSemiSymmetricL1Loss = wrap_index_matched_data(SemiSymmetricL1Loss)
-
-SemiSymmetricNL1Loss = wrap_semi_symmetric(NL1Loss)
-SampledSemiSymmetricNL1Loss = wrap_index_matched_data(SemiSymmetricNL1Loss)
-
-SemiSymmetricNSELoss = wrap_semi_symmetric(NSELoss)
-SampledSemiSymmetricNSELoss = wrap_index_matched_data(SemiSymmetricNSELoss)
-
-SemiSymmetricCosSimLoss = wrap_semi_symmetric(MSCosSimLoss)
-SampledSemiSymmetricCosSimLoss = wrap_index_matched_data(SemiSymmetricCosSimLoss)
-
-SemiSymmetricNegLogLikLoss = wrap_semi_symmetric(NegLogLikLoss)
-SampledSemiSymmetricNegLogLikLoss = wrap_index_matched_data(SemiSymmetricNegLogLikLoss)
-
-
-# SemiHard
-SemiSymmetricSemiHardNELoss = wrap_semi_symmetric(SemiHardSNELoss)
-SampledSemiSymmetricSemiHardSNormLoss = wrap_index_matched_data(
-    SemiSymmetricSemiHardNELoss
-)
-
-
 # REGULARIZATION
 
 
-class FaceNormalConsistencyLoss(MSNELoss):  # MSCosSimLoss
+class FaceNormalConsistencyLoss(losses.MeanSquaredNormLoss):  # MSCosSimLoss
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -376,25 +359,11 @@ class FaceNormalConsistencyLoss(MSNELoss):  # MSCosSimLoss
         # loss = loss / 3.0
 
 
-# import nibabel as nib
-# import numpy as np
-# from brainnet.mesh.surface import Surface
-
-# v,f = nib.freesurfer.read_geometry("/mnt/scratch/personal/jesperdn/results/TopoFit/t1w_1mm/examples/epoch-00200.validation.surface.rh.white.true.00")
-# v = torch.tensor(v.astype(np.float32))
-# f = torch.tensor(f.astype(np.int32))
-# surface = Surface(v,f)
-
-# vv = surface.smooth_taubin(a=0.6,b=-0.61,n_iter=5)
-
-# nib.freesurfer.write_geometry("test1", vv[0].numpy(), f.numpy())
-
-
-class LaplacianLoss(MSNELoss):
+class LaplacianLoss(losses.MeanSquaredNormLoss):
     def __init__(self, dim: int = 1):
         super().__init__()
         self.dim = dim
-        self.loss_fn = MSNELoss()
+        self.loss_fn = losses.MeanSquaredNormLoss()
 
     def forward(self, surface: Surface):
         v = surface.vertices
@@ -409,17 +378,17 @@ class LaplacianLoss(MSNELoss):
         return self.loss_fn(dv, v)
 
 
-class TaubinLoss(MSNELoss):
+class TaubinLoss(losses.MeanSquaredNormLoss):
     def __init__(self, a=0.33, b=-0.34, n_iter: int = 10):
         super().__init__()
         self.taubin_kw = dict(a=a, b=b, n_iter=n_iter)
-        self.loss_fn = MSNELoss()
+        self.loss_fn = losses.MeanSquaredNormLoss()
 
     def forward(self, s: Surface):
         return self.loss_fn(s.vertices, s.smooth_taubin(**self.taubin_kw))
 
 
-class IndexedSmoothnessLoss(MSNELoss):
+class IndexedSmoothnessLoss(losses.MeanSquaredNormLoss):
     def __init__(self, dim=-1) -> None:
         """Penalize smoothness of the surface as measured by the Laplacian."""
         super().__init__(dim)
@@ -487,16 +456,7 @@ class IndexedSmoothnessLoss(MSNELoss):
 #         )
 
 
-class VertexNormalLoss(MSCosSimLoss):
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-
-    def forward(self, y_pred, y_true):
-        n_pred = y_pred.compute_vertex_normals()
-        n_true = y_true.compute_vertex_normals()
-
-
-class SpringForceLoss(MSELoss):
+class SpringForceLoss(losses.MeanSquaredLoss):
     def __init__(self, *args, **kwargs) -> None:
         """Penalize differences in distances between neighboring vertices."""
         super().__init__(*args, **kwargs)
@@ -515,7 +475,7 @@ class SpringForceLoss(MSELoss):
         return super().forward(dp, dt)
 
 
-class VertexToVertexAngleLoss(MSCosSimLoss):
+class VertexToVertexAngleLoss(losses.MeanSquaredCosSimLoss):
     def __init__(self, dim: int = -1) -> None:
         """_summary_
 
@@ -588,7 +548,7 @@ class EdgeNormLoss(torch.nn.Module):
         return surface.compute_edge_norm(unique=True).pow(2).mean()
 
 
-class EdgeLengthVarianceLoss(MSELoss):
+class EdgeLengthVarianceLoss(losses.MeanSquaredLoss):
     def __init__(self):
         super().__init__()
 
@@ -639,7 +599,8 @@ class TriangleQualityLoss(torch.nn.Module):
         super().__init__()
 
     def forward(self, s: Surface):
-        a = 4 * torch.sqrt(torch.tensor(3.0, device=s.get_device()))
+        # a = 4 * torch.sqrt(torch.tensor(3.0, device=s.get_device()))
+        a = 6.928203230275509  # 4 * sqrt(3.0)
         A = s.compute_face_areas()
         E = s.compute_edge_norm()
         # q=0 is worst
@@ -648,7 +609,7 @@ class TriangleQualityLoss(torch.nn.Module):
         return 1.0 - q.mean()  # 0 = best; 1 = worst
 
 
-class AreaLoss(MSELoss):
+class AreaLoss(losses.MeanSquaredLoss):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
@@ -662,7 +623,7 @@ class AreaLoss(MSELoss):
         return super().forward(area_mu1, 1)
 
 
-class OrientedAreaLoss(MSELoss):
+class OrientedAreaLoss(losses.SumSquaredLoss):
     def __init__(self, key: str = "original_area", *args, **kwargs) -> None:
         """Penalize negative areas proportionally to the original area."""
         super().__init__(*args, **kwargs)
@@ -674,8 +635,8 @@ class OrientedAreaLoss(MSELoss):
         n, area = surface.compute_face_normals(return_face_areas=True)
         b = surface.compute_face_barycenters()
         d = torch.sum(n * b, dim=2)
-        folded = d < 0.0
-        if folded.any():
+
+        if (folded := d < 0.0).any():
             # oriented_area = d.sign() * area
             # oriented_area = oriented_area * area_orig.sum() / oriented_area.sum()
             # return super().forward(oriented_area, area_orig)
@@ -685,7 +646,7 @@ class OrientedAreaLoss(MSELoss):
             return torch.tensor(0.0, device=area.device)
 
 
-class MetricDistortionLoss(MSELoss):
+class MetricDistortionLoss(losses.MeanSquaredLoss):
     def __init__(self, key: str = "original_edge_norm", *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.key = key
