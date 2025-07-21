@@ -19,14 +19,14 @@ smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, cu
 """
 
 
-def rotate(x, k: torch.Tensor, alpha: torch.Tensor, normalize: bool = True):
-    """Rotate `v` by `alpha` (angle) around `k` (axis).
+def rotate(v, k: torch.Tensor, theta: torch.Tensor, normalize: bool = True):
+    """Rotate `v` by `theta` (angle) around `k` (axis).
 
     Rodrigues' rotation formula.
 
     Parameters
     ----------
-    x : torch.Tensor
+    v : torch.Tensor
         Points to rotate
     k : torch.Tensor
         Axis around which to rotate. Either one axis for all vertices
@@ -40,18 +40,18 @@ def rotate(x, k: torch.Tensor, alpha: torch.Tensor, normalize: bool = True):
     https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula
 
     """
-    cos_angle = alpha.cos()
 
     k = torch.nn.functional.normalize(k, dim=-1) if normalize else k
-    k_as_v = k.expand_as(x)
+    k_like_v = k.expand_as(v)
 
-    return (
-        x * cos_angle
-        + torch.linalg.cross(x, k_as_v) * alpha.sin()
-        + torch.sum(x * k_as_v, dim=-1, keepdim=True, dtype=x.dtype)
-        * k_as_v
-        * (1 - cos_angle)
-    )
+    # components of v that are parallel and perpendicular to k
+    # (only the perpendicular component is affected by the rotation)
+    v_para = torch.sum(k_like_v * v, dim=-1, keepdim=True, dtype=v.dtype) * k_like_v
+    v_perp = v - v_para
+    # coordinates in the plane (whose normal is k) spanned by v_perp and k x v
+    v_perp_x = theta.cos() * v_perp
+    v_perp_y = torch.linalg.cross(k_like_v, v) * theta.sin()
+    return v_para + v_perp_x + v_perp_y
 
 
 class InterpolatedData(torch.nn.Module):
@@ -168,8 +168,12 @@ class Surface(torch.nn.Module):
         self.n_batch, _, self.n_dim = value.shape
 
         # batch indexer (e.g., [[0, 1, 2]])
-        self.register_buffer("batch_ix", torch.arange(self.n_batch), persistent=False)
         self.register_buffer("_vertices", value, persistent=False)
+        self.register_buffer(
+            "batch_ix",
+            torch.arange(self.n_batch, device=value.device),
+            persistent=False,
+        )
 
     def get_device(self):
         return self.vertices.device
@@ -811,6 +815,11 @@ class Surface(torch.nn.Module):
         https://www.geometrictools.com/Documentation/DistancePoint3Triangle3.pdf
 
         """
+        # if isinstance(pttris, int):
+        #     pttris = self.get_closest_triangles(points, pttris, subset)
+        # npttris = list(map(len, pttris))
+        # pttris = np.concatenate(pttris)
+
         m = self.as_mesh()
         v0 = m[:, :, 0]  # Origin of the triangle
         e0 = m[:, :, 1] - v0  # s coordinate axis

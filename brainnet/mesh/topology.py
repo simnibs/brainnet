@@ -177,15 +177,15 @@ class Topology(torch.nn.Module):
             shape (# edges, 2)
         """
         vs = torch.arange(self.vertices_per_face, device=self.device())
-        self.vertex_opposite_edge = torch.cat(
+        vertex_opposite_edge = torch.cat(
             [
                 vs[torch.isin(vs, e, assume_unique=True, invert=True)]
                 for e in self.edge_pairs
             ]
         )
         # indices of edge pairs associated with vertex_opposite_edge
-        self.vertex_edges = torch.stack(
-            [torch.where(v == self.edge_pairs)[0] for v in self.vertex_opposite_edge]
+        vertex_edges = torch.stack(
+            [torch.where(v == self.edge_pairs)[0] for v in vertex_opposite_edge]
         )
 
         # Vertex adjacency and face-to-edge mapping
@@ -265,6 +265,11 @@ class Topology(torch.nn.Module):
             .ravel()
         )
         face_adjacency = faces_enum[a0[a1[a2]]].reshape(-1, 2)
+
+        self.register_buffer("vertex_edges", vertex_edges, persistent=False)
+        self.register_buffer(
+            "vertex_opposite_edge", vertex_opposite_edge, persistent=False
+        )
 
         self.register_buffer("vertex_adjacency", u_edges, persistent=False)
         self.register_buffer("unique_edges", u_edges, persistent=False)
