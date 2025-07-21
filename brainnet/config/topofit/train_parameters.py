@@ -2,7 +2,6 @@ from dataclasses import dataclass, InitVar
 
 from brainsynth.config import DatasetConfig, SynthesizerConfig
 
-from brainnet import config
 import brainnet.config.train_parameters
 from brainnet.networks import TopoFit
 
@@ -129,12 +128,6 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             pial_deform_module=TOPOFIT_GRAY_MATTER_MODULE,
         )
         self.model = TopoFit(unet_kwargs, graph_kwargs)
-
-        # self.model = config.BrainNetParameters(
-        #     device=self.device,
-        #     body=unet,
-        #     heads=dict(surface=topofit),
-        # )
 
         # =====================================================================
         # SYNTHESIZER

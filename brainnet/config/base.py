@@ -78,6 +78,12 @@ class ResultsParameters:
     checkpoint_filename_pattern: str = "{filename_prefix}_{name}_{global_step:05d}.pt"
     require_empty: bool = False  # require that checkpoints do not already exist
 
+    def get_checkpoint_filename(self, prefix, name, global_step):
+        step = (
+            f"{global_step:05d}" if isinstance(global_step, int) else str(global_step)
+        )
+        return f"{prefix}_{name}_{step}.pt"
+
     def __post_init__(self):
         self.out_dir = Path(self.out_dir)
         self.load_from_dir = (

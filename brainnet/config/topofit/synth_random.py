@@ -1,10 +1,8 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
-    # evaluate_on_every=1,
-    # save_example_on_every=1,
-    # run_suffix="TEST",
-    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random/checkpoint/state_checkpoint_00400.pt",
+    run_suffix="reg",
+    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random-reg/checkpoint/state_checkpoint_00400.pt",
 )
 
 PHASES = {
@@ -17,3 +15,5 @@ PHASES = {
 # If override is defined, `phases` will be ignored and `override` will be run
 # instead. This is just a convenience for development.
 # OVERRIDE = dict(TOPOFIT_ORDER_OUT=4, max_epochs=1)
+
+# pip install kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.6.0_cu12.4.html

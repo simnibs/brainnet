@@ -28,7 +28,7 @@ class TrainParameters(BaseObject):
     contrast                : str
     resolution              : str
     run_suffix              : str                   = ""
-    load_checkpoint         : int                   = 0
+    load_checkpoint         : int | str             = 0
     max_epochs              : int                   = 1
     device                  : str | torch.device    = "cuda"
     # Resume from this run. If None, resume from run defined by this setup
@@ -364,7 +364,7 @@ class TrainParameters(BaseObject):
                 f"Contrast            {self.contrast:30s}",
                 f"Resolution          {self.resolution:30s}",
                 f"Run                 {self.run:30s}",
-                f"Load checkpoint     {self.load_checkpoint:d}",
+                f"Load checkpoint     {self.load_checkpoint}",
                 f"Max epochs          {self.max_epochs:d}",
                 f"Output dir          {self.results.out_dir}",
                 f"Wandb enabled       {self.wandb.enable}",

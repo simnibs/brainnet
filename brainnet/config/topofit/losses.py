@@ -1,3 +1,5 @@
+import copy
+
 from brainnet.config.base import LossParameters
 from brainnet.modules.loss_wrappers import (
     SurfaceRegularizationLoss,
@@ -8,8 +10,7 @@ from brainnet.modules.losses_surface import (
     TaubinLoss,
     MetricDistortionLoss,
     OrientedAreaLoss,
-    SampledSemiSymmetricMSNormLoss,
-    SampledSemiSymmetricNegLogLikLoss,
+    SampledSemiSymmetric,
     SelfIntersectionCount,
     TriangleQualityLoss,
     VertexToVertexAngleLoss,
@@ -22,21 +23,18 @@ kw_white = dict(y_pred="white", y_true="white")
 kw_pial = dict(y_pred="pial", y_true="pial")
 kw_reg = dict(y_pred="registration", y_true="registration")
 
-# kw_semisym = dict(weight_key="medial_wall", sym_weights=(0.5, 0.5))
-# kw_semisym = dict(weight_key=None, sym_weights=(0.1, 0.9))
-
 functions = dict(
     white=dict(
         # spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss(
+            SampledSemiSymmetric["MeanSquaredNormLoss"](
                 value_key=("interpolated", "points"),
             ),
             **kw_white,
         ),
         edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="white"),
         negloglik=SurfaceSupervisedLoss(
-            SampledSemiSymmetricNegLogLikLoss(
+            SampledSemiSymmetric["NegLogLikLoss"](
                 value_key=("interpolated", "points"), weight_key="sigma"
             ),
             **kw_white,
@@ -44,21 +42,18 @@ functions = dict(
         sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="white"),
         tri_quality=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="white"),
         taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="white"),
-        # curv=SurfaceSupervisedLoss(
-        #     SampledSemiSymmetricNL1Loss(value_key=("interpolated", "H")),
-        #     # SampledSemiSymmetricNSELoss("H", **kw_semisym),
-        #     **kw_white,
-        # ),
     ),
     pial=dict(
         # spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss(value_key=("interpolated", "points")),
+            SampledSemiSymmetric["MeanSquaredNormLoss"](
+                value_key=("interpolated", "points")
+            ),
             **kw_pial,
         ),
         edge_var=SurfaceRegularizationLoss(EdgeLengthVarianceLoss(), y_pred="pial"),
         negloglik=SurfaceSupervisedLoss(
-            SampledSemiSymmetricNegLogLikLoss(
+            SampledSemiSymmetric["NegLogLikLoss"](
                 value_key=("interpolated", "points"), weight_key="sigma"
             ),
             **kw_pial,
@@ -66,12 +61,6 @@ functions = dict(
         sif=SurfaceRegularizationLoss(SelfIntersectionCount(), y_pred="pial"),
         taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="pial"),
         tri_quality=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="pial"),
-        # smoothness_vertex_chamfer = SurfaceSupervisedLoss(IndexedSmoothnessLoss(),**kw_pial),
-        # curv=SurfaceSupervisedLoss(
-        #     SampledSemiSymmetricNL1Loss(value_key=("interpolated", "H")),
-        #     # SampledSemiSymmetricNSELoss("H", **kw_semisym),
-        #     **kw_pial,
-        # ),
     ),
     thickness=dict(
         angle=SurfaceRegularizationLoss(
@@ -82,12 +71,13 @@ functions = dict(
     # The spherical coordinates are stored as vertex data on the white surface
     registration=dict(
         chamfer=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss(value_key=("interpolated", "points")),
+            SampledSemiSymmetric["MeanSquaredNormLoss"](
+                value_key=("interpolated", "points")
+            ),
             **kw_reg,
-            # weight_key="sigma",
         ),
         chamfer_w=SurfaceSupervisedLoss(
-            SampledSemiSymmetricMSNormLoss(
+            SampledSemiSymmetric["MeanSquaredNormLoss"](
                 value_key=("interpolated", "points"),
                 weight_key="sigma",
                 weight_invert=True,
@@ -95,9 +85,6 @@ functions = dict(
             ),
             **kw_reg,
         ),
-        # tri_quality=SurfaceRegularizationLoss(
-        #     TriangleQualityLoss(), y_pred="registration"
-        # ),
         area=SurfaceRegularizationLoss(OrientedAreaLoss(), y_pred="registration"),
         distortion=SurfaceRegularizationLoss(
             MetricDistortionLoss(), y_pred="registration"
@@ -133,13 +120,16 @@ loss_weights = dict(
     registration = dict(
         chamfer     =    1.0,
         chamfer_w   =    0.0,
-        area        =   10.0, # 100.0
-        distortion  =   10.0,
+        area        =    0.1,
+        distortion  =    1.0,
     ),
 )
 # fmt: on
 
 train = LossParameters(functions, head_weights, loss_weights)
 
-# loss_weights | dict(white=dict(sif=1.0), pial=dict(sif=1.0)
-validation = LossParameters(functions, head_weights, loss_weights)
+loss_weights_val = copy.deepcopy(loss_weights)
+loss_weights_val["white"]["sif"] = 1.0
+loss_weights_val["pial"]["sif"] = 1.0
+
+validation = LossParameters(functions, head_weights, loss_weights_val)

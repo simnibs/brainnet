@@ -1,7 +1,7 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
-    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random/checkpoint/state_checkpoint_00400.pt",
+    run_suffix="reg",
     datasets=["ADNI-GO2"],
     images_train=["flair"],
     images_validation=["flair"],

@@ -1,8 +1,8 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="1mm",
-    # run_suffix="taubin",
-    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-1mm/checkpoint/state_checkpoint_00400.pt",
+    run_suffix="reg",
+    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-1mm-reg/checkpoint/state_checkpoint_00400.pt",
 )
 
 PHASES = {

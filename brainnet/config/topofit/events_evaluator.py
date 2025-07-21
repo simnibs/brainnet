@@ -1,7 +1,7 @@
 from ignite.engine import Events
 
 from brainnet import config
-from brainnet.event_handlers import set_loss_weight
+from brainnet.event_handlers import set_head_weight, set_loss_weight
 
 # NOTE
 #
@@ -14,16 +14,16 @@ from brainnet.event_handlers import set_loss_weight
 
 loss_events = [
     # Turn on losses
-    config.EventAction(
-        event=Events.EPOCH_STARTED(once=10),
-        handler=set_loss_weight,
-        kwargs=dict(
-            weights={
-                ("white", "sif"): 1.0,
-                ("pial", "sif"): 1.0,
-            }
-        ),
-    ),
+    # config.EventAction(
+    #     event=Events.EPOCH_STARTED(once=10),
+    #     handler=set_loss_weight,
+    #     kwargs=dict(
+    #         weights={
+    #             ("white", "sif"): 1.0,
+    #             ("pial", "sif"): 1.0,
+    #         }
+    #     ),
+    # ),
 ]
 
 events = loss_events

@@ -4,26 +4,10 @@ from brainnet import config
 from brainnet.event_handlers import (
     set_loss_weight,
     optimizer_multiply_lr,
-    optimizer_reset,
+    set_head_weight,
 )
 
 loss_events = [
-    # config.EventAction(
-    #     event=Events.EPOCH_STARTED(once=101),
-    #     handler=set_loss_weight,
-    #     kwargs=dict(
-    #         weights={
-    #             # ("white", "spring"): 10.0,
-    #             # ("pial", "spring"): 10.0,
-    #             ("white", "taubin"): 20.0,
-    #             ("pial", "taubin"): 10.0,
-    #             # ("white", "edge_var"): 5.0,
-    #             # ("pial", "edge_var"): 2.5,
-    #             # ("white", "tri_Q"): 2.5,
-    #             # ("pial", "tri_Q"): 2.5,
-    #         }
-    #     ),
-    # ),
     config.EventAction(
         event=Events.EPOCH_STARTED(once=201),
         handler=set_loss_weight,
@@ -37,26 +21,9 @@ loss_events = [
                 ("pial", "edge_var"): 1.0,
                 ("white", "tri_quality"): 1.0,
                 ("pial", "tri_quality"): 1.0,
-                # ("white", "spring"): 5.0,
-                # ("pial", "spring"): 5.0,
-                # ("registration", "negloglik"): 0.05,
-                # ("registration", "chamfer"): 0.0,
-                ("registration", "chamfer"): 0.0,
-                ("registration", "chamfer_w"): 1.0,
-                # ("registration", "tri_quality"): 0.1,
             }
         ),
     ),
-    # config.EventAction(
-    #     event=Events.EPOCH_STARTED(once=301),
-    #     handler=set_loss_weight,
-    #     kwargs=dict(
-    #         weights={
-    #             # ("white", "spring"): 2.0,  # 1.0,
-    #             # ("pial", "spring"): 1.0,  # 0.5,
-    #         }
-    #     ),
-    # ),
     config.EventAction(
         event=Events.EPOCH_STARTED(once=401),
         handler=set_loss_weight,
@@ -68,6 +35,8 @@ loss_events = [
                 ("pial", "edge_var"): 0.5,
                 ("white", "tri_quality"): 0.5,
                 ("pial", "tri_quality"): 0.5,
+                ("registration", "chamfer"): 0.0,
+                ("registration", "chamfer_w"): 1.0,
             }
         ),
     ),

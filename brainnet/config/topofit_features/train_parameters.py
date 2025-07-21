@@ -6,6 +6,7 @@ from brainsynth.config import DatasetConfig
 from brainnet import config
 from brainnet.config.topofit import train_parameters
 from brainnet.modules.image import UNet
+from brainnet.networks import TopoFit
 
 
 @dataclass(kw_only=True)
@@ -59,19 +60,18 @@ class TrainParameters(train_parameters.TrainParameters):
         self.dataset_kwargs["train"]["images"] += ["brain_dist_map", "t1w"]
         self.dataset_kwargs["validation"]["images"] += ["brain_dist_map"]
 
-        template_surface = dict(resolution=TOPOFIT_ORDER_IN, types="template")
-        target_vertices = None
+        surfaces = [
+            dict(types="template", resolution=TOPOFIT_ORDER_IN),
+        ]
 
         self.dataset = dict(
             train=DatasetConfig(
                 **self.dataset_kwargs["train"],
-                target_vertices=target_vertices,
-                template_surface=template_surface,
+                surfaces=surfaces,
             ),
             validation=DatasetConfig(
                 **self.dataset_kwargs["validation"],
-                target_vertices=target_vertices,
-                template_surface=template_surface,
+                surfaces=surfaces,
             ),
         )
 
@@ -79,7 +79,7 @@ class TrainParameters(train_parameters.TrainParameters):
         # PRETRAINED MODEL
         # =====================================================================
 
-        pre_unet = UNet(
+        unet_kwargs = dict(
             spatial_dims=3,
             in_channels=1,
             encoder_channels=UNET_ENCODER_CHANNELS["t1w", "1mm"],
@@ -91,10 +91,7 @@ class TrainParameters(train_parameters.TrainParameters):
             decoder_post=None,
         )
 
-        self.pretrained_model = config.BrainNetParameters(
-            device=self.device,
-            body=pre_unet,
-            heads=copy.deepcopy(self.model.heads),
+        self.pretrained_model = TopoFit(
+            unet_kwargs, self.prediction_config["model"]["topofit"]
         )
-
         self.pretrained_dir = self.results.out_dir
