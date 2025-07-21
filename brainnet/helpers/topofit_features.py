@@ -1,133 +1,147 @@
-import functools
-import importlib
-import sys
 import torch
 
 from ignite.engine import Engine
 
 import brainsynth
-# from brainsynth.utilities import apply_affine
 
-from brainnet.dict_utils import (
-    recursively_apply_function,
-    recursively_apply_method,
-    recursive_dict_sum,
-)
+# from brainsynth.utilities import apply_affine
+from brainsynth.transforms.utils import recursive_function
+
+from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
 from brainnet import event_handlers
 import brainnet.initializers
 
-from brainnet.config.topofit.features import train_parameters
+from brainnet.config import TrainParameters
+
+DESCRIPTION = "Train the image feature extractor of a TopoFit network"
 
 
-class SupervisedStep:
+# Define some recursive versions of functions
+# recursive_Module_to = recursive_function(torch.nn.Module.to)
+recursive_item = recursive_function(torch.Tensor.item)
+
+
+def apply_brain_mask(y_pred, y_true, brain_dist_map, dist=10.0):
+    """We only care about matching the features in the brain as these are the
+    important ones.
+    """
+    mask = brain_dist_map < dist
+
+    # a little inaccurate but does not matter so much as it is just
+    # for weighting the losses
+    subsamp = [2 ** (3 - int(k.split(":")[-1])) for k in y_true if "dec:" in k]
+    mask = {k: mask[..., ::s, ::s, ::s].ravel() for k, s in zip(y_true, subsamp)}
+
+    y_pred_masked = {
+        k: v.reshape(*v.shape[:2], -1)[..., mask[k]] for k, v in y_pred.items()
+    }
+    y_true_masked = {
+        k: v.reshape(*v.shape[:2], -1)[..., mask[k]] for k, v in y_true.items()
+    }
+    return y_pred_masked, y_true_masked
+
+
+class Step:
     def __init__(
         self,
-        synthesizer: None | brainsynth.Synthesizer,
-        model: torch.nn.Module,
-        criterion: brainnet.Criterion,
-        # subdivision: int,
+        preprocessor: None | brainsynth.Synthesizer,
+        model,
+        enable_amp: bool = False,
+        device: str | torch.device = "cpu",
     ) -> None:
-        self.synthesizer = synthesizer
-        self.model = model
-        self.criterion = criterion
-        self.device = self.model.device
+        device = torch.device(device)
+        if device.type == "cpu":
+            assert not enable_amp, "Cannot use AMP with device type 'cpu'."
 
-    def prepare_batch(self, batch):
+        self.preprocessor = preprocessor
+        self.model = model
+        self.model.to(device)
+        self.enable_amp = enable_amp
+        self.device = device
+
+    def prepare_batch(
+        self, images, vox2ras, surfaces
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Run data augmentation/synthesis on the batch as returned by the
         dataloader.
         """
-        if self.synthesizer is None:
+        if self.preprocessor is None:
             # assume synthesizer was applied when loading the data
-            return batch
+            return (
+                images["image"],
+                vox2ras["image"],
+                images["t1w"],
+                images["brain_dist_map"],
+            )
         else:
-            images, affines, _, init_verts = batch
-
-            # Remove batch dim
-            func = functools.partial(torch.squeeze, dim=0)
-            images = recursively_apply_function(images, func)
-            init_verts = recursively_apply_function(init_verts, func)
-
             with torch.no_grad():
-                y_true = self.synthesizer(
-                    images, initial_vertices=init_verts, affines=affines, unpack=False
-                )
+                out = self.preprocessor(images, vox2ras, surfaces)
+            return (
+                out.image,
+                out.affine,
+                out.images["t1w"],
+                out.images["brain_dist_map"],
+            )
 
-            # Add batch dim
-            func = functools.partial(torch.unsqueeze, dim=0)
-            y_true = recursively_apply_function(y_true, func)
+    def _amp_prediction(self, image: torch.Tensor, model=None):
+        with torch.autocast(self.device.type, enabled=self.enable_amp):
+            if model is None:
+                features = self.model.unet(image)
+            else:
+                features = model.unet(image)
+        return features
 
-            del y_true["surface"]
-            del y_true["initial_vertices"]
-
-            return y_true
-
-    def compute_loss(self, y_pred, y_true):
-        raw = self.criterion(y_pred, y_true)
-        return dict(raw=raw, weighted=self.criterion.apply_weights(raw))
+    def postprocess(self, y_pred):
+        return y_pred
 
 
-class SupervisedTrainingStep(SupervisedStep):
+class TrainingStep(Step):
     def __init__(
         self,
-        synthesizer,
-        pretrained_model,
+        preprocessor: brainsynth.Synthesizer,
         model,
-        criterion,
-        optimizer,
-        gradient_accumulation_steps: int = 1,
+        pretrained_model,
+        criterion: brainnet.Criterion,
+        optimizer: torch.optim.Optimizer,
         enable_amp: bool = False,
-        freeze_body: bool = False,
+        device: str | torch.device = "cpu",
+        gradient_accumulation_steps: int = 1,
     ) -> None:
-        super().__init__(synthesizer, model, criterion)
+        super().__init__(preprocessor, model, enable_amp, device)
         self.pretrained_model = pretrained_model
+        self.pretrained_model.to(device)
+        self.criterion = criterion
         self.optimizer = optimizer
-        self.enable_amp = enable_amp
-        self.freeze_body = freeze_body
         self.gradient_accumulation_steps = gradient_accumulation_steps
         if self.enable_amp:
             self.grad_scaler = torch.amp.GradScaler("cuda")
+
+    def _amp_compute_loss(self, y_pred, y_true):
+        with torch.autocast(self.device.type, enabled=self.enable_amp):
+            # recursive_Module_to(y_pred, torch.float32)
+            # recursive_Module_to(y_true, torch.float32)
+            return self.criterion(y_pred, y_true)
 
     def __call__(self, engine, batch) -> tuple:
         self.model.train()
         self.pretrained_model.eval()
 
-        batch = self.prepare_batch(batch)
+        image, vox2ras, t1w, brain_dist = self.prepare_batch(*batch)
 
-        # Only wrap forward pass and loss computation. Backward uses the same
-        # types as inferred during forward
-        with torch.autocast(self.device.type, enabled=self.enable_amp):
-            y_pred = self.model.body(batch["image"])
-            with torch.no_grad():
-                y_true = self.pretrained_model.body(batch["t1w"])
+        y_pred = self._amp_prediction(image)
+        with torch.inference_mode():
+            y_true = self._amp_prediction(t1w, self.pretrained_model)
 
-            # y_true["sr1"] = batch["image_hires"]
-            # y_pred["sr1"] = self.model.heads["sr1"](y_pred)
+        masked_y_pred, masked_y_true = apply_brain_mask(y_pred, y_true, brain_dist)
 
-            mask = batch["brain_dist_map"] < 10.0
+        loss = self._amp_compute_loss(masked_y_pred, masked_y_true)
+        loss = dict(raw=loss, weighted=self.criterion.apply_weights(loss))
+        total_loss = recursive_dict_sum(loss["weighted"])
+        total_loss /= self.gradient_accumulation_steps
 
-            # a little inaccurate but does not matter so much as it is just
-            # for weighting the losses
-            subsamp = [2 ** (3 - int(k.split(":")[-1])) for k in y_true if "dec:" in k]
-            mask = {
-                k: mask[..., ::s, ::s, ::s].ravel() for k, s in zip(y_true, subsamp)
-            }
-            # mask["sr1"] = mask["dec:3"]
-
-            y_pred_masked = {
-                k: v.reshape(*v.shape[:2], -1)[..., mask[k]] for k, v in y_pred.items()
-            }
-            y_true_masked = {
-                k: v.reshape(*v.shape[:2], -1)[..., mask[k]] for k, v in y_true.items()
-            }
-
-            loss = self.compute_loss(y_pred_masked, y_true_masked)
-            total_loss = recursive_dict_sum(loss["weighted"])
-            total_loss /= self.gradient_accumulation_steps
-
-        # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
-            raise RuntimeError(f"Loss diverged (loss = {total_loss})")
+            raise RuntimeError(f"Loss diverged (loss = {total_loss}).\n{loss}")
 
         if self.enable_amp:
             self.grad_scaler.scale(total_loss).backward()
@@ -143,72 +157,108 @@ class SupervisedTrainingStep(SupervisedStep):
                 # accumulate across multiple passes (whenever .backward is
                 # called)
                 self.optimizer.zero_grad()
-        loss = recursively_apply_method(loss, "item")
+
+        loss = recursive_item(loss)
 
         # these are stored in engine.state.output
-        return loss, batch["image"], y_pred, y_true
+        return loss, image, vox2ras, y_pred, y_true
 
 
-class EvaluationStep(SupervisedStep):
+class EvaluationStep(Step):
     def __init__(
-        self, synthesizer, pretrained_model, model, criterion, enable_amp: bool = False
+        self,
+        preprocessor: brainsynth.Synthesizer,
+        model,
+        pretrained_model,
+        criterion: brainnet.Criterion,
+        enable_amp: bool = False,
+        device: str | torch.device = "cpu",
     ):
-        super().__init__(synthesizer, model, criterion)
+        super().__init__(preprocessor, model, enable_amp, device)
         self.pretrained_model = pretrained_model
-        self.enable_amp = enable_amp
+        self.criterion = criterion
 
-    def __call__(self, engine, batch):
+    def _amp_compute_loss(self, y_pred, y_true):
+        with torch.autocast(self.device.type, enabled=self.enable_amp):
+            # recursive_Module_to(y_pred, torch.float32)
+            # recursive_Module_to(y_true, torch.float32)
+            return self.criterion(y_pred, y_true)
+
+    def __call__(self, engine, batch: tuple):
         self.model.eval()
         self.pretrained_model.eval()
 
-        batch = self.prepare_batch(batch)
+        image, vox2ras, t1w, brain_dist = self.prepare_batch(*batch)
 
-        with torch.autocast(self.device.type, enabled=self.enable_amp):
-            with torch.inference_mode():
-                y_true = self.pretrained_model.body(batch["t1w"])
-                y_pred = self.model.body(batch["image"])
+        with torch.inference_mode():
+            y_pred = self._amp_prediction(image)
+            y_true = self._amp_prediction(t1w, self.pretrained_model)
 
-                # y_true["sr1"] = batch["image_hires"]
-                # y_pred["sr1"] = self.model.heads["sr1"](y_pred)
+        masked_y_pred, masked_y_true = apply_brain_mask(y_pred, y_true, brain_dist)
 
-                mask = batch["brain_dist_map"] < 10.0
+        loss = self._amp_compute_loss(masked_y_pred, masked_y_true)
+        loss = recursive_item(loss)
 
-                # a little inaccurate but does not matter so much as it is just
-                # for weighting the losses
-                subsamp = [
-                    2 ** (3 - int(k.split(":")[-1])) for k in y_true if "dec:" in k
-                ]
-                mask = {
-                    k: mask[..., ::s, ::s, ::s].ravel() for k, s in zip(y_true, subsamp)
-                }
-                # mask["sr1"] = mask["dec:3"]
+        return loss, image, vox2ras, y_pred, y_true
 
-                y_pred_masked = {
-                    k: v.reshape(*v.shape[:2], -1)[..., mask[k]]
-                    for k, v in y_pred.items()
-                }
-                y_true_masked = {
-                    k: v.reshape(*v.shape[:2], -1)[..., mask[k]]
-                    for k, v in y_true.items()
-                }
 
-                loss = self.compute_loss(y_pred_masked, y_true_masked)
+def write_example_event(
+    engine: Engine,
+    evaluators: dict[str, Engine],
+    config: brainnet.config.ResultsParameters,
+):
+    vol_info = event_handlers.FREESURFER_VOLUME_INFO
 
-        # we don't need the weighted loss
-        loss = recursively_apply_method(loss["raw"], "item")
+    for prefix, e in (dict(trainer=engine) | evaluators).items():
+        prefix = f"epoch-{engine.state.epoch:05d}.{prefix}"
+        match e._process_function:
+            case TrainingStep():
+                _, image, vox2ras, y_pred, y_true = e.state.output
+            case EvaluationStep():
+                _, image, vox2ras, y_pred, y_true = e.state.output
+            # case PredictionStep():
+            #     y_pred = e.state.output
+            case _:
+                raise ValueError(
+                    f"Unknown _process_function type {type(e._process_function)}"
+                )
 
-        return loss, batch["image"], y_pred, y_true
+        vol_info["volume"] = tuple(image.shape[-3:])
+
+        # vox2ras is invalid
+        if vox2ras is None:
+            vox2ras = torch.eye(4)[None]
+            vox2ras = vox2ras.broadcast_to(image.shape[0], *vox2ras.shape[1:])
+
+        # write the volume that was used for prediction
+        event_handlers.write_volume(
+            image, vox2ras, config.examples_dir, prefix, label="image"
+        )
+        # event_handlers.write_volume(
+        #     t1w, vox2ras, config.examples_dir, prefix, label="t1w"
+        # )
+        # write the predicted surfaces
+        for tag, y in zip(("pred", "true"), (y_pred, y_true)):
+            for label, v in y.items():
+                if config.examples_keys is None or label in config.examples_keys:
+                    v = v[:, :5] if "dec:" in label else v
+                    label = label.replace(":", "-")
+                    event_handlers.write_volume(
+                        v, vox2ras, config.examples_dir, prefix, tag, label
+                    )
 
 
 def setup_model(setup):
-    return brainnet.initializers.init_model(setup.model)
+    return setup.model
 
 
-def setup_pretrained_model(setup):
-    return brainnet.initializers.init_model(setup.pretrained_model)
+def setup_pretraind_model(setup):
+    return setup.pretrained_model
 
 
-def create_trainer(setup, no_wandb: bool = False):
+def create_trainer(
+    setup: TrainParameters, no_wandb: bool = False
+) -> tuple[Engine, torch.utils.data.DataLoader]:
     # Overwrite args from command line if provided
     if no_wandb:
         setup.wandb.enable = False
@@ -216,7 +266,8 @@ def create_trainer(setup, no_wandb: bool = False):
     criterion = brainnet.initializers.init_criterion(setup.criterion)
     dataloader = brainnet.initializers.init_dataloader(setup.dataset, setup.dataloader)
     model = setup_model(setup)
-    pretrained_model = setup_pretrained_model(setup)
+    pretrained_model = setup_pretraind_model(setup)
+
     # model.compile()
     optimizer = brainnet.initializers.init_optimizer(setup.optimizer, model)
     synth = brainnet.initializers.init_synthesizer(setup.synthesizer)
@@ -228,39 +279,25 @@ def create_trainer(setup, no_wandb: bool = False):
     # TRAINING
     # =============================================================================
 
-    train_step = SupervisedTrainingStep(
+    train_step = TrainingStep(
         synth["train"],
-        pretrained_model,
         model,
+        pretrained_model,
         criterion["train"],
         optimizer,
-        setup.trainer_gradient_accumulation_steps,
         setup.enable_amp,
-        setup.UNET_FREEZE,
+        setup.device,
+        setup.trainer_gradient_accumulation_steps,
     )
     eval_step = EvaluationStep(
         synth["validation"],
-        pretrained_model,
         model,
+        pretrained_model,
         criterion["validation"],
         setup.enable_amp,
+        setup.device,
     )
     trainer = Engine(train_step)
-
-    # # Set medial wall weights
-    # if md_weights is not None:
-    #     n_vertices = train_step.surface_template["y_pred"]["lh"]["white"].topology.n_vertices
-    #     md_weights = torch.tensor(md_weights, device=model.device)
-    #     medial_wall = brainnet.loss_weights.MedialWall(md_weights, n_vertices)
-
-    #     for h,v in train_step.surface_template["y_true"].items():
-    #         w = medial_wall.weights[h]
-    #         for s in v:
-    #             train_step.surface_template["y_true"][h][s].vertex_data["medial_wall"] = w
-    #             train_step.surface_template["y_pred"][h][s].vertex_data["medial_wall"] = w
-
-    #             eval_step.surface_template["y_true"][h][s].vertex_data["medial_wall"] = w
-    #             eval_step.surface_template["y_pred"][h][s].vertex_data["medial_wall"] = w
 
     # The order in which the events are added to the engine is important!
 
@@ -271,17 +308,6 @@ def create_trainer(setup, no_wandb: bool = False):
     # Add evaluations
 
     evaluators = dict(
-        # train = brainnet.helpers.utils.add_evaluation_event(
-        #     EvaluationStep(
-        #         synth["train"],
-        #         model,
-        #         criterion["validation"], # NOTE here we use the validation criterion!
-        #         train_setup.train_params.enable_amp,
-        #     ),
-        #     dataloader=dataloader["train"],
-        #     logger=event_handlers.MetricLogger(key="loss", name="train"),
-        #     **kwargs,
-        # ),
         validation=brainnet.helpers.utils.add_evaluation_event(
             eval_step,
             engine=trainer,
@@ -310,9 +336,11 @@ def create_trainer(setup, no_wandb: bool = False):
         to_save["grad_scaler"] = train_step.grad_scaler
 
     brainnet.helpers.utils.add_model_checkpoint(trainer, to_save, setup.results)
-    brainnet.helpers.utils.write_example_to_disk(trainer, evaluators, setup.results)
-    brainnet.helpers.utils.load_checkpoint_from_setup(to_save, setup)
+    brainnet.helpers.utils.write_example_to_disk(
+        trainer, evaluators, setup.results, write_example_event
+    )
 
+    brainnet.helpers.utils.load_checkpoint_from_setup(to_save, setup)
     brainnet.helpers.utils.load_checkpoint(
         dict(model=pretrained_model),
         setup.pretrained_checkpoint_filename,
@@ -325,46 +353,6 @@ def create_trainer(setup, no_wandb: bool = False):
     return trainer, dataloader["train"]
 
 
-def train(args):
-    """
-
-    python brainnet/train/topofit.py synth_1mm --no-wandb
-
-    args = brainnet.helpers.utils.argparser_topofit(
-        "brainnet/train/topofit.py t1w_1mm --no-wandb".split()
-    )
-
-    """
-
-    print(f"Using training specs: {args.specs}", end="\n\n")
-
-    specs = importlib.import_module(
-        f".{args.specs}", "brainnet.config.topofit.features"
-    )
-
-    try:
-        PHASES = dict(OVERRIDE=getattr(specs, "OVERRIDE"))
-        PHASES = specs.PHASES if PHASES is None else PHASES
-    except AttributeError:
-        PHASES = specs.PHASES
-
-    for name, phase in PHASES.items():
-        print(f"STARTING TRAINING PHASE: {name}")
-        print(79 * "=")
-        print(f"Specification\n    {phase}")
-        print(f"Defaults\n    {specs.DEFAULTS}")
-
-        setup = train_parameters.TrainParameters(**(specs.DEFAULTS | phase))
-        trainer, dataloader = create_trainer(setup, args.no_wandb)
-        trainer.run(
-            dataloader,
-            epoch_length=setup.trainer_epoch_length or len(iter(dataloader)),
-            max_epochs=setup.max_epochs,
-        )
-        print(f"TRAINING PHASE DONE: {name}", end="\n\n")
-        print(79 * "=")
-
-
-if __name__ == "__main__":
-    args = brainnet.helpers.utils.argparser_topofit(sys.argv)
-    train(args)
+# if __name__ == "__main__":
+#     args = brainnet.helpers.utils.argparser_topofit(sys.argv)
+#     train(args)

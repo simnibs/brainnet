@@ -90,10 +90,10 @@ def add_model_checkpoint_best(
 
 def load_checkpoint_from_setup(to_load, setup):
     if setup.load_checkpoint != 0:
-        ckpt_name = setup.results.checkpoint_filename_pattern.format(
-            filename_prefix=setup.results.checkpoint_prefix,
-            name="checkpoint",
-            global_step=setup.load_checkpoint,
+        ckpt_name = setup.results.get_checkpoint_filename(
+            setup.results.checkpoint_prefix,
+            "checkpoint",
+            setup.load_checkpoint,
         )
         print(f"Loading checkpoint {ckpt_name}")
         ckpt = setup.results._from_checkpoint_dir / ckpt_name
@@ -104,19 +104,27 @@ def load_checkpoint_from_setup(to_load, setup):
             hasattr(setup, "load_body_from_checkpoint")
             and (ckpt := setup.load_body_from_checkpoint) is not None
         ):
-            print(f"Loading parameters for body from {ckpt}")
+            print(f"Loading parameters for UNET from {ckpt}")
             checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
+            if not any(k.startswith("unet") for k in checkpoint_obj):
+                raise RuntimeError(
+                    "Found no modules in checkpoint starting with `unet`."
+                )
             state_dict.update(
-                {k: v for k, v in checkpoint_obj.items() if k.startswith("body")}
+                {k: v for k, v in checkpoint_obj.items() if k.startswith("unet")}
             )
         if (
             hasattr(setup, "load_head_from_checkpoint")
             and (ckpt := setup.load_head_from_checkpoint) is not None
         ):
-            print(f"Loading parameters for heads from {ckpt}")
+            print(f"Loading parameters for GRAPH from {ckpt}")
             checkpoint_obj = torch.load(ckpt, map_location=setup.device)["model"]
+            if not any(k.startswith("graph") for k in checkpoint_obj):
+                raise RuntimeError(
+                    "Found no modules in checkpoint starting with `graph`."
+                )
             state_dict.update(
-                {k: v for k, v in checkpoint_obj.items() if k.startswith("heads")}
+                {k: v for k, v in checkpoint_obj.items() if k.startswith("graph")}
             )
         # model.load_state_dict(checkpoint_obj, **kwargs)
         ModelCheckpoint.load_objects(

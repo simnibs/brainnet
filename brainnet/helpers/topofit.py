@@ -167,7 +167,7 @@ class TrainingStep(Step):
 
         # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
-            raise RuntimeError(f"Loss diverged (loss = {total_loss})")
+            raise RuntimeError(f"Loss diverged (loss = {total_loss}).\n{loss}")
 
         if self.enable_amp:
             self.grad_scaler.scale(total_loss).backward()
@@ -210,7 +210,6 @@ class EvaluationStep(Step):
     def _amp_compute_loss(self, y_pred, y_true):
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             self.criterion.prepare_for_surface_loss(y_pred, y_true)
-
             # recursive_Module_to(y_pred, torch.float32)
             # recursive_Module_to(y_true, torch.float32)
 
@@ -230,7 +229,6 @@ class EvaluationStep(Step):
             y_pred = self._amp_prediction(image, template)
             loss = self._amp_compute_loss(y_pred, y_true)
             loss = recursive_item(loss)
-
         del y_true["registration"]
 
         return loss, image, vox2ras, y_pred, y_true
@@ -248,7 +246,10 @@ class PredictionStep(Step):
         with torch.inference_mode():
             y_pred = self._amp_prediction(image, template)
 
+        # we don't want to transform the spherical registration
+        sphere_reg = y_pred.pop("registration")
         _ = recursive_apply_affine(y_pred, vox2ras, inplace=True)
+        y_pred["registration"] = sphere_reg
 
         return y_pred
 
@@ -313,7 +314,6 @@ def write_example_event(
 
 def setup_model(setup):
     return setup.model
-    # return brainnet.initializers.init_model(setup.model)
 
 
 def create_trainer(
