@@ -4,6 +4,13 @@ import sys
 from brainnet.evaluation import predict
 
 
+def _handle_checkpoint_type(x):
+    try:
+        return int(x)
+    except ValueError:
+        return x
+
+
 def parse_args(argv):
     description = "Main interface to evaluating a BrainNet model."
     parser = argparse.ArgumentParser(
@@ -18,7 +25,9 @@ def parse_args(argv):
     parser.add_argument("model", help=help_model)
     parser.add_argument("specs", help=help_specs)
     parser.add_argument("subset", type=str, help=help_subset)
-    parser.add_argument("checkpoint", type=int, help=help_checkpoint)
+    parser.add_argument(
+        "checkpoint", type=_handle_checkpoint_type, help=help_checkpoint
+    )
     parser.add_argument(
         "-d",
         "--datasets",

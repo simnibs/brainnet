@@ -43,12 +43,24 @@ def parse_args(argv):
 
 python tools/train.py topofit synth_1mm --no-wandb
 
-args = parse_args("brainnet/train/topofit.py t1w_1mm --no-wandb".split())
+args = parse_args("brainnet/train.py topofit_features synth_1mm --no-wandb".split())
+
+model_helpers = getattr(brainnet.helpers, "topofit_features")
+train("topofit_features", "synth_1mm", model_helpers.create_trainer, True)
+
+model=args.model
+specs_name=args.specs
+create_trainer = model_helpers.create_trainer
+no_wandb=True
+
+
+name, phase = next(iter(PHASES.items()))
+
+batch = next(iter(dataloader))
 
 """
 
 if __name__ == "__main__":
     args = parse_args(sys.argv)
-    # model_helpers = importlib.import_module(f"brainnet.helpers.{args.model}")
     model_helpers = getattr(brainnet.helpers, args.model)
     train(args.model, args.specs, model_helpers.create_trainer, args.no_wandb)
