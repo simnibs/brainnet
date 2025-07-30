@@ -221,6 +221,11 @@ class TrainParameters(BaseObject):
                         subject_subset="validation",
                         images=images_validation or ["generation_labels_dist", "t1w"],
                     ),
+                    test=kwargs_default
+                    | dict(
+                        subject_subset="test",
+                        images=images_validation or ["generation_labels_dist", "t1w"],
+                    ),
                 )
             case "t1w":
                 self.dataset_kwargs = dict(
@@ -232,6 +237,11 @@ class TrainParameters(BaseObject):
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation",
+                        images=images_validation or ["generation_labels_dist", "t1w"],
+                    ),
+                    test=kwargs_default
+                    | dict(
+                        subject_subset="test",
                         images=images_validation or ["generation_labels_dist", "t1w"],
                     ),
                     exclude=kwargs_default
@@ -254,6 +264,11 @@ class TrainParameters(BaseObject):
                         subject_subset="validation.t2",
                         images=images_validation or ["generation_labels_dist", "t2w"],
                     ),
+                    test=kwargs_default
+                    | dict(
+                        subject_subset="test",
+                        images=images_validation or ["generation_labels_dist", "t2w"],
+                    ),
                 )
             case "flair":
                 self.dataset_kwargs = dict(
@@ -265,6 +280,11 @@ class TrainParameters(BaseObject):
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation.flair",
+                        images=images_validation or ["generation_labels_dist", "flair"],
+                    ),
+                    test=kwargs_default
+                    | dict(
+                        subject_subset="test",
                         images=images_validation or ["generation_labels_dist", "flair"],
                     ),
                 )
