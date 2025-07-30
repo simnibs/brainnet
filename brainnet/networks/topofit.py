@@ -7,7 +7,9 @@ import brainnet.modules.graph
 
 
 class TopoFit(torch.nn.Module):
-    def __init__(self, unet_kwargs: dict, graph_kwargs: dict):
+    def __init__(
+        self, unet_kwargs: dict, graph_kwargs: dict, group_output_by: str = "surface"
+    ):
         """
 
         Parameters
@@ -29,6 +31,29 @@ class TopoFit(torch.nn.Module):
 
         self.graph = brainnet.modules.graph.TopoFit(**graph_kwargs)
 
+        self.set_group_output_by(group_output_by)
+
+    def set_group_output_by(self, group_output_by: str):
+        assert group_output_by in ("surface", "hemisphere")
+        self._group_output_by = group_output_by
+        self._swap_output = self._group_output_by == "surface"
+
+    @staticmethod
+    def swap_output_levels(out):
+        """Swap to first two levels of a dictionary, e.g.,
+
+            {"a": {"x": 1, "y": 2}, "b": {"x": 3, "y": 4}}
+
+        to
+
+            {"x": {"a": 1, "b": 3}, "y": {"a": 2, "b": 4}}
+
+        Assumes that all subdicts has the same entries!
+        """
+        level0 = tuple(out.keys())
+        level1 = tuple(out[level0[0]].keys())
+        return {s: {h: out[h][s] for h in level0} for s in level1}
+
     def forward(
         self, image: torch.Tensor, template: dict[str, torch.Tensor]
     ) -> dict[str, dict[str, Surface]]:
@@ -48,17 +73,18 @@ class TopoFit(torch.nn.Module):
 
                 dict[surface type, dict[hemisphere, Surface]]
         """
-        return self.graph(self.unet(image), template)
+        out = self.graph(self.unet(image), template)
+        return self.swap_output_levels(out) if self._swap_output else out
 
     @classmethod
-    def from_pretrained_model(
+    def from_pretrained(
         cls, contrast: str, resolution: str, device: str | torch.device = "cpu"
     ):
         device = torch.device(device)
         state = resources.load_pretrained_state("topofit", contrast, resolution, device)
         config = resources.load_pretrained_config("topofit", contrast, resolution)
 
-        model = cls(config["model"]["unet_kwargs"], config["model"]["topofit_kwargs"])
+        model = cls(config["model"]["unet"], config["model"]["topofit"])
         model.to(device)
         model.load_state_dict(state)
 

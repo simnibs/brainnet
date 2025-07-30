@@ -1,14 +1,17 @@
-from pathlib import Path
+__all__ = [
+    "CONFIG_DIR",
+    "RESOURCES_DIR",
+    "config",
+    "Criterion",
+    "DeepSurferTopology",
+    "networks",
+    "Surface",
+]
 
-root_dir = Path(__file__).parent
-config_dir = root_dir / "config"
-resources_dir = root_dir / "resources"
-
-__all__ = ["Criterion", "DeepSurferTopology", "Surface"]
-
+from brainnet.config import CONFIG_DIR
 from brainnet import config
+from brainnet.modules.criterion import Criterion
+from brainnet import networks
+from brainnet.resources import RESOURCES_DIR
 from brainnet.mesh.surface import Surface
 from brainnet.mesh.topology import DeepSurferTopology
-
-from brainnet.modules.brainnet import BrainNet, BrainReg
-from brainnet.modules.criterion import Criterion

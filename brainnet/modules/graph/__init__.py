@@ -3,8 +3,6 @@ from typing import Type
 
 import torch
 
-from brainnet.dict_utils import swap_levels
-
 import brainnet.mesh.topology
 from brainnet.mesh.surface import load_deepsurfer_template, rotate, Surface
 from .layers import EdgeConvolution, EdgeConvolutionBlock
@@ -285,10 +283,7 @@ class SurfaceModule(GenericSurfaceModule):
         dtype = last_feature_map.dtype
         template = {k: v.to(dtype) for k, v in template.items()}
 
-        out = {h: self._forward_hemi(h, features, v) for h, v in template.items()}
-
-        # return as {surface: {hemi: ...}}
-        return swap_levels(out)
+        return {h: self._forward_hemi(h, features, v) for h, v in template.items()}
 
     def make_surface(self, hemi, vertices, vertex_data: dict | None = None):
         s = Surface(vertices, self.out_topology[hemi])

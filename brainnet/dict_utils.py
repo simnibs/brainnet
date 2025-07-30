@@ -1,19 +1,3 @@
-def swap_levels(out):
-    """Swap to first two levels of a dictionary, e.g.,
-
-        {"a": {"x": 1, "y": 2}, "b": {"x": 3, "y": 4}}
-
-    to
-
-        {"x": {"a": 1, "b": 3}, "y": {"a": 2, "b": 4}}
-
-    Assumes that all subdicts has the same entries!
-    """
-    level0 = tuple(out.keys())
-    level1 = tuple(out[level0[0]].keys())
-    return {s: {h: out[h][s] for h in level0} for s in level1}
-
-
 def recursively_apply_function(d, fn, out=None):
     """Recursively call a function on values."""
     if out is None:

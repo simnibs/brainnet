@@ -5,8 +5,10 @@ from ignite.engine import Engine
 import brainsynth
 from brainsynth.transforms.utils import recursive_function
 
+import brainnet.resources
+from brainnet.networks import TopoFit
 from brainnet.config import TrainParameters
-from brainnet.dict_utils import recursive_dict_sum, swap_levels
+from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
 
 from brainnet.mesh.surface import load_deepsurfer_template
@@ -100,7 +102,10 @@ class Step:
 
         # with torch.autocast(self.device.type, torch.float32, enabled=self.enable_amp):
         features = recursive_float(features)
-        return self.model.graph(features, template)
+        out = self.model.graph(features, template)
+        if self.model._swap_output:
+            out = self.model.swap_output_levels(out)
+        return out
 
     def postprocess(self, y_pred):
         return y_pred
@@ -142,8 +147,8 @@ class TrainingStep(Step):
             # recursive_Module_to(y_true, torch.float32)
 
             # swap to {hemi: {surface: ...}} for loss calculation
-            y_pred = swap_levels(y_pred)
-            y_true = swap_levels(y_true)
+            y_pred = self.model.swap_output_levels(y_pred)
+            y_true = self.model.swap_output_levels(y_true)
             return self.criterion(y_pred, y_true)
 
     def __call__(self, engine, batch) -> tuple:
@@ -158,6 +163,8 @@ class TrainingStep(Step):
         # types as inferred during forward
 
         y_pred = self._amp_prediction(image, template)
+        y_pred = self.postprocess(y_pred)
+
         loss = self._amp_compute_loss(y_pred, y_true)
         loss = dict(raw=loss, weighted=self.criterion.apply_weights(loss))
         total_loss = recursive_dict_sum(loss["weighted"])
@@ -214,8 +221,8 @@ class EvaluationStep(Step):
             # recursive_Module_to(y_true, torch.float32)
 
             # swap to {hemi: {surface: ...}} for loss calculation
-            y_pred = swap_levels(y_pred)
-            y_true = swap_levels(y_true)
+            y_pred = self.model.swap_output_levels(y_pred)
+            y_true = self.model.swap_output_levels(y_true)
             return self.criterion(y_pred, y_true)
 
     def __call__(self, engine, batch: tuple):
@@ -227,6 +234,8 @@ class EvaluationStep(Step):
 
         with torch.inference_mode():
             y_pred = self._amp_prediction(image, template)
+            y_pred = self.postprocess(y_pred)
+
             loss = self._amp_compute_loss(y_pred, y_true)
             loss = recursive_item(loss)
         del y_true["registration"]
@@ -238,20 +247,74 @@ class PredictionStep(Step):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def __call__(self, engine, batch):
-        self.model.eval()
+    def prepare_batch(
+        self,
+        image: torch.Tensor,
+        vox2ras: torch.Tensor,
+        template: dict[str, torch.Tensor],
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        dict[str, torch.Tensor],
+    ]:
+        """Run data augmentation/synthesis on the batch as returned by the
+        dataloader.
+        """
 
-        image, vox2ras, template, _ = self.prepare_batch(*batch)
+        if self.preprocessor is not None:
+            images = dict(image=image)
+            vox2ras = dict(image=vox2ras)
+            surfaces = dict(template=template)
 
-        with torch.inference_mode():
-            y_pred = self._amp_prediction(image, template)
+            with torch.no_grad():
+                out = self.preprocessor(images, vox2ras, surfaces)
 
+            image = out.image
+            vox2ras = out.affine
+            template = out.surfaces["template"]
+
+        return image, vox2ras, template
+
+    def postprocess(self, y_pred, vox2ras):
         # we don't want to transform the spherical registration
         sphere_reg = y_pred.pop("registration")
         _ = recursive_apply_affine(y_pred, vox2ras, inplace=True)
         y_pred["registration"] = sphere_reg
+        return y_pred
+
+    def __call__(self, engine, batch):
+        self.model.eval()
+
+        image, vox2ras, template = self.prepare_batch(*batch)
+
+        with torch.inference_mode():
+            y_pred = self._amp_prediction(image, template)
+            y_pred = self.postprocess(y_pred, vox2ras)
 
         return y_pred
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        contrast,
+        resolution,
+        enable_amp: bool = True,
+        device: str | torch.device = "cpu",
+    ):
+        preprocessor = preprocessor_from_config("topofit", contrast, resolution, device)
+        model = TopoFit.from_pretrained(contrast, resolution, device)
+        return cls(preprocessor, model, enable_amp, device)
+
+
+def preprocessor_from_config(model, contrast, resolution, device):
+    config = brainnet.resources.load_pretrained_config(model, contrast, resolution)
+    config = brainsynth.config.PredictionConfig(
+        "PredictionBuilder",
+        config["preprocessor"]["out_size"],
+        config["preprocessor"]["out_center_str"],
+        device=device,
+    )
+    return brainsynth.Synthesizer(config)
 
 
 def write_example_prediction(y, out_dir):
