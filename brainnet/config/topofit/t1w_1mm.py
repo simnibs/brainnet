@@ -1,7 +1,7 @@
 DEFAULTS = dict(
     contrast="t1w",
     resolution="1mm",
-    run_suffix="reg",
+    run_suffix="reg",  # WMGM-only
     # evaluate_on_every=1,
     # save_example_on_every=1,
     # device="cpu",

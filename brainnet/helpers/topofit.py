@@ -1,19 +1,28 @@
-import torch
+from pathlib import Path
 
 from ignite.engine import Engine
+import numpy as np
+import torch
+import tqdm
+
+import cortech
 
 import brainsynth
 from brainsynth.transforms.utils import recursive_function
 
+import brainnet.networks
 import brainnet.resources
-from brainnet.networks import TopoFit
 from brainnet.config import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
+from .trega import PredictionStep as trega_PredictionStep
 
 from brainnet.mesh.surface import load_deepsurfer_template
 from brainnet import event_handlers, Surface
 import brainnet.initializers
+
+from brainnet.datasets import TopoFitDataset
+
 
 # Define some recursive versions of functions
 recursive_apply_affine = recursive_function(Surface.apply_affine)
@@ -32,17 +41,14 @@ class Step:
         self,
         preprocessor: None | brainsynth.Synthesizer,
         model,
-        enable_amp: bool = False,
+        enable_amp: bool = True,
         device: str | torch.device = "cpu",
     ) -> None:
         device = torch.device(device)
-        if device.type == "cpu":
-            assert not enable_amp, "Cannot use AMP with device type 'cpu'."
-
         self.preprocessor = preprocessor
         self.model = model
         self.model.to(device)
-        self.enable_amp = enable_amp
+        self.enable_amp = enable_amp and not (device.type == "cpu")
         self.device = device
         self.set_prediction_topologies()
 
@@ -118,7 +124,7 @@ class TrainingStep(Step):
         model,
         criterion: brainnet.Criterion,
         optimizer: torch.optim.Optimizer,
-        enable_amp: bool = False,
+        enable_amp: bool = True,
         device: str | torch.device = "cpu",
         gradient_accumulation_steps: int = 1,
         freeze_body: bool = False,
@@ -203,7 +209,7 @@ class EvaluationStep(Step):
         preprocessor: brainsynth.Synthesizer,
         model,
         criterion: brainnet.Criterion,
-        enable_amp: bool = False,
+        enable_amp: bool = True,
         device: str | torch.device = "cpu",
     ):
         super().__init__(preprocessor, model, enable_amp, device)
@@ -244,35 +250,33 @@ class EvaluationStep(Step):
 
 
 class PredictionStep(Step):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, trega_step, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.trega_step = trega_step
 
     def prepare_batch(
         self,
         image: torch.Tensor,
         vox2ras: torch.Tensor,
-        template: dict[str, torch.Tensor],
+        template: dict[str, torch.Tensor] | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
-        dict[str, torch.Tensor],
+        dict[str, torch.Tensor] | None,
     ]:
         """Run data augmentation/synthesis on the batch as returned by the
         dataloader.
         """
-
         if self.preprocessor is not None:
             images = dict(image=image)
-            vox2ras = dict(image=vox2ras)
-            surfaces = dict(template=template)
-
+            affines = dict(image=vox2ras)
+            surfaces = None if template is None else dict(template=template)
             with torch.no_grad():
-                out = self.preprocessor(images, vox2ras, surfaces)
-
+                out = self.preprocessor(images, affines, surfaces)
             image = out.image
             vox2ras = out.affine
             template = out.surfaces["template"]
-
+        # else assume preprocessor was applied when loading the data
         return image, vox2ras, template
 
     def postprocess(self, y_pred, vox2ras):
@@ -285,7 +289,19 @@ class PredictionStep(Step):
     def __call__(self, engine, batch):
         self.model.eval()
 
-        image, vox2ras, template = self.prepare_batch(*batch)
+        image, vox2ras, template = batch
+
+        if template is None:
+            image = image.to(self.device)
+            vox2ras = vox2ras.to(self.device)
+            y_pred = self.trega_step(None, (image, vox2ras))
+            # to subject voxel space
+            template = self.trega_step.apply_affine(
+                torch.linalg.inv(vox2ras) @ y_pred["brain"],
+                return_surface=False,
+            )
+
+        image, vox2ras, template = self.prepare_batch(image, vox2ras, template)
 
         with torch.inference_mode():
             y_pred = self._amp_prediction(image, template)
@@ -293,28 +309,32 @@ class PredictionStep(Step):
 
         return y_pred
 
+    @staticmethod
+    def _preprocessor_from_config(contrast, resolution, device):
+        config = brainnet.resources.load_pretrained_config(
+            "topofit", contrast, resolution
+        )
+        config = brainsynth.config.PredictionConfig(
+            "PredictionBuilder",
+            config["preprocessor"]["out_size"],
+            config["preprocessor"]["out_center_str"],
+            device=device,
+        )
+        return brainsynth.Synthesizer(config)
+
     @classmethod
     def from_pretrained(
         cls,
         contrast,
         resolution,
-        enable_amp: bool = True,
         device: str | torch.device = "cpu",
+        trega_kwargs: dict | None = None,
     ):
-        preprocessor = preprocessor_from_config("topofit", contrast, resolution, device)
-        model = TopoFit.from_pretrained(contrast, resolution, device)
-        return cls(preprocessor, model, enable_amp, device)
-
-
-def preprocessor_from_config(model, contrast, resolution, device):
-    config = brainnet.resources.load_pretrained_config(model, contrast, resolution)
-    config = brainsynth.config.PredictionConfig(
-        "PredictionBuilder",
-        config["preprocessor"]["out_size"],
-        config["preprocessor"]["out_center_str"],
-        device=device,
-    )
-    return brainsynth.Synthesizer(config)
+        kw = {} or trega_kwargs
+        preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
+        model = brainnet.networks.TopoFit.from_pretrained(contrast, resolution, device)
+        trega_step = trega_PredictionStep.from_pretrained(device=device, **kw)
+        return cls(trega_step, preprocessor, model, device=device)
 
 
 def write_example_prediction(y, out_dir):
@@ -491,3 +511,109 @@ def create_trainer(
     print(setup)
 
     return trainer, dataloader["train"]
+
+
+def create_predictor(setup, datasets: list[str] | tuple | None = None):
+    model_helper = importlib.import_module(f"brainnet.helpers.{model}")
+    model = model_helper.setup_model(setup)
+
+    _valid_pred_contrasts = {"t1w", "t2w", "flair", "ct"}
+
+    # We need the affine as well
+    restrict_datasets_(setup, subset, datasets)
+    for v in setup.dataset[subset].dataset_kwargs.values():
+        found = [i for i in _valid_pred_contrasts if i in v["images"]]
+        n_found = len(found)
+        msg = f"{n_found} contrasts specified in dataset configuration ({found}) which is ambiguous for prediction. Need only one."
+        assert n_found == 1, msg
+        v["images"] = found
+
+    dataloaders = brainsynth.dataset.setup_dataloader(
+        setup.dataset[subset],
+        separate_datasets=True,
+        **setup.dataloader,
+        dataset_class=brainsynth.dataset.PredictionDataset,
+    )
+    if subset == "test":
+        out_size = setup.synthesizer["validation"].out_size
+        out_center_str = setup.synthesizer["validation"].out_center_str
+    elif subset == "testood":
+        out_size = setup.synthesizer["validation"].out_size
+        out_center_str = setup.synthesizer["validation"].out_center_str
+    else:
+        out_size = setup.synthesizer[subset].out_size
+        out_center_str = setup.synthesizer[subset].out_center_str
+    preprocessor = brainsynth.Synthesizer(
+        PredictionConfig("PredictionBuilder", out_size, out_center_str)
+    )
+
+    pred_step = model_helper.PredictionStep(
+        preprocessor, model, setup.enable_amp, setup.device
+    )
+    write_step = model_helper.write_example_prediction
+
+    to_load = dict(model=model)
+    brainnet.helpers.utils.load_checkpoint_from_setup(to_load, setup)
+
+    print("Setup completed.")
+    print(setup)
+
+    return pred_step, write_step, dataloaders
+
+
+def predict(args):
+    valid_text_file_suffixes = {".csv", ".txt"}
+    if args.image.suffix in valid_text_file_suffixes:
+        images = np.loadtxt(args.image, dtype=str).tolist()
+        images = [images] if isinstance(images, str) else images  # single line
+    else:
+        images = [args.image]
+
+    if args.out.suffix in valid_text_file_suffixes:
+        out_dirs = np.loadtxt(args.out, dtype=str).tolist()
+        out_dirs = [out_dirs] if isinstance(out_dirs, str) else out_dirs
+    else:
+        out_dirs = [args.out]
+
+    if args.transform is None:
+        transforms = None
+    else:
+        try:
+            # Try to read as if it is a matrix
+            _ = np.loadtxt(args.transform, dtype=float)
+            transforms = [args.transform]
+        except ValueError:  # a path cannot be converted to a float
+            # If this fails, assume a list of filenames
+            transforms = np.loadtxt(args.transform, dtype=str).tolist()
+            transforms = [transforms] if isinstance(transforms, str) else transforms
+
+    pred_step = PredictionStep.from_pretrained(
+        args.contrast, args.resolution, args.device, trega_kwargs=dict(hemi=args.hemi)
+    )
+    in_order = pred_step.model.graph.active_topologies[0]
+    dataset = TopoFitDataset(
+        images,
+        args.conform,
+        transforms,
+        args.mni_direction,
+        args.mni_space,
+        args.hemi,
+        in_order,
+    )
+
+    # template_faces = {h: t.get_faces().cpu().numpy() for h,t in brainnet.mesh.surface.load_deepsurfer_template(in_order, "white").items()}
+
+    for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
+        surfaces = pred_step(None, batch)
+
+        if not (out_dir := Path(out_dir)).exists():
+            out_dir.mkdir(parents=True)
+
+        for name, hemispheres in surfaces.items():
+            for h, surface in hemispheres.items():
+                v = surface.vertices.squeeze(0).cpu().numpy()
+                f = surface.get_faces().cpu().numpy()
+                cortech.Surface(v, f).save(out_dir / f"{h}.{name}")
+
+        # if args.save_template:
+        #     for h,vertices in template.items():

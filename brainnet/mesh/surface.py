@@ -327,7 +327,7 @@ class Surface(torch.nn.Module):
             return self
         else:
             v = apply_affine(affine, self.vertices)
-            return Surface(v, self.get_faces()) if return_surface else v
+            return Surface(v, self.topology) if return_surface else v
 
     # def squeeze_batch(self):
     #     self.vertices = self.vertices.squeeze(0)
@@ -1055,31 +1055,32 @@ class Surface(torch.nn.Module):
             return res
 
 
-def load_deepsurfer_template(subdivision: int, surface: str):
+def load_deepsurfer_template(
+    subdivision: int, surface: str, hemi: list[str] | tuple = ("lh", "rh")
+):
     """Load DeepSurfer template surface at `subdivision` level."""
     assert (
         0 <= subdivision <= 6
     ), "DeepSurfer template is only defined at resolution levels 0 to 6."
+    assert len(hemi) in {1, 2}
 
     topo_lh = brainnet.mesh.topology.DeepSurferTopology.recursive_subdivision(
         subdivision
     )[-1]
-    topo_rh = copy.deepcopy(topo_lh)
-    topo_rh.reverse_face_orientation()
+    topo = {}
+    if "lh" in hemi:
+        topo["lh"] = topo_lh
+    if "rh" in hemi:
+        topo["rh"] = copy.deepcopy(topo_lh)
+        topo["rh"].reverse_face_orientation()
 
+    template = brainsynth.resources.Template()
     return torch.nn.ModuleDict(
-        dict(
-            lh=Surface(
-                brainsynth.resources.load_cortical_template("lh", surface)["vertices"][
-                    : topo_lh.n_vertices
-                ],
-                topo_lh,
-            ),
-            rh=Surface(
-                brainsynth.resources.load_cortical_template("rh", surface)["vertices"][
-                    : topo_rh.n_vertices
-                ],
-                topo_rh,
-            ),
-        )
+        {
+            h: Surface(
+                template.load_surface(h, surface)["vertices"][: v.n_vertices],
+                v,
+            )
+            for h, v in topo.items()
+        }
     )

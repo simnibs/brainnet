@@ -43,9 +43,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             spatial_dims=3,
             pre_conv_ch=8,
             encoder_channels=[[32], [32], [32], [32], [32]],
-            # encoder_channels=[[16], [16], [32], [32], [64]],
             decoder_channels=[[32], [32], [32], [32]],
-            # decoder_channels=[[32], [32], [16], [32]],
             points_per_hemisphere=16,
             weigh_by_feature_mass=True,
         )

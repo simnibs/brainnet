@@ -21,13 +21,3 @@ def load_pretrained_config(model, contrast, resolution):
     ) as f:
         config = json.load(f)
     return config
-
-
-#     def load_preprocessor(self):
-#         config = PredictionConfig(
-#             "PredictionBuilder",
-#             self.config["preprocessor"]["out_size"],
-#             self.config["preprocessor"]["out_center_str"],
-#             device=self.device,
-#         )
-#         return Synthesizer(config)

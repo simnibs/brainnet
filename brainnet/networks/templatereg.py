@@ -84,7 +84,7 @@ class TemplateRegAffine(torch.nn.Module):
     def split_hemispheres(self, t: torch.Tensor, dim: int = 1):
         return dict(zip(("lh", "rh"), t.split(self.pph, dim)))
 
-    def forward(self, image, vox_to_mri):
+    def forward(self, image, vox2ras):
         # Image features which "zoom in" on characteristic parts of the image
         features = self.image_fx_pre(image)
         features = self.image_fx_unet(features)["dec:3"]
@@ -125,7 +125,7 @@ class TemplateRegAffine(torch.nn.Module):
         # print(barycenters.amin(1), barycenters.amax(1))
 
         # subject specific barycenters (target points) in RAS
-        target = self.split_hemispheres(apply_affine(vox_to_mri, barycenters))
+        target = self.split_hemispheres(apply_affine(vox2ras, barycenters))
         affines = self.estimate_affine_hemispheres(target)
         affines["brain"] = self.estimate_affine_brain(target)
         return affines
@@ -184,16 +184,17 @@ class TemplateRegAffine(torch.nn.Module):
         )
 
     @classmethod
-    def from_pretrained_model(
-        cls, contrast: str, resolution: str, device: str | torch.device = "cpu"
+    def from_pretrained(
+        cls,
+        contrast: str = "synth",
+        resolution: str = "random",
+        device: str | torch.device = "cpu",
     ):
         device = torch.device(device)
-        state = resources.load_pretrained_state(
-            "alignment", contrast, resolution, device
-        )
-        config = resources.load_pretrained_config("alignment", contrast, resolution)
+        state = resources.load_pretrained_state("trega", contrast, resolution, device)
+        config = resources.load_pretrained_config("trega", contrast, resolution)
 
-        model = cls(**config["model"], device=device)
+        model = cls(**config["model"])
         model.to(device)
         model.load_state_dict(state)
 

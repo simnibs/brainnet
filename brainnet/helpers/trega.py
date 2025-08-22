@@ -6,6 +6,7 @@ import brainsynth
 from brainsynth.transforms import EnsureDevice
 from brainsynth.transforms.utils import recursive_function
 
+import brainnet.resources
 from brainnet.config.trega.train_parameters import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
@@ -54,24 +55,30 @@ class Step:
         self,
         preprocessor: brainsynth.Synthesizer | None,
         model: torch.nn.Module,
+        enable_amp: bool = True,
         device: str | torch.device = "cpu",
         template_resolution: int = 0,
+        hemi: str = "both",
     ) -> None:
+        assert hemi in {"both", "lh", "rh"}
+        hemis = ["lh", "rh"] if hemi == "both" else [hemi]
         device = torch.device(device)
         self.device = device
-
+        self.enable_amp = enable_amp and not (device.type == "cpu")
         self.preprocessor = preprocessor
         self.model = model
         self.model.to(device)
         self.ensure_device = EnsureDevice(device)
 
-        self.template = load_deepsurfer_template(template_resolution, "white")
+        self.template = load_deepsurfer_template(template_resolution, "white", hemis)
         self.template.to(device)
         self.topologies = {h: s.topology for h, s in self.template.items()}
 
-    def apply_affine(self, affine: torch.Tensor):
+    def apply_affine(self, affine: torch.Tensor, *args, **kwargs):
         """Apply an affine to the template."""
-        return {k: v.apply_affine(affine) for k, v in self.template.items()}
+        return {
+            k: v.apply_affine(affine, *args, **kwargs) for k, v in self.template.items()
+        }
 
     def vertex_dict_to_surface_dict(self, templates):
         return {
@@ -121,14 +128,13 @@ class TrainingStep(Step):
         model,
         criterion,
         optimizer: torch.optim.Optimizer,
-        enable_amp: bool = False,
+        enable_amp: bool = True,
         device: str | torch.device = "cpu",
         gradient_accumulation_steps: int = 1,
     ) -> None:
-        super().__init__(preprocessor, model, device)
+        super().__init__(preprocessor, model, enable_amp, device)
         self.criterion = criterion
         self.optimizer = optimizer
-        self.enable_amp = enable_amp
         if self.enable_amp:
             self.grad_scaler = torch.amp.GradScaler("cuda")
         self.gradient_accumulation_steps = gradient_accumulation_steps
@@ -188,12 +194,11 @@ class EvaluationStep(Step):
         preprocessor,
         model,
         criterion,
-        enable_amp: bool = False,
+        enable_amp: bool = True,
         device: str | torch.device = "cpu",
     ):
-        super().__init__(preprocessor, model, device)
+        super().__init__(preprocessor, model, enable_amp, device)
         self.criterion = criterion
-        self.enable_amp = enable_amp
 
     def compute_loss(self, y_pred, y_true):
         return self.criterion(y_pred, y_true)
@@ -220,9 +225,28 @@ class EvaluationStep(Step):
 
 
 class PredictionStep(Step):
-    def __init__(self, preprocessor, model, enable_amp: bool = False, **kwargs):
-        super().__init__(preprocessor, model, **kwargs)
-        self.enable_amp = enable_amp
+    def __init__(self, preprocessor, model, *args, **kwargs):
+        super().__init__(preprocessor, model, *args, **kwargs)
+
+    def prepare_batch(
+        self,
+        image: torch.Tensor,
+        vox2ras: torch.Tensor,
+    ):
+        """Run data augmentation/synthesis on the batch as returned by the
+        dataloader.
+
+        The preprocessor needs to return the image and the associated
+        voxel-to-ras transform.
+
+        """
+        if self.preprocessor is not None:
+            with torch.no_grad():
+                out = self.preprocessor(dict(image=image), dict(image=vox2ras))
+            image = out.image
+            vox2ras = out.affine
+        # else assume preprocessor was applied when loading the data
+        return image, vox2ras
 
     def postprocess(self, y_pred):
         return self.apply_affine(y_pred["brain"])
@@ -230,13 +254,41 @@ class PredictionStep(Step):
     def __call__(self, engine, batch):
         self.model.eval()
 
-        image, vox2ras, _ = self.prepare_batch(*batch)
+        image, vox2ras = self.prepare_batch(*batch)
 
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, vox2ras)
 
         return y_pred
+
+    @staticmethod
+    def _preprocessor_from_config(contrast, resolution, device):
+        config = brainnet.resources.load_pretrained_config(
+            "trega", contrast, resolution
+        )
+        config = brainsynth.config.PredictionConfig(
+            "PredictionBuilder",
+            config["preprocessor"]["out_size"],
+            config["preprocessor"]["out_center_str"],
+            device=device,
+        )
+        return brainsynth.Synthesizer(config)
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        contrast="synth",
+        resolution="random",
+        device: str | torch.device = "cpu",
+        **kwargs,
+    ):
+        device = torch.device(device)
+        preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
+        model = brainnet.networks.TemplateRegAffine.from_pretrained(
+            contrast, resolution, device
+        )
+        return cls(preprocessor, model, device=device, **kwargs)
 
 
 def write_example_prediction(y, out_dir):
@@ -374,3 +426,7 @@ def create_trainer(
     print(setup)
 
     return trainer, dataloader["train"]
+
+
+def predict(args):
+    raise NotImplementedError

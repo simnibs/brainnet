@@ -1,4 +1,8 @@
 import argparse
+from pathlib import Path
+import sys
+
+import brainnet.helpers
 
 
 def parse_args(argv):
@@ -8,25 +12,26 @@ def parse_args(argv):
     )
 
     # The programs
-    topofit = parser.add_subparser("topofit", "Fit cortical surfaces to MRI scans.")
-    trega = parser.add_subparser(
+    networks = parser.add_subparsers(help="Available networks.")
+    topofit = networks.add_parser("topofit", help="Fit cortical surfaces to MRI scans.")
+    trega = networks.add_parser(
         "trega",
-        "Template REGistration (Affine). Affine transformation between subject and MNI space.",
+        help="Template REGistration (Affine). Affine transformation between subject and MNI space.",
     )
-    tregn = parser.add_subparser(
-        "tregn",
-        "Template REGistration (Nonlinear). Nonlinear transformation between subject and MNI space.",
-    )
+    # tregn = parser.add_subparser(
+    #     "tregn",
+    #     "Template REGistration (Nonlinear). Nonlinear transformation between subject and MNI space.",
+    # )
 
     # Arguments common to all programs
     parser.add_argument(
         "image",
-        type=str,
+        type=Path,
         help="Path to a single image or a text file containing a list of filenames of images.",
     )
     parser.add_argument(
         "out",
-        type=str,
+        type=Path,
         help=(
             "Path to a directory or a text file containing a list of "
             "directories in which to store the surface predictions."
@@ -60,14 +65,14 @@ def parse_args(argv):
     topofit.add_argument(
         "-t",
         "--transform",
-        type=str,
+        type=Path,
         help=(
             "Path to a text file containing a single MNI transformation or a "
             "text file containing a list of filenames of MNI transformations."
         ),
     )
     topofit.add_argument(
-        "--mni-dir",
+        "--mni-direction",
         choices=["mni2sub", "sub2mni"],
         default="mni2sub",
         help="Direction of MNI transformation.",
@@ -78,6 +83,13 @@ def parse_args(argv):
         default="mni152",
         help="MNI space to which the transform relates.",
     )
+    topofit.add_argument(
+        "--hemi",
+        choices=["lh", "rh"],
+        default="both",
+        help="Hemisphere to predict. Default is both.",
+    )
+    topofit.set_defaults(func=brainnet.helpers.topofit.predict)
 
     # NORM AFFINE
     trega.add_argument(
@@ -86,18 +98,19 @@ def parse_args(argv):
         default="mni152",
         help="MNI space to which the transform relates.",
     )
+    trega.set_defaults(func=brainnet.helpers.trega.predict)
 
     # NORM NONLIN
-    tregn.add_argument(
-        "--mni-space",
-        choices=["mni152", "mni305"],
-        default="mni152",
-        help="MNI space to which the transform relates.",
-    )
+    # tregn.add_argument(
+    #     "--mni-space",
+    #     choices=["mni152", "mni305"],
+    #     default="mni152",
+    #     help="MNI space to which the transform relates.",
+    # )
 
     return parser.parse_args(argv[1:])
 
 
 if __name__ == "__main__":
     args = parse_args(sys.argv)
-    predict(args)
+    args.func(args)

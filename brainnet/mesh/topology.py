@@ -19,7 +19,9 @@ class Topology(torch.nn.Module):
         self._reversed_face_order = (0, 2, 1)
 
         if edge_pairs is None:
-            edge_pairs = torch.tensor([[0, 1], [1, 2], [2, 0]], dtype=torch.int)
+            edge_pairs = torch.tensor(
+                [[0, 1], [1, 2], [2, 0]], dtype=torch.int, device=self.device()
+            )
         self.register_buffer("edge_pairs", edge_pairs, persistent=False)
 
         self.set_topology_information(retain_edge_order)
