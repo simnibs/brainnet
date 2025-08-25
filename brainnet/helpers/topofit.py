@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from ignite.engine import Engine
-import numpy as np
 import torch
 import tqdm
 
@@ -15,6 +14,7 @@ import brainnet.resources
 from brainnet.config import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
+from . import utils_bin
 from .trega import PredictionStep as trega_PredictionStep
 
 from brainnet.mesh.surface import load_deepsurfer_template
@@ -562,30 +562,9 @@ def create_predictor(setup, datasets: list[str] | tuple | None = None):
 
 
 def predict(args):
-    valid_text_file_suffixes = {".csv", ".txt"}
-    if args.image.suffix in valid_text_file_suffixes:
-        images = np.loadtxt(args.image, dtype=str).tolist()
-        images = [images] if isinstance(images, str) else images  # single line
-    else:
-        images = [args.image]
-
-    if args.out.suffix in valid_text_file_suffixes:
-        out_dirs = np.loadtxt(args.out, dtype=str).tolist()
-        out_dirs = [out_dirs] if isinstance(out_dirs, str) else out_dirs
-    else:
-        out_dirs = [args.out]
-
-    if args.transform is None:
-        transforms = None
-    else:
-        try:
-            # Try to read as if it is a matrix
-            _ = np.loadtxt(args.transform, dtype=float)
-            transforms = [args.transform]
-        except ValueError:  # a path cannot be converted to a float
-            # If this fails, assume a list of filenames
-            transforms = np.loadtxt(args.transform, dtype=str).tolist()
-            transforms = [transforms] if isinstance(transforms, str) else transforms
+    images = utils_bin._get_images(args.image)
+    out_dirs = utils_bin._get_out_dirs(args.out_dir)
+    transforms = utils_bin._get_transforms(args.transform)
 
     pred_step = PredictionStep.from_pretrained(
         args.contrast, args.resolution, args.device, trega_kwargs=dict(hemi=args.hemi)
@@ -601,9 +580,7 @@ def predict(args):
         in_order,
     )
 
-    # template_faces = {h: t.get_faces().cpu().numpy() for h,t in brainnet.mesh.surface.load_deepsurfer_template(in_order, "white").items()}
-
-    for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
+    for batch, out_dir in zip(dataset, out_dirs):
         surfaces = pred_step(None, batch)
 
         if not (out_dir := Path(out_dir)).exists():

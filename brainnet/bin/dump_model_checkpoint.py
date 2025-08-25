@@ -5,12 +5,14 @@ import sys
 
 import torch
 
-from brainnet import resources_dir
+from brainnet import RESOURCES_DIR
+
+from brainnet.command import handle_checkpoint_type
 
 
 def dump_model(args):
     if args.out is None:
-        out_dir = resources_dir / "models" / args.model
+        out_dir = RESOURCES_DIR / "models" / args.model
     else:
         out_dir = Path(args.out)
 
@@ -22,12 +24,18 @@ def dump_model(args):
     )
 
     p = train_parameters.TrainParameters(
-        contrast=args.contrast, resolution=args.resolution
+        contrast=args.contrast, resolution=args.resolution, run_suffix=args.suffix
     )
     p.dump_prediction_config(out_dir)
 
-    filename = p.results.checkpoint_dir / f"state_checkpoint_{args.checkpoint:05d}.pt"
-    ckpt = torch.load(filename)["model"]
+    if args.checkpoint == "best":
+        filename = p.results.checkpoint_dir / "state_checkpoint_best.pt"
+        ckpt = torch.load(filename)
+    else:
+        filename = (
+            p.results.checkpoint_dir / f"state_checkpoint_{args.checkpoint:05d}.pt"
+        )
+        ckpt = torch.load(filename)["model"]
     torch.save(ckpt, out_dir / f"{args.contrast}_{args.resolution}_state.pt")
 
 
@@ -39,7 +47,8 @@ def parse_args(argv):
     parser.add_argument("model")
     parser.add_argument("contrast")
     parser.add_argument("resolution")
-    parser.add_argument("checkpoint", type=int)
+    parser.add_argument("checkpoint", type=handle_checkpoint_type)
+    parser.add_argument("--suffix", "-s", default="")
     parser.add_argument(
         "--out", "-o", help="Output directory in which to save the state."
     )

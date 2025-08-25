@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 from ignite.engine import Engine
@@ -13,6 +14,9 @@ import brainnet.helpers.utils
 from brainnet import event_handlers
 import brainnet.initializers
 from brainnet.mesh.surface import load_deepsurfer_template, Surface
+from . import utils_bin
+from brainnet.datasets import ImageDataset, MNI305_to_MNI152
+
 
 """The following classes/functions need to be defined as they are imported
 elsewhere.
@@ -42,8 +46,8 @@ create_trainer
 """
 
 DESCRIPTION = (
-    "TREGA (Template REGistration Affine) is a network that predicts affine "
-    "registration between MNI305 and subject space"
+    "TREGA (Template REGistration Affine) is a network that predicts an affine "
+    "transformation between MNI305 and subject space."
 )
 
 # Define some recursive versions of functions
@@ -429,4 +433,25 @@ def create_trainer(
 
 
 def predict(args):
-    raise NotImplementedError
+    images = utils_bin._get_images(args.image)
+    out_dirs = utils_bin._get_out_dirs(args.out_dir)
+
+    pred_step = PredictionStep.from_pretrained(device=args.device)
+    dataset = ImageDataset(images, args.conform)
+
+    for batch, out_dir in zip(dataset, out_dirs):
+        # batch = (image, vox2ras)
+        y_pred = pred_step(None, batch)
+
+        if not out_dir.exists():
+            out_dir.mkdir(parents=True)
+
+        if args.all:
+            for k, v in y_pred.items():
+                v = v.squeeze(0).cpu().numpy()
+                v = MNI305_to_MNI152 @ v if args.mni_space == "mni152" else v
+                np.savetxt(out_dir / f"{args.mni_space}-to-ras.{k}.txt", v)
+        else:
+            v = y_pred["brain"].squeeze(0).cpu().numpy()
+            v = MNI305_to_MNI152 @ v if args.mni_space == "mni152" else v
+            np.savetxt(out_dir / f"{args.mni_space}-to-ras.txt", v)

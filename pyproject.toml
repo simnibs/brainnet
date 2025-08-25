@@ -2,9 +2,7 @@
 name = "BrainNet"
 version = "0.1a"
 description = "Neural network for various neuroimaging related tasks (e.g., segmentation)."
-maintainers = [
-    {name = "Jesper Duemose Nielsen"}
-]
+maintainers = [{ name = "Jesper Duemose Nielsen" }]
 requires-python = ">=3.11"
 dependencies = [
     "brainsynth",
@@ -20,14 +18,16 @@ requires = ["setuptools>=69.2", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project.optional-dependencies]
-train = [
-    "wandb >= 0.16",
-]
+train = ["wandb >= 0.16"]
 
 [tool.setuptools.package-data]
 brainnet = [
     "mesh/cuda/extensions.cpp",
     "mesh/cuda/nearest_neighbor.cu",
     "mesh/cuda/self_intersections.cu",
-    "resources/models/topofit/*"
+    "resources/models/topofit/*",
+    "resources/models/trega/*",
 ]
+
+[project.scripts]
+brainnet = "brainnet.bin.predict:main"

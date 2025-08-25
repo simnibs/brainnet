@@ -11,6 +11,16 @@ from brainsynth.utilities import apply_affine
 
 from brainnet.mesh.surface import load_deepsurfer_template
 
+# (8) from https://surfer.nmr.mgh.harvard.edu/fswiki/CoordinateSystems
+MNI305_to_MNI152 = torch.tensor(
+    [
+        [0.9975, -0.0073, 0.0176, -0.0429],
+        [0.0146, 1.00090003, -0.0024, 1.54960001],
+        [-0.013, -0.0093, 0.9971, 1.18400002],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+)
+
 
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(self, images: list[Path] | list[str] | tuple, conform: bool = False):
@@ -99,16 +109,6 @@ class TopoFitDataset(ImageDataset):
             for k, v in load_deepsurfer_template(template_order, "white").items()
         }
 
-        # (8) from https://surfer.nmr.mgh.harvard.edu/fswiki/CoordinateSystems
-        mni305_to_mni152 = torch.tensor(
-            [
-                [0.9975, -0.0073, 0.0176, -0.0429],
-                [0.0146, 1.00090003, -0.0024, 1.54960001],
-                [-0.013, -0.0093, 0.9971, 1.18400002],
-                [0.0, 0.0, 0.0, 1.0],
-            ]
-        )
-
         match mni_direction:
             case "sub2mni":
 
@@ -124,7 +124,7 @@ class TopoFitDataset(ImageDataset):
                 # the template vertices are in mni305 so add a transformation
                 # from mni305 to mni152
                 def preprocess_mni_transform(t):
-                    return mni_to_sub(t) @ mni305_to_mni152
+                    return mni_to_sub(t) @ MNI305_to_MNI152
             case "mni305":
 
                 def preprocess_mni_transform(t):
