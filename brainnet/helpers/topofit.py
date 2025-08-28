@@ -514,52 +514,52 @@ def create_trainer(
     return trainer, dataloader["train"]
 
 
-def create_predictor(setup, datasets: list[str] | tuple | None = None):
-    model_helper = importlib.import_module(f"brainnet.helpers.{model}")
-    model = model_helper.setup_model(setup)
+# def create_predictor(setup, datasets: list[str] | tuple | None = None):
+#     model_helper = importlib.import_module(f"brainnet.helpers.{model}")
+#     model = model_helper.setup_model(setup)
 
-    _valid_pred_contrasts = {"t1w", "t2w", "flair", "ct"}
+#     _valid_pred_contrasts = {"t1w", "t2w", "flair", "ct"}
 
-    # We need the affine as well
-    restrict_datasets_(setup, subset, datasets)
-    for v in setup.dataset[subset].dataset_kwargs.values():
-        found = [i for i in _valid_pred_contrasts if i in v["images"]]
-        n_found = len(found)
-        msg = f"{n_found} contrasts specified in dataset configuration ({found}) which is ambiguous for prediction. Need only one."
-        assert n_found == 1, msg
-        v["images"] = found
+#     # We need the affine as well
+#     restrict_datasets_(setup, subset, datasets)
+#     for v in setup.dataset[subset].dataset_kwargs.values():
+#         found = [i for i in _valid_pred_contrasts if i in v["images"]]
+#         n_found = len(found)
+#         msg = f"{n_found} contrasts specified in dataset configuration ({found}) which is ambiguous for prediction. Need only one."
+#         assert n_found == 1, msg
+#         v["images"] = found
 
-    dataloaders = brainsynth.dataset.setup_dataloader(
-        setup.dataset[subset],
-        separate_datasets=True,
-        **setup.dataloader,
-        dataset_class=brainsynth.dataset.PredictionDataset,
-    )
-    if subset == "test":
-        out_size = setup.synthesizer["validation"].out_size
-        out_center_str = setup.synthesizer["validation"].out_center_str
-    elif subset == "testood":
-        out_size = setup.synthesizer["validation"].out_size
-        out_center_str = setup.synthesizer["validation"].out_center_str
-    else:
-        out_size = setup.synthesizer[subset].out_size
-        out_center_str = setup.synthesizer[subset].out_center_str
-    preprocessor = brainsynth.Synthesizer(
-        PredictionConfig("PredictionBuilder", out_size, out_center_str)
-    )
+#     dataloaders = brainsynth.dataset.setup_dataloader(
+#         setup.dataset[subset],
+#         separate_datasets=True,
+#         **setup.dataloader,
+#         dataset_class=brainsynth.dataset.PredictionDataset,
+#     )
+#     if subset == "test":
+#         out_size = setup.synthesizer["validation"].out_size
+#         out_center_str = setup.synthesizer["validation"].out_center_str
+#     elif subset == "testood":
+#         out_size = setup.synthesizer["validation"].out_size
+#         out_center_str = setup.synthesizer["validation"].out_center_str
+#     else:
+#         out_size = setup.synthesizer[subset].out_size
+#         out_center_str = setup.synthesizer[subset].out_center_str
+#     preprocessor = brainsynth.Synthesizer(
+#         PredictionConfig("PredictionBuilder", out_size, out_center_str)
+#     )
 
-    pred_step = model_helper.PredictionStep(
-        preprocessor, model, setup.enable_amp, setup.device
-    )
-    write_step = model_helper.write_example_prediction
+#     pred_step = model_helper.PredictionStep(
+#         preprocessor, model, setup.enable_amp, setup.device
+#     )
+#     write_step = model_helper.write_example_prediction
 
-    to_load = dict(model=model)
-    brainnet.helpers.utils.load_checkpoint_from_setup(to_load, setup)
+#     to_load = dict(model=model)
+#     brainnet.helpers.utils.load_checkpoint_from_setup(to_load, setup)
 
-    print("Setup completed.")
-    print(setup)
+#     print("Setup completed.")
+#     print(setup)
 
-    return pred_step, write_step, dataloaders
+#     return pred_step, write_step, dataloaders
 
 
 def predict(args):

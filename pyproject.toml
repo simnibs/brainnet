@@ -6,6 +6,7 @@ maintainers = [{ name = "Jesper Duemose Nielsen" }]
 requires-python = ">=3.11"
 dependencies = [
     "brainsynth",
+    "cortech",
     "pytorch-ignite >= 0.4",
     "nibabel >= 5.1",
     "numpy >= 1.26",
