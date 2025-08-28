@@ -1,6 +1,6 @@
 [project]
 name = "BrainNet"
-version = "0.1a"
+version = "0.2"
 description = "Neural network for various neuroimaging related tasks (e.g., segmentation)."
 maintainers = [{ name = "Jesper Duemose Nielsen" }]
 requires-python = ">=3.11"
@@ -11,6 +11,7 @@ dependencies = [
     "numpy >= 1.26",
     "scipy >= 1.11",
     "torch >= 2.1",
+    "tqdm >= 4.67",
 ]
 
 [build-system]

@@ -17,21 +17,7 @@ def parse_args(argv):
         prog="brainnet",
         description="Main interface to prediction using the BrainNet models.",
     )
-
-    # The programs
     networks = parser.add_subparsers(help="Available networks.")
-    topofit = networks.add_parser(
-        "topofit", help="Estimate cortical surfaces on an MRI scan using TopoFit."
-    )
-    trega = networks.add_parser(
-        "trega",
-        description=brainnet.helpers.trega.DESCRIPTION,
-        help="Estimate an affine transformation between subject and MNI space.",
-    )
-    # tregn = parser.add_subparser(
-    #     "tregn",
-    #     "Template REGistration (Nonlinear). Nonlinear transformation between subject and MNI space.",
-    # )
 
     # Arguments common to all programs
     parser.add_argument(
@@ -62,6 +48,20 @@ def parse_args(argv):
         default="cuda",
         help="The device on which to run the predictions.",
     )
+
+    # The programs
+    topofit = networks.add_parser(
+        "topofit", help="Estimate cortical surfaces on an MRI scan using TopoFit."
+    )
+    trega = networks.add_parser(
+        "trega",
+        description=brainnet.helpers.trega.DESCRIPTION,
+        help="Estimate an affine transformation between subject and MNI space.",
+    )
+    # tregn = parser.add_subparser(
+    #     "tregn",
+    #     "Template REGistration (Nonlinear). Nonlinear transformation between subject and MNI space.",
+    # )
 
     # Arguments specific to subprograms
 

@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 from ignite.engine import Engine
+import tqdm
 
 import brainsynth
 from brainsynth.transforms import EnsureDevice
@@ -439,7 +440,7 @@ def predict(args):
     pred_step = PredictionStep.from_pretrained(device=args.device)
     dataset = ImageDataset(images, args.conform)
 
-    for batch, out_dir in zip(dataset, out_dirs):
+    for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
         # batch = (image, vox2ras)
         y_pred = pred_step(None, batch)
 

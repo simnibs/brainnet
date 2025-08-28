@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ignite.engine import Engine
+import nibabel as nib
 import torch
 import tqdm
 
@@ -330,7 +331,7 @@ class PredictionStep(Step):
         device: str | torch.device = "cpu",
         trega_kwargs: dict | None = None,
     ):
-        kw = {} or trega_kwargs
+        kw = trega_kwargs or {}
         preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
         model = brainnet.networks.TopoFit.from_pretrained(contrast, resolution, device)
         trega_step = trega_PredictionStep.from_pretrained(device=device, **kw)
@@ -580,7 +581,7 @@ def predict(args):
         in_order,
     )
 
-    for batch, out_dir in zip(dataset, out_dirs):
+    for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
         surfaces = pred_step(None, batch)
 
         if not (out_dir := Path(out_dir)).exists():
@@ -588,9 +589,17 @@ def predict(args):
 
         for name, hemispheres in surfaces.items():
             for h, surface in hemispheres.items():
-                v = surface.vertices.squeeze(0).cpu().numpy()
-                f = surface.get_faces().cpu().numpy()
+                surface.to("cpu")
+                v = surface.vertices.squeeze(0).numpy()
+                f = surface.get_faces().numpy()
                 cortech.Surface(v, f).save(out_dir / f"{h}.{name}")
+                for k, curv in surface.vertex_data.items():
+                    curv = curv.squeeze(0)
+                    if curv.ndim > 1:
+                        assert curv.ndim == 2
+                        curv = torch.linalg.vector_norm(curv, axis=1)
+                    curv = curv.cpu().numpy()
+                    nib.freesurfer.write_morph_data(out_dir / f"{h}.{name}.{k}", curv)
 
         # if args.save_template:
         #     for h,vertices in template.items():
