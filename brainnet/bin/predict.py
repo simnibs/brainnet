@@ -5,13 +5,6 @@ import sys
 import brainnet.helpers
 
 
-MNI_SPACE = dict(
-    choices=["mni152", "mni305"],
-    default="mni152",
-    help="MNI space to which the transform relates.",
-)
-
-
 def parse_args(argv):
     parser = argparse.ArgumentParser(
         prog="brainnet",
@@ -67,10 +60,18 @@ def parse_args(argv):
 
     # TOPOFIT
     topofit.add_argument(
-        "--contrast", "-c", choices=["t1w", "synth"], default="t1w", help=""
+        "--contrast",
+        "-c",
+        choices=["t1w", "synth"],
+        default="t1w",
+        help="Image modality that the model was trained on (default = t1w)",
     )
     topofit.add_argument(
-        "--resolution", "-r", choices=["1mm", "random"], default="1mm", help=""
+        "--resolution",
+        "-r",
+        choices=["1mm", "random"],
+        default="1mm",
+        help="Image resolution that the model was trained on (default = 1mm)",
     )
     topofit.add_argument(
         "-t",
@@ -85,20 +86,30 @@ def parse_args(argv):
     topofit.add_argument(
         "--mni-direction",
         choices=["mni2sub", "sub2mni"],
-        default="mni2sub",
-        help="Direction of the supplied MNI transformation.",
+        default="",
+        help="Direction of the supplied MNI transformation (default = mni2sub). Only used if -t/--transforms is specified.",
     )
-    topofit.add_argument("--mni-space", **MNI_SPACE)
+    topofit.add_argument(
+        "--mni-space",
+        choices=["mni152", "mni305"],
+        default="mni152",
+        help="MNI space to which the transform relates (default = mni152). Only used if -t/--transforms is specified.",
+    )
     topofit.add_argument(
         "--hemi",
         choices=["lh", "rh"],
         default="both",
-        help="Hemisphere to predict. Default is both.",
+        help="Hemisphere to predict (default = both).",
     )
     topofit.set_defaults(func=brainnet.helpers.topofit.predict)
 
     # AFFINE NORMALIZATION
-    trega.add_argument("--mni-space", **MNI_SPACE)
+    trega.add_argument(
+        "--mni-space",
+        choices=["mni152", "mni305"],
+        default="mni152",
+        help="Return a transformation to this MNI space (default = mni152).",
+    )
     trega.add_argument(
         "--all",
         action="store_true",
