@@ -456,7 +456,7 @@ class IndexedSmoothnessLoss(losses.MeanSquaredNormLoss):
 #         )
 
 
-class SpringForceLoss(losses.MeanSquaredLoss):
+class SpringForceLoss(torch.nn.Module):
     def __init__(self, *args, **kwargs) -> None:
         """Penalize differences in distances between neighboring vertices."""
         super().__init__(*args, **kwargs)
@@ -464,15 +464,14 @@ class SpringForceLoss(losses.MeanSquaredLoss):
     @staticmethod
     def compute_distances(s):
         """Compute distances between a vertex and all its neighbors."""
-        ri, gi = s.topology.get_convolution_indices()
+        ri = s.topology.conv_index_reduce
+        gi = s.topology.conv_index_gather
         return torch.linalg.vector_norm(
             s.vertices[s.batch_ix, ri] - s.vertices[s.batch_ix, gi], dim=-1
         )
 
-    def forward(self, y_pred, y_true):
-        dp = self.compute_distances(y_pred)
-        dt = self.compute_distances(y_true)
-        return super().forward(dp, dt)
+    def forward(self, y_pred):
+        return self.compute_distances(y_pred).mean()
 
 
 class VertexToVertexAngleLoss(losses.MeanSquaredCosSimLoss):
