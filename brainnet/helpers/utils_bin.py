@@ -2,7 +2,7 @@ from pathlib import Path
 import numpy as np
 
 
-def _get_images(image: Path | str):
+def get_images(image: Path | str):
     image = Path(image)
     valid_text_file_suffixes = {".csv", ".txt"}
     if image.suffix in valid_text_file_suffixes:
@@ -13,7 +13,7 @@ def _get_images(image: Path | str):
     return [Path(i) for i in images]
 
 
-def _get_out_dirs(out_dir: Path | str):
+def get_out_dirs(out_dir: Path | str):
     out_dir = Path(out_dir)
     valid_text_file_suffixes = {".csv", ".txt"}
     if out_dir.suffix in valid_text_file_suffixes:
@@ -24,7 +24,7 @@ def _get_out_dirs(out_dir: Path | str):
     return [Path(d) for d in out_dirs]
 
 
-def _get_transforms(transform: Path | str | None):
+def get_transforms(transform: Path | str | None):
     if transform is None:
         transforms = None
     else:

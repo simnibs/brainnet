@@ -5,7 +5,7 @@ import sys
 
 import torch
 
-from brainnet import RESOURCES_DIR
+from brainnet.resources import RESOURCES_DIR
 
 from brainnet.command import handle_checkpoint_type
 
@@ -17,15 +17,16 @@ def dump_model(args):
         out_dir = Path(args.out)
 
     print(f"Model : {args.model}")
+    print(f"Specs : {args.specs}")
+
     print(f"Saving configuration to {out_dir.resolve()}")
 
     train_parameters = importlib.import_module(
         f"brainnet.config.{args.model}.train_parameters"
     )
+    specs = importlib.import_module(f"brainnet.config.{args.model}.{args.specs}")
 
-    p = train_parameters.TrainParameters(
-        contrast=args.contrast, resolution=args.resolution, run_suffix=args.suffix
-    )
+    p = train_parameters.TrainParameters(**specs.DEFAULTS, run_suffix=args.suffix)
     p.dump_prediction_config(out_dir)
 
     if args.checkpoint == "best":
@@ -36,7 +37,7 @@ def dump_model(args):
             p.results.checkpoint_dir / f"state_checkpoint_{args.checkpoint:05d}.pt"
         )
         ckpt = torch.load(filename)["model"]
-    torch.save(ckpt, out_dir / f"{args.contrast}_{args.resolution}_state.pt")
+    torch.save(ckpt, out_dir / f"{args.specs}_state.pt")
 
 
 def parse_args(argv):
@@ -45,8 +46,7 @@ def parse_args(argv):
         description="Extract and save a model checkpoint and state which can be used for prediction.",
     )
     parser.add_argument("model")
-    parser.add_argument("contrast")
-    parser.add_argument("resolution")
+    parser.add_argument("specs")
     parser.add_argument("checkpoint", type=handle_checkpoint_type)
     parser.add_argument("--suffix", "-s", default="")
     parser.add_argument(

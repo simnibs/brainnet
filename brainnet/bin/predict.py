@@ -39,7 +39,7 @@ def parse_args(argv):
         "--device",
         "-d",
         default="cuda",
-        help="The device on which to run the predictions.",
+        help="The device on which to run the predictions (default = cuda).",
     )
 
     # The programs
@@ -69,7 +69,7 @@ def parse_args(argv):
     topofit.add_argument(
         "--resolution",
         "-r",
-        choices=["1mm", "random"],
+        choices=["050mm", "1mm", "random"],
         default="1mm",
         help="Image resolution that the model was trained on (default = 1mm)",
     )
@@ -86,7 +86,7 @@ def parse_args(argv):
     topofit.add_argument(
         "--mni-direction",
         choices=["mni2sub", "sub2mni"],
-        default="",
+        default="mni2sub",
         help="Direction of the supplied MNI transformation (default = mni2sub). Only used if -t/--transforms is specified.",
     )
     topofit.add_argument(
@@ -101,7 +101,7 @@ def parse_args(argv):
         default="both",
         help="Hemisphere to predict (default = both).",
     )
-    topofit.set_defaults(func=brainnet.helpers.topofit.predict)
+    topofit.set_defaults(func=brainnet.helpers.topofit.predict_from_args)
 
     # AFFINE NORMALIZATION
     trega.add_argument(

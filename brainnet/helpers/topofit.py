@@ -1,3 +1,5 @@
+import functools
+import operator
 from pathlib import Path
 
 from ignite.engine import Engine
@@ -15,8 +17,8 @@ import brainnet.resources
 from brainnet.config import TrainParameters
 from brainnet.dict_utils import recursive_dict_sum
 import brainnet.helpers.utils
-from . import utils_bin
-from .trega import PredictionStep as trega_PredictionStep
+from brainnet.helpers import utils_bin
+from brainnet.helpers.trega import PredictionStep as trega_PredictionStep
 
 from brainnet.mesh.surface import load_deepsurfer_template
 from brainnet import event_handlers, Surface
@@ -42,6 +44,7 @@ class Step:
         self,
         preprocessor: None | brainsynth.Synthesizer,
         model,
+        iterative_hemisphere_prediction: bool = False,
         enable_amp: bool = True,
         device: str | torch.device = "cpu",
     ) -> None:
@@ -49,9 +52,19 @@ class Step:
         self.preprocessor = preprocessor
         self.model = model
         self.model.to(device)
+        self.iterative_hemisphere_prediction = iterative_hemisphere_prediction
         self.enable_amp = enable_amp and not (device.type == "cpu")
         self.device = device
         self.set_prediction_topologies()
+
+        if self.preprocessor is None or all(
+            i == 1.0 for i in self.preprocessor.config.in_res
+        ):
+            self.vox2ras_scale = None
+        else:
+            self.vox2ras_scale = torch.eye(4, device=self.device)[None]
+            i = torch.arange(3, dtype=int, device=self.device)
+            self.vox2ras_scale[0, i, i] = self.preprocessor.config.in_res
 
     def update_surface_template(self, template, data):
         """Insert vertices data from `data` into template and replace `data`
@@ -114,7 +127,12 @@ class Step:
             out = self.model.swap_output_levels(out)
         return out
 
-    def postprocess(self, y_pred):
+    def postprocess(self, y_pred, vox2ras: torch.Tensor | None = None):
+        # we don't want to transform the spherical registration
+        if vox2ras is not None:
+            sphere_reg = y_pred.pop("registration")
+            _ = recursive_apply_affine(y_pred, vox2ras, inplace=True)
+            y_pred["registration"] = sphere_reg
         return y_pred
 
 
@@ -125,12 +143,15 @@ class TrainingStep(Step):
         model,
         criterion: brainnet.Criterion,
         optimizer: torch.optim.Optimizer,
+        iterative_hemisphere_prediction: bool = False,
         enable_amp: bool = True,
         device: str | torch.device = "cpu",
         gradient_accumulation_steps: int = 1,
         freeze_body: bool = False,
     ) -> None:
-        super().__init__(preprocessor, model, enable_amp, device)
+        super().__init__(
+            preprocessor, model, iterative_hemisphere_prediction, enable_amp, device
+        )
         self.criterion = criterion
         self.optimizer = optimizer
         self.freeze_body = freeze_body
@@ -162,6 +183,8 @@ class TrainingStep(Step):
         self.model.train()
 
         image, vox2ras, template, y_true = self.prepare_batch(*batch)
+        # vox2ras is None but using this to scale to correct size
+        vox2ras = self.vox2ras_scale
 
         y_true = self.get_surfaces(y_true)
         y_true["registration"] = self.y_true_reg
@@ -170,7 +193,8 @@ class TrainingStep(Step):
         # types as inferred during forward
 
         y_pred = self._amp_prediction(image, template)
-        y_pred = self.postprocess(y_pred)
+        y_pred = self.postprocess(y_pred, vox2ras)
+        y_true = self.postprocess(y_true, vox2ras)
 
         loss = self._amp_compute_loss(y_pred, y_true)
         loss = dict(raw=loss, weighted=self.criterion.apply_weights(loss))
@@ -210,10 +234,13 @@ class EvaluationStep(Step):
         preprocessor: brainsynth.Synthesizer,
         model,
         criterion: brainnet.Criterion,
+        iterative_hemisphere_prediction: bool = False,
         enable_amp: bool = True,
         device: str | torch.device = "cpu",
     ):
-        super().__init__(preprocessor, model, enable_amp, device)
+        super().__init__(
+            preprocessor, model, iterative_hemisphere_prediction, enable_amp, device
+        )
         self.criterion = criterion
 
         self.y_true_reg = load_deepsurfer_template(
@@ -236,12 +263,16 @@ class EvaluationStep(Step):
         self.model.eval()
 
         image, vox2ras, template, y_true = self.prepare_batch(*batch)
+        # vox2ras is None but using this to scale to correct size
+        vox2ras = self.vox2ras_scale
+
         y_true = self.get_surfaces(y_true)
         y_true["registration"] = self.y_true_reg
 
         with torch.inference_mode():
             y_pred = self._amp_prediction(image, template)
-            y_pred = self.postprocess(y_pred)
+            y_pred = self.postprocess(y_pred, vox2ras)
+            y_true = self.postprocess(y_true, vox2ras)
 
             loss = self._amp_compute_loss(y_pred, y_true)
             loss = recursive_item(loss)
@@ -254,6 +285,9 @@ class PredictionStep(Step):
     def __init__(self, trega_step, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.trega_step = trega_step
+
+        # if self.iterative_hemisphere_prediction:
+        #     self.model.set_group_output_by("hemisphere")
 
     def prepare_batch(
         self,
@@ -302,11 +336,49 @@ class PredictionStep(Step):
                 return_surface=False,
             )
 
-        image, vox2ras, template = self.prepare_batch(image, vox2ras, template)
+        # SAVE FOR DEBUG...
+        # v = template["lh"].cpu().numpy()
+        # t = self.model.graph.topologies[0]
+        # f = dict(lh=t.faces.cpu().numpy())
+        # t.reverse_face_orientation()
+        # f["rh"] = t.faces.cpu().numpy()
 
-        with torch.inference_mode():
-            y_pred = self._amp_prediction(image, template)
-            y_pred = self.postprocess(y_pred, vox2ras)
+        # cortech.Surface(v, f).save("/home/jesperdn/repositories/brainnet/lh.template")
+        # v = template["rh"].cpu().numpy()
+        # f = t.faces.cpu().numpy()
+        # cortech.Surface(v, f).save("/home/jesperdn/repositories/brainnet/rh.template")
+
+        if self.iterative_hemisphere_prediction:
+            y_pred = []
+            for h, t in template.items():
+                img_hemi, vox2ras_h, th = self.prepare_batch(image, vox2ras, {h: t})
+
+                # SAVE FOR DEBUG...
+                # print(img_hemi.shape)
+                # nib.Nifti1Image(
+                #     img_hemi[0, 0].cpu().numpy(), torch.eye(4).numpy()
+                # ).to_filename(f"/home/jesperdn/repositories/brainnet/{h}.test.nii")
+
+                # x = th[h][0] @ vox2ras_h[0, :3, :3].T + vox2ras_h[0, :3, [3]].T
+                # cortech.Surface(x.cpu().numpy(), f[h]).save(
+                #     f"/home/jesperdn/nobackup/exvivo_surfaces/v2stripes_subj1/{h}.template"
+                # )
+
+                with torch.inference_mode():
+                    yh = self._amp_prediction(img_hemi, th)
+                    yh = self.postprocess(yh, vox2ras_h)
+                    y_pred.append(yh)
+
+            # {hemi: {surface: ...}}
+            y_pred = [self.model.swap_output_levels(i) for i in y_pred]
+            y_pred = functools.reduce(operator.or_, y_pred)  # | operator
+            # {surface: {hemi: ...}}
+            y_pred = self.model.swap_output_levels(y_pred)
+        else:
+            image, vox2ras, template = self.prepare_batch(image, vox2ras, template)
+            with torch.inference_mode():
+                y_pred = self._amp_prediction(image, template)
+                y_pred = self.postprocess(y_pred, vox2ras)
 
         return y_pred
 
@@ -316,12 +388,16 @@ class PredictionStep(Step):
             "topofit", contrast, resolution
         )
         config = brainsynth.config.PredictionConfig(
-            "PredictionBuilder",
-            config["preprocessor"]["out_size"],
-            config["preprocessor"]["out_center_str"],
-            device=device,
+            "PredictionBuilder", **config["preprocessor"], device=device
         )
         return brainsynth.Synthesizer(config)
+
+    @staticmethod
+    def _load_step_config(contrast, resolution, device):
+        config = brainnet.resources.load_pretrained_config(
+            "topofit", contrast, resolution
+        )
+        return config["step"] if "step" in config else {}
 
     @classmethod
     def from_pretrained(
@@ -333,9 +409,10 @@ class PredictionStep(Step):
     ):
         kw = trega_kwargs or {}
         preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
+        step_kwargs = cls._load_step_config(contrast, resolution, device)
         model = brainnet.networks.TopoFit.from_pretrained(contrast, resolution, device)
         trega_step = trega_PredictionStep.from_pretrained(device=device, **kw)
-        return cls(trega_step, preprocessor, model, device=device)
+        return cls(trega_step, preprocessor, model, **step_kwargs, device=device)
 
 
 def write_example_prediction(y, out_dir):
@@ -366,9 +443,9 @@ def write_example_event(
         vol_info["volume"] = tuple(image.shape[-3:])
 
         # vox2ras is invalid
-        if vox2ras is None:
-            vox2ras = torch.eye(4)[None]
-            vox2ras = vox2ras.broadcast_to(image.shape[0], *vox2ras.shape[1:])
+
+        vox2ras = torch.eye(4)[None] if vox2ras is None else vox2ras
+        vox2ras = vox2ras.broadcast_to(image.shape[0], *vox2ras.shape[1:])
 
         # write the volume that was used for prediction
         event_handlers.write_volume(
@@ -426,6 +503,7 @@ def create_trainer(
         model,
         criterion["train"],
         optimizer,
+        setup.iterative_hemisphere_prediction,
         setup.enable_amp,
         setup.device,
         setup.trainer_gradient_accumulation_steps,
@@ -435,6 +513,7 @@ def create_trainer(
         synth["validation"],
         model,
         criterion["validation"],
+        setup.iterative_hemisphere_prediction,
         setup.enable_amp,
         setup.device,
     )
@@ -562,22 +641,33 @@ def create_trainer(
 #     return pred_step, write_step, dataloaders
 
 
-def predict(args):
-    images = utils_bin._get_images(args.image)
-    out_dirs = utils_bin._get_out_dirs(args.out_dir)
-    transforms = utils_bin._get_transforms(args.transform)
+def predict(
+    image,
+    out_dir,
+    contrast="t1w",
+    resolution="1mm",
+    hemi="both",
+    conform=False,
+    transform=None,
+    mni_space="mni152",
+    mni_direction="mni2sub",
+    device="cuda",
+):
+    images = utils_bin.get_images(image)
+    out_dirs = utils_bin.get_out_dirs(out_dir)
+    transforms = utils_bin.get_transforms(transform)
 
     pred_step = PredictionStep.from_pretrained(
-        args.contrast, args.resolution, args.device, trega_kwargs=dict(hemi=args.hemi)
+        contrast, resolution, device, trega_kwargs=dict(hemi=hemi)
     )
     in_order = pred_step.model.graph.active_topologies[0]
     dataset = TopoFitDataset(
         images,
-        args.conform,
+        conform,
         transforms,
-        args.mni_direction,
-        args.mni_space,
-        args.hemi,
+        mni_direction,
+        mni_space,
+        hemi,
         in_order,
     )
 
@@ -589,9 +679,8 @@ def predict(args):
 
         for name, hemispheres in surfaces.items():
             for h, surface in hemispheres.items():
-                surface.to("cpu")
-                v = surface.vertices.squeeze(0).numpy()
-                f = surface.get_faces().numpy()
+                v = surface.vertices.squeeze(0).cpu().numpy()
+                f = surface.get_faces().cpu().numpy()
                 cortech.Surface(v, f).save(out_dir / f"{h}.{name}")
                 for k, curv in surface.vertex_data.items():
                     curv = curv.squeeze(0)
@@ -603,3 +692,18 @@ def predict(args):
 
         # if args.save_template:
         #     for h,vertices in template.items():
+
+
+def predict_from_args(args):
+    predict(
+        args.image,
+        args.out_dir,
+        args.contrast,
+        args.resolution,
+        args.hemi,
+        args.conform,
+        args.transform,
+        args.mni_space,
+        args.mni_direction,
+        args.device,
+    )

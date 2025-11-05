@@ -273,10 +273,7 @@ class PredictionStep(Step):
             "trega", contrast, resolution
         )
         config = brainsynth.config.PredictionConfig(
-            "PredictionBuilder",
-            config["preprocessor"]["out_size"],
-            config["preprocessor"]["out_center_str"],
-            device=device,
+            "PredictionBuilder", **config["preprocessor"], device=device
         )
         return brainsynth.Synthesizer(config)
 
@@ -434,8 +431,8 @@ def create_trainer(
 
 
 def predict(args):
-    images = utils_bin._get_images(args.image)
-    out_dirs = utils_bin._get_out_dirs(args.out_dir)
+    images = utils_bin.get_images(args.image)
+    out_dirs = utils_bin.get_out_dirs(args.out_dir)
 
     pred_step = PredictionStep.from_pretrained(device=args.device)
     dataset = ImageDataset(images, args.conform)

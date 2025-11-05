@@ -22,6 +22,32 @@ MNI305_to_MNI152 = torch.tensor(
 )
 
 
+def reorient_to_ras(img):
+    """Reorient image (and possibly flip dimensions) so as to bring it as close
+    as possible to having an identity affine transformation matrix.
+    """
+    perm, flip = (
+        nib.orientations.io_orientation(np.linalg.inv(img.affine)).astype(int).T
+    )
+
+    # Construct new affine
+    affine = np.identity(4)
+    affine[:3, :3] = img.affine[:3, perm] * flip
+    affine[:3, 3] = img.affine[:3, 3]
+
+    # Adjust image data accordingly
+    data = img.get_fdata().transpose(perm)
+    shape = data.shape
+    for i, f in enumerate(flip):
+        if f == -1:
+            affine[:3, 3] -= affine[:3, i] * (shape[i] - 1)
+            data = np.ascontiguousarray(np.flip(data, i))
+
+    dtype = img.get_data_dtype()
+
+    return nib.Nifti1Image(data.astype(dtype), affine)
+
+
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(self, images: list[Path] | list[str] | tuple, conform: bool = False):
         """Dataset formed from a list of images.
@@ -106,7 +132,9 @@ class TopoFitDataset(ImageDataset):
 
         self.template = {
             k: v.vertices.squeeze(0)
-            for k, v in load_deepsurfer_template(template_order, "white").items()
+            for k, v in load_deepsurfer_template(
+                template_order, "white", self.hemi
+            ).items()
         }
 
         match mni_direction:

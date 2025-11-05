@@ -35,8 +35,8 @@ class TrainParameters(BaseObject):
     resume_from_run         : InitVar[str | None]   = None
     epoch_length_train      : InitVar[int]          = 100
     epoch_length_val        : InitVar[int]          = 50
-    results_dir             : Path | str            = "/mnt/projects/CORTECH/nobackup/jesper/models"
-    # results_dir             : Path | str            = "/mnt/scratch/personal/jesperdn/results"
+    # results_dir             : Path | str            = "/mnt/projects/CORTECH/nobackup/jesper/models"
+    results_dir             : Path | str            = "/mnt/scratch/personal/jesperdn/results"
     model_dir               : InitVar[Path | str | None]   = None
     # model_dir: Path = Path("/mnt/projects/CORTECH/nobackup/jesper/models")
     evaluate_on_every       : InitVar[int]          = 10
@@ -79,23 +79,22 @@ class TrainParameters(BaseObject):
         "HCP",
         "OASIS3",
     )
-    # holdout/out-of-distribution (OOD) datasets
+    # generalization (hold-out) datasets
     datasets_ood            : InitVar[list | tuple] = ("COBRE", "ISBI2015", "MCIC")
 
     images_train            : InitVar[list | tuple | None] = None
     images_validation       : InitVar[list | tuple | None] = None
     images_exclude          : InitVar[list | tuple | None] = None
 
+    # load only a single, random hemisphere during training
+    load_random_hemisphere      : bool = False
+
     # {ds}.exclude.txt
-    subject_subset_exclude: InitVar[str] = "exclude"
+    subject_subset_exclude  : InitVar[str] = "exclude"
 
     # =========================================================================
     #   PREPROCESS
     # =========================================================================
-    # Single hemisphere
-    # target_surface_hemisphere: str = "lh"
-    # out_size = [128, 224, 176]
-    # out_center_str = "lh"
 
     # Full brain
     fov_out_size            : list | tuple          = (192, 224, 192)
@@ -111,6 +110,8 @@ class TrainParameters(BaseObject):
 
     selectable_images_train: list | tuple | None = None
     selectable_images_validation: list | tuple | None = None
+
+    validation_image : None | str = None
 
     # =========================================================================
     #   WANDB
@@ -153,6 +154,10 @@ class TrainParameters(BaseObject):
     ):
         # assert self.contrast in ("t1w", "synth")
         # assert self.resolution in ("1mm", "random")
+
+        # T1w does not exist for upsampled (050mm, 075mm, ...)
+        if self.contrast == "t1w":
+            assert self.resolution in {"1mm", "random"}
 
         data_dir = Path(data_dir)
         subjects_dir = Path(subjects_dir)
@@ -208,27 +213,41 @@ class TrainParameters(BaseObject):
             datasets=datasets,
             subject_dir=subjects_dir,
             exclude_subjects=subject_subset_exclude,
+            load_random_hemisphere=self.load_random_hemisphere,
         )
         images_exclude = images_exclude or images_validation
+
+        match self.resolution:
+            case "050mm":
+                gen_labels = "generation_labels_upsampled_050"
+                self.validation_image = self.validation_image or "synth"
+            case "075mm":
+                gen_labels = "generation_labels_upsampled_075"
+                self.validation_image = self.validation_image or "synth"
+            case "1mm" | "random":
+                gen_labels = "generation_labels_dist"
+                self.validation_image = self.validation_image or "native"
+
         match self.contrast:
             case "synth":
+                t1w_image = ["t1w"] if self.validation_image == "native" else []
                 self.dataset_kwargs = dict(
                     train=kwargs_default
                     | dict(
                         subject_subset="train",
-                        images=images_train or ["generation_labels_dist"],
+                        images=images_train or [gen_labels],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation",
-                        images=images_validation or ["generation_labels_dist", "t1w"],
+                        images=images_validation or [gen_labels] + t1w_image,
                     ),
                     test=kwargs_default
                     | dict(
                         subject_subset="test",
-                        images=images_validation or ["generation_labels_dist", "t1w"],
+                        images=images_validation or [gen_labels] + t1w_image,
                     ),
-                    testood=kwargs_default
+                    ood=kwargs_default
                     | dict(datasets=datasets_ood, images=images_validation or ["t1w"]),
                 )
             case "t1w":
@@ -236,25 +255,25 @@ class TrainParameters(BaseObject):
                     train=kwargs_default
                     | dict(
                         subject_subset="train",
-                        images=images_train or ["generation_labels_dist", "t1w"],
+                        images=images_train or [gen_labels, "t1w"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation",
-                        images=images_validation or ["generation_labels_dist", "t1w"],
+                        images=images_validation or [gen_labels, "t1w"],
                     ),
                     test=kwargs_default
                     | dict(
                         subject_subset="test",
-                        images=images_validation or ["generation_labels_dist", "t1w"],
+                        images=images_validation or [gen_labels, "t1w"],
                     ),
-                    testood=kwargs_default
+                    ood=kwargs_default
                     | dict(datasets=datasets_ood, images=images_validation or ["t1w"]),
                     exclude=kwargs_default
                     | dict(
                         subject_subset="exclude",
                         exclude_subjects=None,
-                        images=images_exclude or ["generation_labels_dist", "t1w"],
+                        images=images_exclude or [gen_labels, "t1w"],
                     ),
                 )
             case "t2w":
@@ -263,19 +282,19 @@ class TrainParameters(BaseObject):
                     train=kwargs_default
                     | dict(
                         subject_subset="train.t2",
-                        images=images_train or ["generation_labels_dist", "t2w"],
+                        images=images_train or [gen_labels, "t2w"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation.t2",
-                        images=images_validation or ["generation_labels_dist", "t2w"],
+                        images=images_validation or [gen_labels, "t2w"],
                     ),
                     test=kwargs_default
                     | dict(
                         subject_subset="test",
-                        images=images_validation or ["generation_labels_dist", "t2w"],
+                        images=images_validation or [gen_labels, "t2w"],
                     ),
-                    testood=kwargs_default
+                    ood=kwargs_default
                     | dict(datasets=datasets_ood, images=images_validation or ["t2w"]),
                 )
             case "flair":
@@ -283,19 +302,19 @@ class TrainParameters(BaseObject):
                     train=kwargs_default
                     | dict(
                         subject_subset="train.flair",
-                        images=images_train or ["generation_labels_dist", "flair"],
+                        images=images_train or [gen_labels, "flair"],
                     ),
                     validation=kwargs_default
                     | dict(
                         subject_subset="validation.flair",
-                        images=images_validation or ["generation_labels_dist", "flair"],
+                        images=images_validation or [gen_labels, "flair"],
                     ),
                     test=kwargs_default
                     | dict(
                         subject_subset="test",
-                        images=images_validation or ["generation_labels_dist", "flair"],
+                        images=images_validation or [gen_labels, "flair"],
                     ),
-                    testood=kwargs_default
+                    ood=kwargs_default
                     | dict(
                         datasets=datasets_ood, images=images_validation or ["flair"]
                     ),
@@ -356,6 +375,8 @@ class TrainParameters(BaseObject):
         self.builder_validation_kw = self.builder_validation_kw or dict(
             intensity_transforms_kw=dict(extracerebral_augmentation=False)
         )
+        self.builder_train_kw["generation_image"] = gen_labels
+        self.builder_validation_kw["generation_image"] = gen_labels
 
         # =====================================================================
         # WANDB

@@ -4,11 +4,7 @@ import sys
 from brainnet.evaluation import predict
 
 
-def _handle_checkpoint_type(x):
-    try:
-        return int(x)
-    except ValueError:
-        return x
+from brainnet.command import handle_checkpoint_type
 
 
 def parse_args(argv):
@@ -25,9 +21,7 @@ def parse_args(argv):
     parser.add_argument("model", help=help_model)
     parser.add_argument("specs", help=help_specs)
     parser.add_argument("subset", type=str, help=help_subset)
-    parser.add_argument(
-        "checkpoint", type=_handle_checkpoint_type, help=help_checkpoint
-    )
+    parser.add_argument("checkpoint", type=handle_checkpoint_type, help=help_checkpoint)
     parser.add_argument(
         "-d",
         "--datasets",

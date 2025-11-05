@@ -15,7 +15,9 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     """
 
     project: str = "TopoFit"
-    fov_out_size: list | tuple = (176, 208, 176)
+    fov_out_size: list | tuple = (176, 208, 176)  # 1.00 isotropic (whole brian)
+    # fov_out_size: list | tuple = (224, 288, 224) # 0.75 isotropic (whole brain)
+    # fov_out_size: list | tuple = (128, 288, 224) # 0.75 isotropic (single hemi)
     fov_out_center_str: str = "brain"
     package: InitVar[str] = __package__
 
@@ -25,12 +27,20 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
 
     # fmt: off
     UNET_ENCODER_CHANNELS   : InitVar[dict]         = {
+        ("t1w", "050mm"):       [[16], [32], [64], [128], [256]], # [512]
+        ("t1w", "075mm"):       [[16], [32], [64], [128], [256]],
         ("t1w", "1mm"):         [[16], [32], [64], [128], [256]],
+        ("synth", "050mm"):     [[16], [32], [64], [128], [256]],
+        ("synth", "075mm"):     [[16], [32], [64], [128], [256]],
         ("synth", "1mm"):       [[16], [32], [64], [128], [256]],
         ("synth", "random"):    [[16], [32], [64], [128], [256]],
     }
     UNET_DECODER_CHANNELS   : InitVar[dict]         = {
+        ("t1w", "050mm"):       [[128], [64], [32], [16]],
+        ("t1w", "075mm"):       [[128], [64], [32], [16]],
         ("t1w", "1mm"):         [[128], [64], [32], [16]],
+        ("synth", "050mm"):     [[128], [96], [64], [32]], # no post conv
+        ("synth", "075mm"):     [[128], [96], [64], [32]], # no post conv
         ("synth", "1mm"):       [[128], [96], [64], [32]],
         ("synth", "random"):    [[128], [96], [64], [64]],
     }
@@ -49,6 +59,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     TOPOFIT_GRAY_MATTER_CHANNELS: InitVar[list]     = [32]
     TOPOFIT_GRAY_MATTER_MODULE: InitVar[str]        = "LinearDeformationBlock"
     # fmt: on
+
+    iterative_hemisphere_prediction: bool = False
 
     # =========================================================================
     #   PRETRAINED
@@ -99,7 +111,11 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         # =====================================================================
 
         UNET_DECODER_CHANNELS_POST = {
+            ("t1w", "050mm"): None,
+            ("t1w", "075mm"): None,
             ("t1w", "1mm"): None,
+            ("synth", "050mm"): None,  # UNET_DECODER_CHANNELS["t1w", "050mm"],
+            ("synth", "075mm"): None,  # UNET_DECODER_CHANNELS["t1w", "075mm"],
             ("synth", "1mm"): UNET_DECODER_CHANNELS["t1w", "1mm"],
             ("synth", "random"): UNET_DECODER_CHANNELS["t1w", "1mm"],
         }
@@ -134,23 +150,38 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         # =====================================================================
 
         match self.resolution:
+            case "050mm":
+                in_res = (0.5, 0.5, 0.5)
+                builder_res = "Iso"
+            case "075mm":
+                in_res = (0.75, 0.75, 0.75)
+                builder_res = "Iso"
             case "1mm":
+                in_res = (1.0, 1.0, 1.0)
                 builder_res = "Iso"
             case "random":
+                in_res = (1.0, 1.0, 1.0)
                 builder_res = ""
             case _:
-                raise ValueError
-
+                raise ValueError(
+                    f"Invalid resolution specification ({self.resolution})"
+                )
         builder_contrast = "Synth" if self.contrast == "synth" else "Select"
 
         if self.builder_train is None:
             self.builder_train = f"Only{builder_contrast}{builder_res}"
         if self.builder_validation is None:
-            self.builder_validation = f"OnlySelect{builder_res}"
+            if self.validation_image == "native":
+                self.builder_validation = f"OnlySelect{builder_res}"
+            elif "synth":
+                self.builder_validation = f"OnlySynth{builder_res}"
+            else:
+                raise ValueError(f"Invalid 'validation_image' {self.validation_image}")
 
         self.synthesizer = dict(
             train=SynthesizerConfig(
-                builder=self.builder_train,
+                self.builder_train,
+                in_res,
                 out_size=self.fov_out_size,
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
@@ -159,7 +190,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 **self.builder_train_kw,
             ),
             validation=SynthesizerConfig(
-                builder=self.builder_validation,
+                self.builder_validation,
+                in_res,
                 out_size=self.fov_out_size,
                 out_center_str=self.fov_out_center_str,
                 # segmentation_labels = "brainseg"
@@ -171,8 +203,13 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
 
         # Store information needed for setting up the prediction
         self.prediction_config = dict(
+            step=dict(
+                iterative_hemisphere_prediction=self.iterative_hemisphere_prediction
+            ),
             preprocessor=dict(
-                out_size=self.fov_out_size, out_center_str=self.fov_out_center_str
+                in_res=in_res,
+                out_size=self.fov_out_size,
+                out_center_str=self.fov_out_center_str,
             ),
             model=dict(
                 topofit=graph_kwargs,
