@@ -503,9 +503,10 @@ class Surface(torch.nn.Module):
         face_angles = self.compute_angles() if face_angles is None else face_angles
         cotangents = self.compute_cotangents(face_angles).reshape(self.n_batch, -1)
 
-        edges = self.topology.edges_from_faces().T
-        edge_vec = self.vertices[:, edges].diff(dim=1).squeeze(1)
-        edge_len_sq = edge_vec.pow(2).sum(-1)
+        edges = self.topology.get_edges_ravelled()
+        edge_len_sq = (
+            self.compute_edge_norm().pow(2).reshape(-1, 3 * self.topology.n_faces)
+        )
 
         # The two contributions to the Voronoi area
         # A = (cot_alpha_ij + cot_beta_ij) * (x_i - x_j)
@@ -557,8 +558,8 @@ class Surface(torch.nn.Module):
             (self.n_batch, self.topology.n_vertices), device=self.get_device()
         )
         # without correction cot_x_E2_0 == cot_x_E2_1
-        A_mixed = torch.index_add(A_mixed, 1, edges[0], cot_x_E2_0)
-        A_mixed = torch.index_add(A_mixed, 1, edges[1], cot_x_E2_1)
+        A_mixed = torch.index_add(A_mixed, 1, edges[:, 0], cot_x_E2_0)
+        A_mixed = torch.index_add(A_mixed, 1, edges[:, 1], cot_x_E2_1)
         A_mixed = A_mixed / 8.0
         return A_mixed
 
@@ -622,11 +623,11 @@ class Surface(torch.nn.Module):
         #     print(vertex_area.amin(), vertex_area.amax())
         #     raise ValueError
 
-        edges = self.topology.edges_from_faces().T
-        edge_vec = f[:, edges].diff(dim=1).squeeze(1)
+        edges = self.topology.get_edges_ravelled()
+        edge_vec = f[:, edges].diff(dim=-2).squeeze(-2)
         cot_vec_sum = torch.zeros_like(f)
-        cot_vec_sum = torch.index_add(cot_vec_sum, 1, edges[0], cot * edge_vec)
-        cot_vec_sum = torch.index_add(cot_vec_sum, 1, edges[1], -cot * edge_vec)
+        cot_vec_sum = torch.index_add(cot_vec_sum, 1, edges[:, 0], cot * edge_vec)
+        cot_vec_sum = torch.index_add(cot_vec_sum, 1, edges[:, 1], -cot * edge_vec)
         return 0.5 * 1.0 / atleast_nd_append(vertex_area, f.ndim) * cot_vec_sum
 
     def compute_mean_curvature(self, K: torch.Tensor | None = None, signed=True):
