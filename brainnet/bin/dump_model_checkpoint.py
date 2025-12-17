@@ -2,6 +2,7 @@ import argparse
 import importlib
 from pathlib import Path
 import sys
+import warnings
 
 import torch
 
@@ -26,8 +27,17 @@ def dump_model(args):
     )
     specs = importlib.import_module(f"brainnet.config.{args.model}.{args.specs}")
 
-    p = train_parameters.TrainParameters(**specs.DEFAULTS, run_suffix=args.suffix)
-    p.dump_prediction_config(out_dir)
+    if args.suffix is not None:
+        if specs.DEFAULTS["run_suffix"] is not None:
+            warnings.warn(
+                f"Overwriting `run_suffix` ({specs.DEFAULTS['run_suffix']} -> {args.suffix})"
+            )
+        specs.DEFAULTS["run_suffix"] = args.suffix
+
+    p = train_parameters.TrainParameters(**specs.DEFAULTS)
+    filename_config = out_dir / f"{args.specs}_config.json"
+    print(f"Saving {filename_config}")
+    p.dump_prediction_config(filename_config)
 
     if args.checkpoint == "best":
         filename = p.results.checkpoint_dir / "state_checkpoint_best.pt"
@@ -37,6 +47,10 @@ def dump_model(args):
             p.results.checkpoint_dir / f"state_checkpoint_{args.checkpoint:05d}.pt"
         )
         ckpt = torch.load(filename)["model"]
+    print(f"Loaded checkpoint: {filename}")
+
+    filename_state = out_dir / f"{args.specs}_state.pt"
+    print(f"Saving {filename_state}")
     torch.save(ckpt, out_dir / f"{args.specs}_state.pt")
 
 
@@ -48,7 +62,7 @@ def parse_args(argv):
     parser.add_argument("model")
     parser.add_argument("specs")
     parser.add_argument("checkpoint", type=handle_checkpoint_type)
-    parser.add_argument("--suffix", "-s", default="")
+    parser.add_argument("--suffix", "-s", default=None)
     parser.add_argument(
         "--out", "-o", help="Output directory in which to save the state."
     )

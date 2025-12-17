@@ -3,6 +3,20 @@ from brainsynth.utilities import apply_affine
 from brainnet.modules.image.unet import UNet
 from brainnet import resources
 
+# Transformation that converts lh to rh in template space (MNI305).
+# Estimated by least squares registration of lh.white to rh.white from the
+# templates in brainsynth/resources/template/surf
+template_lh_to_rh = torch.tensor(
+    [
+        [
+            [-1.0338, 0.0032, -0.0110, -0.0359],
+            [-0.0462, 0.9972, 0.0115, -0.4072],
+            [0.0088, -0.0099, 1.0198, 0.6601],
+            [0.0000, 0.0000, 0.0000, 1.0000],
+        ]
+    ]
+)
+
 
 class TemplateRegAffine(torch.nn.Module):
     def __init__(
@@ -12,6 +26,7 @@ class TemplateRegAffine(torch.nn.Module):
         encoder_channels: list[list[int]] | tuple = ((32,), (32,), (32,), (32,), (32,)),
         decoder_channels: list[list[int]] | tuple = ((32,), (32,), (32,), (32,)),
         points_per_hemisphere: int = 12,
+        hemispheres: str | tuple[str, str] = ("lh", "rh"),
         weigh_by_feature_mass: bool = True,
     ):
         """Reimplementation of Andrew Hoopes' original template alignment tool
@@ -22,9 +37,17 @@ class TemplateRegAffine(torch.nn.Module):
 
         """
         super().__init__()
+        _valid_hemispheres = {"lh", "rh"}
+        if isinstance(hemispheres, str):
+            self.hemispheres = (hemispheres,)
+        else:
+            self.hemispheres = hemispheres
+        self.n_hemi = len(hemispheres)
+        assert all(h in _valid_hemispheres for h in self.hemispheres)
+        assert self.n_hemi <= 2
         self.weigh_by_feature_mass = weigh_by_feature_mass
         self.pph = points_per_hemisphere
-        self.ppb = self.pph * 2
+        self.ppb = self.pph * self.n_hemi
         self.spatial_dims = (-3, -2, -1)
 
         # Image feature extraction. Each feature is learned so as to "zoom in"
@@ -60,19 +83,18 @@ class TemplateRegAffine(torch.nn.Module):
         # particular subject
 
         # Approximate bounding box of the template surfaces
-        uni_lh = torch.distributions.Uniform(
-            low=torch.tensor([-80.0, -120.0, -60.0]),
-            high=torch.tensor([0.0, 80.0, 90.0]),
-        )
-        uni_rh = torch.distributions.Uniform(
-            low=torch.tensor([0.0, -120.0, -60.0]),
-            high=torch.tensor([80.0, 80.0, 90.0]),
+        bbox = dict(
+            lh=torch.distributions.Uniform(
+                low=torch.tensor([-80.0, -120.0, -60.0]),
+                high=torch.tensor([0.0, 80.0, 90.0]),
+            ),
+            rh=torch.distributions.Uniform(
+                low=torch.tensor([0.0, -120.0, -60.0]),
+                high=torch.tensor([80.0, 80.0, 90.0]),
+            ),
         )
         self.template_points = torch.nn.ParameterDict(
-            dict(
-                lh=torch.nn.Parameter(uni_lh.sample([self.pph])),
-                rh=torch.nn.Parameter(uni_rh.sample([self.pph])),
-            )
+            {h: torch.nn.Parameter(bbox[h].sample([self.pph])) for h in hemispheres}
         )
 
         # Image grid for computing feature barycenters in voxel space
@@ -82,9 +104,9 @@ class TemplateRegAffine(torch.nn.Module):
         self.ones = torch.nn.Buffer(torch.ones((1, self.ppb, 1)), persistent=False)
 
     def split_hemispheres(self, t: torch.Tensor, dim: int = 1):
-        return dict(zip(("lh", "rh"), t.split(self.pph, dim)))
+        return dict(zip(self.hemispheres, t.split(self.pph, dim)))
 
-    def forward(self, image, vox2ras):
+    def _estimate_targets(self, image, vox2ras):
         # Image features which "zoom in" on characteristic parts of the image
         features = self.image_fx_pre(image)
         features = self.image_fx_unet(features)["dec:3"]
@@ -121,13 +143,17 @@ class TemplateRegAffine(torch.nn.Module):
             self._wls_weight = self.split_hemispheres(feature_mass)
         else:
             self._wls_weight = None
-
         # print(barycenters.amin(1), barycenters.amax(1))
 
         # subject specific barycenters (target points) in RAS
-        target = self.split_hemispheres(apply_affine(vox2ras, barycenters))
-        affines = self.estimate_affine_hemispheres(target)
-        affines["brain"] = self.estimate_affine_brain(target)
+        return self.split_hemispheres(apply_affine(vox2ras, barycenters))
+
+    def forward(self, image, vox2ras):
+        targets = self._estimate_targets(image, vox2ras)
+
+        affines = self.estimate_affine_hemispheres(targets)
+        if self.n_hemi == 2:
+            affines["brain"] = self.estimate_affine_brain(targets)
         return affines
 
     def estimate_affine(
@@ -188,11 +214,14 @@ class TemplateRegAffine(torch.nn.Module):
         cls,
         contrast: str = "synth",
         resolution: str = "random",
+        suffix: str | None = None,
         device: str | torch.device = "cpu",
     ):
         device = torch.device(device)
-        state = resources.load_pretrained_state("trega", contrast, resolution, device)
-        config = resources.load_pretrained_config("trega", contrast, resolution)
+        state = resources.load_pretrained_state(
+            "trega", contrast, resolution, suffix, device
+        )
+        config = resources.load_pretrained_config("trega", contrast, resolution, suffix)
 
         model = cls(**config["model"])
         model.to(device)

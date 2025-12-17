@@ -66,8 +66,10 @@ class InterpolatedData(torch.nn.Module):
         face_index: torch.Tensor | None = None,
         weights: torch.Tensor | None = None,
         data: dict[str, torch.Tensor] | None = None,
+        device: str | torch.device = "cpu",
     ):
         super().__init__()
+        self.device = device
 
         self.points = points
         self.face_index = face_index
@@ -82,7 +84,7 @@ class InterpolatedData(torch.nn.Module):
     @points.setter
     def points(self, value):
         if value is None:
-            value = torch.tensor([])
+            value = torch.tensor([], device=self.device)
         self.register_buffer("_points", value, persistent=False)
 
     @property
@@ -92,7 +94,7 @@ class InterpolatedData(torch.nn.Module):
     @face_index.setter
     def face_index(self, value):
         if value is None:
-            value = torch.tensor([], dtype=torch.int)
+            value = torch.tensor([], dtype=torch.int, device=self.device)
         self.register_buffer("_face_index", value, persistent=False)
 
     @property
@@ -102,7 +104,7 @@ class InterpolatedData(torch.nn.Module):
     @weights.setter
     def weights(self, value):
         if value is None:
-            value = torch.tensor([])
+            value = torch.tensor([], device=self.device)
         self.register_buffer("_weights", value, persistent=False)
 
     @property
@@ -146,7 +148,7 @@ class Surface(torch.nn.Module):
         self.vertex_data = {} if vertex_data is None else vertex_data
         self.face_data = {} if face_data is None else face_data
         if interpolated_data is None:
-            self.interpolated = InterpolatedData()
+            self.interpolated = InterpolatedData(device=vertices.device)
         else:
             self.interpolated = interpolated_data
 
@@ -427,8 +429,9 @@ class Surface(torch.nn.Module):
             if _is_vector_data(v):
                 self.face_data[k] = apply_affine(affine, v)
 
-        if (p := self.interpolated.points) is not None:
+        if _is_vector_data(p := self.interpolated.points):
             self.interpolated.points = apply_affine(affine, p)
+
         for k, v in self.interpolated.data.items():
             if _is_vector_data(v):
                 self.interpolated.data[k] = apply_affine(affine, v)

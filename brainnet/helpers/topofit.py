@@ -377,9 +377,9 @@ class PredictionStep(Step):
         return (y_pred, template) if return_template else y_pred
 
     @staticmethod
-    def _preprocessor_from_config(contrast, resolution, device):
+    def _preprocessor_from_config(contrast, resolution, suffix, device):
         config = brainnet.resources.load_pretrained_config(
-            "topofit", contrast, resolution
+            "topofit", contrast, resolution, suffix
         )
         config = brainsynth.config.PredictionConfig(
             "PredictionBuilder", **config["preprocessor"], device=device
@@ -387,9 +387,9 @@ class PredictionStep(Step):
         return brainsynth.Synthesizer(config)
 
     @staticmethod
-    def _load_step_config(contrast, resolution, device):
+    def _load_step_config(contrast, resolution, suffix, device):
         config = brainnet.resources.load_pretrained_config(
-            "topofit", contrast, resolution
+            "topofit", contrast, resolution, suffix
         )
         return config["step"] if "step" in config else {}
 
@@ -398,13 +398,18 @@ class PredictionStep(Step):
         cls,
         contrast,
         resolution,
+        suffix: str | None = None,
         device: str | torch.device = "cpu",
         trega_kwargs: dict | None = None,
     ):
         kw = trega_kwargs or {}
-        preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
-        step_kwargs = cls._load_step_config(contrast, resolution, device)
-        model = brainnet.networks.TopoFit.from_pretrained(contrast, resolution, device)
+        preprocessor = cls._preprocessor_from_config(
+            contrast, resolution, suffix, device
+        )
+        step_kwargs = cls._load_step_config(contrast, resolution, suffix, device)
+        model = brainnet.networks.TopoFit.from_pretrained(
+            contrast, resolution, suffix, device
+        )
         trega_step = trega_PredictionStep.from_pretrained(device=device, **kw)
         return cls(trega_step, preprocessor, model, **step_kwargs, device=device)
 
@@ -646,6 +651,7 @@ def predict(
     mni_space="mni152",
     mni_direction="mni2sub",
     save_template: bool = False,
+    suffix: str | None = None,
     device="cuda",
 ):
     images = utils_bin.get_images(image)
@@ -653,7 +659,7 @@ def predict(
     transforms = utils_bin.get_transforms(transform)
 
     pred_step = PredictionStep.from_pretrained(
-        contrast, resolution, device, trega_kwargs=dict(hemi=hemi)
+        contrast, resolution, suffix, device, trega_kwargs=dict(hemi=hemi)
     )
     in_order = pred_step.model.graph.active_topologies[0]
     dataset = TopoFitDataset(
@@ -704,5 +710,6 @@ def predict_from_args(args):
         args.mni_space,
         args.mni_direction,
         args.save_template,
+        args.suffix,
         args.device,
     )

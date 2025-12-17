@@ -120,6 +120,7 @@ class Step:
         return {
             (k0, k1): self.template[k0].apply_affine(affines[k1], return_surface=False)
             for k0, k1 in keys
+            if k1 in affines
         }
 
     def postprocess(self, y_pred):
@@ -157,6 +158,8 @@ class TrainingStep(Step):
         # types as inferred during forward
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             y_pred = self.model(image, vox2ras)
+            # if single hemi model, only lh or rh is meaningful
+            y_pred = {k: v for k, v in y_pred.items() if k in y_true}
 
             y_pred = self.prepare_for_loss(y_pred)
             y_true = self.prepare_for_loss(y_true)
@@ -216,6 +219,8 @@ class EvaluationStep(Step):
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, vox2ras)
+                # if single hemi model, only lh or rh is meaningful
+                y_pred = {k: v for k, v in y_pred.items() if k in y_true}
 
                 y_pred = self.prepare_for_loss(y_pred)
                 y_true = self.prepare_for_loss(y_true)
@@ -282,13 +287,14 @@ class PredictionStep(Step):
         cls,
         contrast="synth",
         resolution="random",
+        suffix: str | None = None,
         device: str | torch.device = "cpu",
         **kwargs,
     ):
         device = torch.device(device)
         preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
         model = brainnet.networks.TemplateRegAffine.from_pretrained(
-            contrast, resolution, device
+            contrast, resolution, suffix, device
         )
         return cls(preprocessor, model, device=device, **kwargs)
 

@@ -85,11 +85,19 @@ class TopoFit(torch.nn.Module):
 
     @classmethod
     def from_pretrained(
-        cls, contrast: str, resolution: str, device: str | torch.device = "cpu"
+        cls,
+        contrast: str,
+        resolution: str,
+        suffix: str | None = None,
+        device: str | torch.device = "cpu",
     ):
         device = torch.device(device)
-        state = resources.load_pretrained_state("topofit", contrast, resolution, device)
-        config = resources.load_pretrained_config("topofit", contrast, resolution)
+        state = resources.load_pretrained_state(
+            "topofit", contrast, resolution, suffix, device
+        )
+        config = resources.load_pretrained_config(
+            "topofit", contrast, resolution, suffix
+        )
 
         model = cls(config["model"]["unet"], config["model"]["topofit"])
         model.to(device)

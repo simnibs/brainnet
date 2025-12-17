@@ -4,7 +4,7 @@ from brainsynth.config import DatasetConfig, SynthesizerConfig
 from brainsynth.dataset import AlignmentDataset
 
 import brainnet.config.train_parameters
-from brainnet.networks.templatereg import TemplateRegAffine
+import brainnet.networks.templatereg
 
 
 @dataclass(kw_only=True)
@@ -19,6 +19,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     fov_out_size: list | tuple = (192, 224, 192)
     fov_out_center_str: str = "image"
     package: InitVar[str] = __package__
+    network = "TemplateRegAffine"
 
     def __post_init__(self, *args):
         super().__post_init__(*args)
@@ -47,8 +48,10 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             points_per_hemisphere=16,
             weigh_by_feature_mass=True,
         )
+        if self.model_kwargs is not None:
+            model |= self.model_kwargs
 
-        self.model = TemplateRegAffine(**model)
+        self.model = getattr(brainnet.networks.templatereg, self.network)(**model)
 
         # =====================================================================
         # SYNTHESIZER

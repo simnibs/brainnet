@@ -98,7 +98,6 @@ def parse_args(argv):
     topofit.add_argument(
         "--save-template",
         action="store_true",
-        type=bool,
         help="Save the (aligned) template which is used as starting point for the surface deformation.",
     )
     topofit.add_argument(
@@ -106,6 +105,12 @@ def parse_args(argv):
         choices=["lh", "rh"],
         default="both",
         help="Hemisphere to predict (default = both).",
+    )
+    topofit.add_argument(
+        "-s",
+        "--suffix",
+        default=None,
+        help="Suffix of the model file to use, i.e., {contrast}_{resolultion}_{suffix} (default = None).",
     )
     topofit.set_defaults(func=brainnet.helpers.topofit.predict_from_args)
 
