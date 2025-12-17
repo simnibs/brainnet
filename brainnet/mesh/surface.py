@@ -3,6 +3,7 @@ import torch
 
 import brainsynth
 from brainsynth.utilities import apply_affine
+from brainsynth.transforms.spatial import FlipSurface
 import brainnet.mesh.topology
 from brainnet.utils import atleast_nd_append, atleast_nd_prepend
 
@@ -17,6 +18,10 @@ curv = torch.rand((topology.n_vertices,3))
 reduce_index, gather_index = topology.vertex_adjacency.T
 smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, curv[gather_index])
 """
+
+
+def _is_vector_data(d):
+    return d.ndim == 3 and d.shape[-1] == 3
 
 
 def rotate(v, k: torch.Tensor, theta: torch.Tensor, normalize: bool = True):
@@ -118,6 +123,9 @@ class Surface(torch.nn.Module):
         vertices: torch.Tensor,
         topology: brainnet.mesh.topology.Topology | torch.Tensor,
         topology_class: str = "DeepSurferTopology",
+        vertex_data=None,
+        face_data=None,
+        interpolated_data=None,
     ) -> None:
         """A batch of surfaces (vertices) that share a topology.
 
@@ -133,12 +141,14 @@ class Surface(torch.nn.Module):
 
         self._topology_class = getattr(brainnet.mesh.topology, topology_class)
         self.topology = topology
-
         self.vertices = vertices
-        self.vertex_data = {}
-        self.face_data = {}
 
-        self.interpolated = InterpolatedData()
+        self.vertex_data = {} if vertex_data is None else vertex_data
+        self.face_data = {} if face_data is None else face_data
+        if interpolated_data is None:
+            self.interpolated = InterpolatedData()
+        else:
+            self.interpolated = interpolated_data
 
     @property
     def topology(self):
@@ -202,6 +212,46 @@ class Surface(torch.nn.Module):
 
     def compute_face_barycenters(self):
         return self.as_mesh().mean(2)
+
+    def flip(self, dim: int, size: torch.Size | None = None, inplace: bool = False):
+        flip = FlipSurface(dim, size)
+
+        out = (
+            self
+            if inplace
+            else Surface(
+                self.vertices,
+                copy.deepcopy(self.topology),
+                vertex_data=self.vertex_data,
+                face_data=self.face_data,
+                interpolated_data=self.interpolated,
+            )
+        )
+        out.vertices = flip(out.vertices)
+        out.topology.reverse_face_orientation()
+
+        # Flip vector data only
+        # for k, v in out.vertex_data.items():
+        #     if _is_vector_data(v):
+        #         print(f"Flipping vertex data {k}")
+        #         print(v[:, :5])
+        #         out.vertex_data[k] = flip(v)
+        #         print(out.vertex_data[k][:, :5])
+
+        # for k, v in out.face_data.items():
+        #     if _is_vector_data(v):
+        #         print(f"Flipping face data {k}")
+        #         out.face_data[k] = flip(v)
+
+        # if (p := out.interpolated.points).nelement() > 0:
+        #     print("Flipping interpolated points")
+        #     out.interpolated.points = flip(p)
+        # for k, v in out.interpolated.data.items():
+        #     if _is_vector_data(v):
+        #         print(f"Flipping interpolated data {k}")
+        #         out.interpolated.data[k] = flip(v)
+
+        return out
 
     def sample_points(
         self,
@@ -320,14 +370,68 @@ class Surface(torch.nn.Module):
         return buffer
 
     def apply_affine(
-        self, affine: torch.Tensor, return_surface: bool = True, inplace: bool = False
+        self,
+        affine: torch.Tensor,
+        return_surface: bool = True,
+        inplace: bool = False,
+        apply_to_vector_data: bool = False,
     ):
+        """
+
+
+        Parameters
+        ----------
+        affine : torch.Tensor
+            _description_
+        return_surface : bool, optional
+            _description_, by default True
+        apply_to_vector_data : bool, optional
+            Apply the affine transformation to any vector quantities in vertex,
+            face, or interpolated data. If `return_surface = False` and
+            `inplace = False`, this has no effect (default = False).
+        inplace : bool, optional
+            _description_, by default False
+
+        Returns
+        -------
+        _type_
+            _description_
+        """
         if inplace:
             self.vertices = apply_affine(affine, self.vertices)
+            if apply_to_vector_data:
+                self._apply_affine_to_vector_data(affine)
             return self
         else:
             v = apply_affine(affine, self.vertices)
-            return Surface(v, self.topology) if return_surface else v
+            if return_surface:
+                out = Surface(
+                    v,
+                    self.topology,
+                    vertex_data=copy.deepcopy(self.vertex_data),
+                    face_data=copy.deepcopy(self.face_data),
+                    interpolated_data=copy.deepcopy(self.interpolated),
+                )
+                if apply_to_vector_data:
+                    out._apply_affine_to_vector_data(affine)
+                return out
+            else:
+                return v
+
+    def _apply_affine_to_vector_data(self, affine):
+        for k, v in self.vertex_data.items():
+            if _is_vector_data(v):
+                self.vertex_data[k] = apply_affine(affine, v)
+
+        for k, v in self.face_data.items():
+            if _is_vector_data(v):
+                self.face_data[k] = apply_affine(affine, v)
+
+        if (p := self.interpolated.points) is not None:
+            self.interpolated.points = apply_affine(affine, p)
+        for k, v in self.interpolated.data.items():
+            if _is_vector_data(v):
+                self.interpolated.data[k] = apply_affine(affine, v)
 
     # def squeeze_batch(self):
     #     self.vertices = self.vertices.squeeze(0)

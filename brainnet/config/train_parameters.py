@@ -27,6 +27,7 @@ class TrainParameters(BaseObject):
     project                 : str
     contrast                : str
     resolution              : str
+    network                 : str
     run_suffix              : str                   = ""
     load_checkpoint         : int | str             = 0
     max_epochs              : int                   = 1
@@ -58,8 +59,8 @@ class TrainParameters(BaseObject):
     # =========================================================================
     #   MODEL
     # =========================================================================
-
-    enable_amp: bool = True
+    model_kwargs            : dict | None           = None
+    enable_amp              : bool                  = True
 
     # =========================================================================
     #   DATASET
@@ -103,10 +104,10 @@ class TrainParameters(BaseObject):
     builder_train: str | None = None
     builder_validation: str | None = None
 
-    builder_train_kw: dict[str, Any] | None = None
+    preprocessor_train_kwargs: dict[str, Any] | None = None
     # do not use extracerebral augmentation (e.g., skullstripping) during
     # validation
-    builder_validation_kw: dict[str, Any] | None = None
+    preprocessor_validation_kwargs: dict[str, Any] | None = None
 
     selectable_images_train: list | tuple | None = None
     selectable_images_validation: list | tuple | None = None
@@ -371,12 +372,13 @@ class TrainParameters(BaseObject):
         # SYNTHESIZER
         # =====================================================================
 
-        self.builder_train_kw = self.builder_train_kw or {}
-        self.builder_validation_kw = self.builder_validation_kw or dict(
-            intensity_transforms_kw=dict(extracerebral_augmentation=False)
+        self.preprocessor_train_kwargs = self.preprocessor_train_kwargs or {}
+        self.preprocessor_validation_kwargs = (
+            self.preprocessor_validation_kwargs
+            or dict(intensity_transforms_kw=dict(extracerebral_augmentation=False))
         )
-        self.builder_train_kw["generation_image"] = gen_labels
-        self.builder_validation_kw["generation_image"] = gen_labels
+        self.preprocessor_train_kwargs["generation_image"] = gen_labels
+        self.preprocessor_validation_kwargs["generation_image"] = gen_labels
 
         # =====================================================================
         # WANDB

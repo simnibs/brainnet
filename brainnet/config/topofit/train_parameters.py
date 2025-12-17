@@ -3,7 +3,7 @@ from dataclasses import dataclass, InitVar
 from brainsynth.config import DatasetConfig, SynthesizerConfig
 
 import brainnet.config.train_parameters
-from brainnet.networks import TopoFit
+import brainnet.networks
 
 
 @dataclass(kw_only=True)
@@ -15,11 +15,13 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     """
 
     project: str = "TopoFit"
-    fov_out_size: list | tuple = (176, 208, 176)  # 1.00 isotropic (whole brian)
+    fov_out_size: list | tuple = (176, 208, 176)  # 1.00 isotropic (whole brain)
+    # fov_out_size: list | tuple = (128, 208, 176) # 1.00 isotropic (single hemi)
     # fov_out_size: list | tuple = (224, 288, 224) # 0.75 isotropic (whole brain)
     # fov_out_size: list | tuple = (128, 288, 224) # 0.75 isotropic (single hemi)
     fov_out_center_str: str = "brain"
     package: InitVar[str] = __package__
+    network = "TopoFit"
 
     # =====================================================================
     #   MODEL
@@ -143,7 +145,11 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
             pial_channels=TOPOFIT_GRAY_MATTER_CHANNELS,
             pial_deform_module=TOPOFIT_GRAY_MATTER_MODULE,
         )
-        self.model = TopoFit(unet_kwargs, graph_kwargs)
+        if self.model_kwargs is None:
+            self.model_kwargs = {}
+        self.model = getattr(brainnet.networks, self.network)(
+            unet_kwargs, graph_kwargs, **self.model_kwargs
+        )
 
         # =====================================================================
         # SYNTHESIZER
@@ -187,7 +193,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 # segmentation_labels = "brainseg"
                 selectable_images=self.selectable_images_train,
                 device=self.device,
-                **self.builder_train_kw,
+                **self.preprocessor_train_kwargs,
             ),
             validation=SynthesizerConfig(
                 self.builder_validation,
@@ -197,9 +203,13 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 # segmentation_labels = "brainseg"
                 selectable_images=self.selectable_images_validation,
                 device=self.device,
-                **self.builder_validation_kw,
+                **self.preprocessor_validation_kwargs,
             ),
         )
+
+        if self.network == "TopoFitSingleHemi":
+            # Must be true for this network
+            self.iterative_hemisphere_prediction = True
 
         # Store information needed for setting up the prediction
         self.prediction_config = dict(

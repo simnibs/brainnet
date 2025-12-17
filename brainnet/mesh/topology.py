@@ -16,7 +16,7 @@ class Topology(torch.nn.Module):
         self.n_faces = self.faces.shape[0]
         self.vertices_per_face = self.faces.shape[1]
         self.n_vertices = self.n_faces_to_n_vertices()
-        self._reversed_face_order = (0, 2, 1)
+        # self._reversed_face_order = (0, 2, 1)
 
         if edge_pairs is None:
             edge_pairs = torch.tensor(
@@ -32,9 +32,10 @@ class Topology(torch.nn.Module):
         return self.faces.device
 
     def reverse_face_orientation(self):
-        self.faces = self.faces[:, self._reversed_face_order]
+        # self.faces = self.faces[:, self._reversed_face_order]
+        self.faces = self.faces.flip(-1)
         # Ensure subdivide_faces is still valid
-        self.faces_to_edges = self.faces_to_edges[:, self._reversed_face_order]
+        self.faces_to_edges = self.faces_to_edges.flip(-1)
 
     def get_edges(self, sort: bool = False):
         # (n_faces, 3, 2)
