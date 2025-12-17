@@ -35,8 +35,8 @@ loss_events = [
                 ("pial", "edge_var"): 0.5,
                 ("white", "tri_quality"): 0.5,
                 ("pial", "tri_quality"): 0.5,
-                ("registration", "chamfer"): 0.0,
-                ("registration", "chamfer_w"): 1.0,
+                ("sphere.reg", "chamfer"): 0.0,
+                ("sphere.reg", "chamfer_w"): 1.0,
             }
         ),
     ),

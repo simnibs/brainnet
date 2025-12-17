@@ -118,21 +118,18 @@ class Step:
 
     def _amp_prediction(self, image: torch.Tensor, template: dict[str, torch.Tensor]):
         with torch.autocast(self.device.type, enabled=self.enable_amp):
-            features = self.model.unet(image)
-
-        # with torch.autocast(self.device.type, torch.float32, enabled=self.enable_amp):
-        features = recursive_float(features)
-        out = self.model.graph(features, template)
-        if self.model._swap_output:
-            out = self.model.swap_output_levels(out)
+            out = self.model.forward(image, template)
         return out
 
     def postprocess(self, y_pred, vox2ras: torch.Tensor | None = None):
         # we don't want to transform the spherical registration
         if vox2ras is not None:
-            sphere_reg = y_pred.pop("registration")
-            _ = recursive_apply_affine(y_pred, vox2ras, inplace=True)
-            y_pred["registration"] = sphere_reg
+            sphere_reg = y_pred.pop("sphere.reg")
+            # also transform the uncertainty estimate
+            _ = recursive_apply_affine(
+                y_pred, vox2ras, inplace=True, apply_to_vector_data=True
+            )
+            y_pred["sphere.reg"] = sphere_reg
         return y_pred
 
 
@@ -171,9 +168,6 @@ class TrainingStep(Step):
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             self.criterion.prepare_for_surface_loss(y_pred, y_true)
 
-            # recursive_Module_to(y_pred, torch.float32)
-            # recursive_Module_to(y_true, torch.float32)
-
             # swap to {hemi: {surface: ...}} for loss calculation
             y_pred = self.model.swap_output_levels(y_pred)
             y_true = self.model.swap_output_levels(y_true)
@@ -187,7 +181,7 @@ class TrainingStep(Step):
         vox2ras = self.vox2ras_scale
 
         y_true = self.get_surfaces(y_true)
-        y_true["registration"] = self.y_true_reg
+        y_true["sphere.reg"] = self.y_true_reg
 
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
@@ -201,7 +195,7 @@ class TrainingStep(Step):
         total_loss = recursive_dict_sum(loss["weighted"])
         total_loss /= self.gradient_accumulation_steps
 
-        del y_true["registration"]  # no need to save this
+        del y_true["sphere.reg"]  # no need to save this
 
         # exit if loss diverges
         if total_loss > 1e6 or torch.isnan(total_loss):
@@ -251,8 +245,6 @@ class EvaluationStep(Step):
     def _amp_compute_loss(self, y_pred, y_true):
         with torch.autocast(self.device.type, enabled=self.enable_amp):
             self.criterion.prepare_for_surface_loss(y_pred, y_true)
-            # recursive_Module_to(y_pred, torch.float32)
-            # recursive_Module_to(y_true, torch.float32)
 
             # swap to {hemi: {surface: ...}} for loss calculation
             y_pred = self.model.swap_output_levels(y_pred)
@@ -267,7 +259,7 @@ class EvaluationStep(Step):
         vox2ras = self.vox2ras_scale
 
         y_true = self.get_surfaces(y_true)
-        y_true["registration"] = self.y_true_reg
+        y_true["sphere.reg"] = self.y_true_reg
 
         with torch.inference_mode():
             y_pred = self._amp_prediction(image, template)
@@ -276,7 +268,7 @@ class EvaluationStep(Step):
 
             loss = self._amp_compute_loss(y_pred, y_true)
             loss = recursive_item(loss)
-        del y_true["registration"]
+        del y_true["sphere.reg"]
 
         return loss, image, vox2ras, y_pred, y_true
 
@@ -316,12 +308,14 @@ class PredictionStep(Step):
 
     def postprocess(self, y_pred, vox2ras):
         # we don't want to transform the spherical registration
-        sphere_reg = y_pred.pop("registration")
-        _ = recursive_apply_affine(y_pred, vox2ras, inplace=True)
-        y_pred["registration"] = sphere_reg
+        sphere_reg = y_pred.pop("sphere.reg")
+        _ = recursive_apply_affine(
+            y_pred, vox2ras, inplace=True, apply_to_vector_data=True
+        )
+        y_pred["sphere.reg"] = sphere_reg
         return y_pred
 
-    def __call__(self, engine, batch):
+    def __call__(self, engine, batch, return_template: bool = False):
         self.model.eval()
 
         image, vox2ras, template = batch
@@ -380,7 +374,7 @@ class PredictionStep(Step):
                 y_pred = self._amp_prediction(image, template)
                 y_pred = self.postprocess(y_pred, vox2ras)
 
-        return y_pred
+        return (y_pred, template) if return_template else y_pred
 
     @staticmethod
     def _preprocessor_from_config(contrast, resolution, device):
@@ -651,6 +645,7 @@ def predict(
     transform=None,
     mni_space="mni152",
     mni_direction="mni2sub",
+    save_template: bool = False,
     device="cuda",
 ):
     images = utils_bin.get_images(image)
@@ -672,7 +667,8 @@ def predict(
     )
 
     for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
-        surfaces = pred_step(None, batch)
+        out = pred_step(None, batch, save_template)
+        surfaces, template = out if save_template else out, {}
 
         if not (out_dir := Path(out_dir)).exists():
             out_dir.mkdir(parents=True)
@@ -690,8 +686,10 @@ def predict(
                     curv = curv.cpu().numpy()
                     nib.freesurfer.write_morph_data(out_dir / f"{h}.{name}.{k}", curv)
 
-        # if args.save_template:
-        #     for h,vertices in template.items():
+        for h, surface in template.items():
+            v = surface.vertices.squeeze(0).cpu().numpy()
+            f = surface.get_faces().cpu().numpy()
+            cortech.Surface(v, f).save(out_dir / f"{h}.template")
 
 
 def predict_from_args(args):
@@ -705,5 +703,6 @@ def predict_from_args(args):
         args.transform,
         args.mni_space,
         args.mni_direction,
+        args.save_template,
         args.device,
     )

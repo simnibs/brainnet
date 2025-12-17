@@ -96,6 +96,12 @@ def parse_args(argv):
         help="MNI space to which the transform relates (default = mni152). Only used if -t/--transforms is specified.",
     )
     topofit.add_argument(
+        "--save-template",
+        action="store_true",
+        type=bool,
+        help="Save the (aligned) template which is used as starting point for the surface deformation.",
+    )
+    topofit.add_argument(
         "--hemi",
         choices=["lh", "rh"],
         default="both",

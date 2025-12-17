@@ -224,7 +224,7 @@ class Criterion(torch.nn.Module):
                 ypsh = y_pred[s][h]
                 ytsh = y_true[s][h]
                 if self._needs_sampling:
-                    if s == "registration":
+                    if s == "sphere.reg":
                         ypwh = y_pred["white"][h]
                         ytwh = y_true["white"][h]
                         self._set_interpolated(ypsh, ypwh)

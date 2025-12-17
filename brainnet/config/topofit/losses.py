@@ -21,10 +21,10 @@ from brainnet.modules.losses_surface import (
 
 kw_white = dict(y_pred="white", y_true="white")
 kw_pial = dict(y_pred="pial", y_true="pial")
-kw_reg = dict(y_pred="registration", y_true="registration")
+kw_reg = dict(y_pred="sphere.reg", y_true="sphere.reg")
 
-functions = dict(
-    white=dict(
+functions = {
+    "white": dict(
         # spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="white"),
         chamfer=SurfaceSupervisedLoss(
             SampledSemiSymmetric["MeanSquaredNormLoss"](
@@ -43,7 +43,7 @@ functions = dict(
         tri_quality=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="white"),
         taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="white"),
     ),
-    pial=dict(
+    "pial": dict(
         # spring=SurfaceRegularizationLoss(FaceNormalConsistencyLoss(), y_pred="pial"),
         chamfer=SurfaceSupervisedLoss(
             SampledSemiSymmetric["MeanSquaredNormLoss"](
@@ -62,14 +62,14 @@ functions = dict(
         taubin=SurfaceRegularizationLoss(TaubinLoss(), y_pred="pial"),
         tri_quality=SurfaceRegularizationLoss(TriangleQualityLoss(), y_pred="pial"),
     ),
-    thickness=dict(
+    "thickness": dict(
         angle=SurfaceRegularizationLoss(
             VertexToVertexAngleLoss(),  # cutoff=0.866
             y_pred=None,  # pass everything through, i.e., both white and pial
         ),
     ),
     # The spherical coordinates are stored as vertex data on the white surface
-    registration=dict(
+    "sphere.reg": dict(
         chamfer=SurfaceSupervisedLoss(
             SampledSemiSymmetric["MeanSquaredNormLoss"](
                 value_key=("interpolated", "points")
@@ -85,18 +85,18 @@ functions = dict(
             ),
             **kw_reg,
         ),
-        area=SurfaceRegularizationLoss(OrientedAreaLoss(), y_pred="registration"),
+        area=SurfaceRegularizationLoss(OrientedAreaLoss(), y_pred="sphere.reg"),
         distortion=SurfaceRegularizationLoss(
-            MetricDistortionLoss(), y_pred="registration"
+            MetricDistortionLoss(), y_pred="sphere.reg"
         ),
     ),
-)
+}
 
-head_weights = dict(white=1.0, pial=1.0, thickness=1.0, registration=0.01)
+head_weights = {"white": 1.0, "pial": 1.0, "thickness": 1.0, "sphere.reg": 0.01}
 
 # fmt: off
-loss_weights = dict(
-    white = dict(
+loss_weights = {
+    "white": dict(
         chamfer     =    1.0,
         negloglik   =    0.0,
         sif         =    0.0,
@@ -105,7 +105,7 @@ loss_weights = dict(
         edge_var    =    5.0,
         tri_quality =    2.5,
     ),
-    pial = dict(
+    "pial": dict(
         chamfer     =    1.0,
         negloglik   =    0.0,
         sif         =    0.0,
@@ -114,16 +114,16 @@ loss_weights = dict(
         edge_var    =    2.5,
         tri_quality =    2.5,
     ),
-    thickness = dict(
-        angle       =    1.0,
+    "thickness": dict(
+        angle       =    0.0,
     ),
-    registration = dict(
+    "sphere.reg": dict(
         chamfer     =    1.0,
         chamfer_w   =    0.0,
         area        =    0.1,
         distortion  =    1.0,
     ),
-)
+}
 # fmt: on
 
 train = LossParameters(functions, head_weights, loss_weights)

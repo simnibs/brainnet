@@ -246,9 +246,7 @@ class SurfaceModule(GenericSurfaceModule):
             self.sphere_reg[k].vertices *= self.sphere_reg_radius
 
     def forward(
-        self,
-        features: dict[str, torch.Tensor],
-        template: dict[str, torch.Tensor],
+        self, features: dict[str, torch.Tensor], template: dict[str, torch.Tensor]
     ):
         """
         Faces can be retrieved from
@@ -304,11 +302,11 @@ class SurfaceModule(GenericSurfaceModule):
         wu = wu.exp()  # log(wu) -> wu
         pu = pu.exp()
 
-        return dict(
-            white=self.make_surface(hemi, wv, dict(sigma=wu)),
-            pial=self.make_surface(hemi, pv, dict(sigma=pu)),
-            registration=self.make_surface(hemi, wr),
-        )
+        return {
+            "white": self.make_surface(hemi, wv, dict(sigma=wu)),
+            "pial": self.make_surface(hemi, pv, dict(sigma=pu)),
+            "sphere.reg": self.make_surface(hemi, wr),
+        }
 
     def _estimate_white(
         self, features: dict[str, torch.Tensor], v: torch.Tensor, r: torch.Tensor
