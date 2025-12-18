@@ -1,3 +1,4 @@
+import copy
 import functools
 import operator
 from pathlib import Path
@@ -674,8 +675,7 @@ def predict(
 
     for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
         out = pred_step(None, batch, save_template)
-        surfaces, template = out if save_template else out, {}
-
+        surfaces, template = out if save_template else (out, {})
         if not (out_dir := Path(out_dir)).exists():
             out_dir.mkdir(parents=True)
 
@@ -692,9 +692,13 @@ def predict(
                     curv = curv.cpu().numpy()
                     nib.freesurfer.write_morph_data(out_dir / f"{h}.{name}.{k}", curv)
 
-        for h, surface in template.items():
-            v = surface.vertices.squeeze(0).cpu().numpy()
-            f = surface.get_faces().cpu().numpy()
+        for h, vertices in template.items():
+            topo = pred_step.model.graph.topologies[in_order]
+            if h == "rh":
+                topo = copy.deepcopy(topo)
+                topo.reverse_face_orientation()
+            v = vertices.squeeze(0).cpu().numpy()
+            f = topo.faces.cpu().numpy()
             cortech.Surface(v, f).save(out_dir / f"{h}.template")
 
 
