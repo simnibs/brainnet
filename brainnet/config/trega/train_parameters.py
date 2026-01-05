@@ -83,7 +83,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 # photo_mode = False
                 selectable_images=self.selectable_images_train,
                 device=self.device,
-                **self.builder_train_kw,
+                **self.preprocessor_train_kwargs,
             ),
             validation=SynthesizerConfig(
                 builder=self.builder_validation,
@@ -93,7 +93,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
                 # photo_mode = False
                 selectable_images=self.selectable_images_validation,
                 device=self.device,
-                **self.builder_validation_kw,
+                **self.preprocessor_validation_kwargs,
             ),
         )
 

@@ -119,8 +119,9 @@ class Step:
         keys = zip(("lh", "lh", "rh", "rh"), ("lh", "brain", "rh", "brain"))
         return {
             (k0, k1): self.template[k0].apply_affine(affines[k1], return_surface=False)
-            for k0, k1 in keys
             if k1 in affines
+            else self.template[k0].vertices
+            for k0, k1 in keys
         }
 
     def postprocess(self, y_pred):
@@ -261,15 +262,16 @@ class PredictionStep(Step):
     def postprocess(self, y_pred):
         return self.apply_affine(y_pred["brain"])
 
-    def __call__(self, engine, batch):
+    def __call__(self, engine, image, vox2ras, lr_flip: bool = False):
         self.model.eval()
 
-        image, vox2ras = self.prepare_batch(*batch)
+        image, vox2ras = self.prepare_batch(image, vox2ras)
 
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, vox2ras)
-
+        if lr_flip:
+            y_pred["lh"], y_pred["rh"] = y_pred["rh"], y_pred["lh"]
         return y_pred
 
     @staticmethod
@@ -436,26 +438,42 @@ def create_trainer(
     return trainer, dataloader["train"]
 
 
-def predict(args):
-    images = utils_bin.get_images(args.image)
-    out_dirs = utils_bin.get_out_dirs(args.out_dir)
+def predict(
+    image, out_dir, contrast, resolution, conform, mni_space, version, trans, device
+):
+    images = utils_bin.get_images(image)
+    out_dirs = utils_bin.get_out_dirs(out_dir)
 
-    pred_step = PredictionStep.from_pretrained(device=args.device)
-    dataset = ImageDataset(images, args.conform)
+    pred_step = PredictionStep.from_pretrained(contrast, resolution, version, device)
+    dataset = ImageDataset(images, conform)
+
+    if isinstance(trans, str):
+        trans = ["lh", "rh", "brain"] if trans == "all" else [trans]
+    elif isinstance(trans, list):
+        trans = ["lh", "rh", "brain"] if trans == ["all"] else trans
 
     for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
-        # batch = (image, vox2ras)
-        y_pred = pred_step(None, batch)
+        y_pred = pred_step(None, *batch)
 
         if not out_dir.exists():
             out_dir.mkdir(parents=True)
 
-        if args.all:
-            for k, v in y_pred.items():
-                v = v.squeeze(0).cpu().numpy()
-                v = MNI305_to_MNI152 @ v if args.mni_space == "mni152" else v
-                np.savetxt(out_dir / f"{args.mni_space}-to-ras.{k}.txt", v)
-        else:
-            v = y_pred["brain"].squeeze(0).cpu().numpy()
-            v = MNI305_to_MNI152 @ v if args.mni_space == "mni152" else v
-            np.savetxt(out_dir / f"{args.mni_space}-to-ras.txt", v)
+        for k in trans:
+            v = y_pred[k]
+            v = v.squeeze(0).cpu().numpy()
+            v = MNI305_to_MNI152 @ v if mni_space == "mni152" else v
+            np.savetxt(out_dir / f"{mni_space}-to-ras.{k}.txt", v)
+
+
+def predict_from_args(args):
+    predict(
+        args.image,
+        args.out_dir,
+        args.contrast,
+        args.resolution,
+        args.conform,
+        args.mni_space,
+        args.version,
+        args.transformations,
+        args.device,
+    )

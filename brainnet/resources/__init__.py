@@ -18,7 +18,6 @@ def load_pretrained_state(
         name = f"{contrast}_{resolution}_state.pt"
     else:
         name = f"{contrast}_{resolution}_{suffix}_state.pt"
-
     return torch.load(
         PRETRAINED_MODELS_DIR / model / name,
         map_location=device,
