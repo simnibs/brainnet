@@ -74,8 +74,8 @@ def parse_args(argv):
         help="Image resolution that the model was trained on (default = 1mm)",
     )
     topofit.add_argument(
-        "-t",
         "--transform",
+        "-t",
         type=Path,
         help=(
             "Path to a text file containing a single MNI transformation or a "
@@ -107,14 +107,53 @@ def parse_args(argv):
         help="Hemisphere to predict (default = both).",
     )
     topofit.add_argument(
-        "-s",
-        "--suffix",
+        "--version",
+        "-v",
         default=None,
-        help="Suffix of the model file to use, i.e., {contrast}_{resolultion}_{suffix} (default = None).",
+        help="Version of the model file to use, i.e., {contrast}_{resolultion}_{version} (default = None).",
     )
+    topofit.add_argument(
+        "--trega-transform",
+        choices=["lh", "rh", "brain"],
+        default="brain",
+        help="If an MNI transformation is not specified, it is automatically estimated using the TREGA network.",
+    )
+    topofit.add_argument(
+        "--trega-contrast",
+        choices=["synth"],
+        default="synth",
+        help="TREGA contrast.",
+    )
+    topofit.add_argument(
+        "--trega-resolution",
+        choices=["random"],
+        default="random",
+        help="TREGA resolution.",
+    )
+    topofit.add_argument("--trega-version", help="Which TREGA version to use.")
     topofit.set_defaults(func=brainnet.helpers.topofit.predict_from_args)
 
     # AFFINE NORMALIZATION
+    trega.add_argument(
+        "--contrast",
+        "-c",
+        choices=["synth"],
+        default="synth",
+        help="Image modality that the model was trained on (default = synth)",
+    )
+    trega.add_argument(
+        "--resolution",
+        "-r",
+        choices=["random"],
+        default="random",
+        help="Image resolution that the model was trained on (default = random)",
+    )
+    trega.add_argument(
+        "--version",
+        "-v",
+        default=None,
+        help="Version of the model file to use, i.e., {contrast}_{resolultion}_{version} (default = None).",
+    )
     trega.add_argument(
         "--mni-space",
         choices=["mni152", "mni305"],
@@ -122,8 +161,13 @@ def parse_args(argv):
         help="Return a transformation to this MNI space (default = mni152).",
     )
     trega.add_argument(
-        "--all",
-        action="store_true",
+        "--transformations",
+        "-t",
+        # action="extend",
+        choices=["lh", "rh", "brain", "all"],
+        default="brain",
+        nargs="+",
+        type=str,
         help=(
             "The network estimates three transformations: one for left and "
             "right hemisphere and one for the entire brain. By default, only "
@@ -131,7 +175,7 @@ def parse_args(argv):
             "disk. Setting this flag will write all transformations instead."
         ),
     )
-    trega.set_defaults(func=brainnet.helpers.trega.predict)
+    trega.set_defaults(func=brainnet.helpers.trega.predict_from_args)
 
     # NONLINEAR NORMALIZATION
     # tregn.add_argument(

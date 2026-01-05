@@ -122,16 +122,16 @@ class Step:
             out = self.model.forward(image, template)
         return out
 
-    def postprocess(self, y_pred, vox2ras: torch.Tensor | None = None):
+    def postprocess(self, y, vox2ras: torch.Tensor | None = None):
         # we don't want to transform the spherical registration
         if vox2ras is not None:
-            sphere_reg = y_pred.pop("sphere.reg")
+            sphere_reg = y.pop("sphere.reg")
             # also transform the uncertainty estimate
             _ = recursive_apply_affine(
-                y_pred, vox2ras, inplace=True, apply_to_vector_data=True
+                y, vox2ras, inplace=True, apply_to_vector_data=True
             )
-            y_pred["sphere.reg"] = sphere_reg
-        return y_pred
+            y["sphere.reg"] = sphere_reg
+        return y
 
 
 class TrainingStep(Step):
@@ -279,9 +279,6 @@ class PredictionStep(Step):
         super().__init__(*args, **kwargs)
         self.trega_step = trega_step
 
-        # if self.iterative_hemisphere_prediction:
-        #     self.model.set_group_output_by("hemisphere")
-
     def prepare_batch(
         self,
         image: torch.Tensor,
@@ -316,48 +313,31 @@ class PredictionStep(Step):
         y_pred["sphere.reg"] = sphere_reg
         return y_pred
 
-    def __call__(self, engine, batch, return_template: bool = False):
+    def __call__(
+        self,
+        engine,
+        batch,
+        return_template: bool = False,
+        trega_transform: str = "brain",
+    ):
         self.model.eval()
 
-        image, vox2ras, template = batch
+        image, vox2ras, lr_flip, template = batch
 
         if template is None:
             image = image.to(self.device)
             vox2ras = vox2ras.to(self.device)
-            y_pred = self.trega_step(None, (image, vox2ras))
+            y_pred = self.trega_step(None, image, vox2ras, lr_flip)
             # to subject voxel space
             template = self.trega_step.apply_affine(
-                torch.linalg.inv(vox2ras) @ y_pred["brain"],
+                torch.linalg.inv(vox2ras) @ y_pred[trega_transform],
                 return_surface=False,
             )
-
-        # SAVE FOR DEBUG...
-        # v = template["lh"].cpu().numpy()
-        # t = self.model.graph.topologies[0]
-        # f = dict(lh=t.faces.cpu().numpy())
-        # t.reverse_face_orientation()
-        # f["rh"] = t.faces.cpu().numpy()
-
-        # cortech.Surface(v, f).save("/home/jesperdn/repositories/brainnet/lh.template")
-        # v = template["rh"].cpu().numpy()
-        # f = t.faces.cpu().numpy()
-        # cortech.Surface(v, f).save("/home/jesperdn/repositories/brainnet/rh.template")
 
         if self.iterative_hemisphere_prediction:
             y_pred = []
             for h, t in template.items():
                 img_hemi, vox2ras_h, th = self.prepare_batch(image, vox2ras, {h: t})
-
-                # SAVE FOR DEBUG...
-                # print(img_hemi.shape)
-                # nib.Nifti1Image(
-                #     img_hemi[0, 0].cpu().numpy(), torch.eye(4).numpy()
-                # ).to_filename(f"/home/jesperdn/repositories/brainnet/{h}.test.nii")
-
-                # x = th[h][0] @ vox2ras_h[0, :3, :3].T + vox2ras_h[0, :3, [3]].T
-                # cortech.Surface(x.cpu().numpy(), f[h]).save(
-                #     f"/home/jesperdn/nobackup/exvivo_surfaces/v2stripes_subj1/{h}.template"
-                # )
 
                 with torch.inference_mode():
                     yh = self._amp_prediction(img_hemi, th)
@@ -374,6 +354,13 @@ class PredictionStep(Step):
             with torch.inference_mode():
                 y_pred = self._amp_prediction(image, template)
                 y_pred = self.postprocess(y_pred, vox2ras)
+
+        if return_template:
+            s = {
+                k: Surface(v, self.trega_step.topologies[k])
+                for k, v in template.items()
+            }
+            template = recursive_apply_affine(s, vox2ras)
 
         return (y_pred, template) if return_template else y_pred
 
@@ -652,29 +639,30 @@ def predict(
     mni_space="mni152",
     mni_direction="mni2sub",
     save_template: bool = False,
-    suffix: str | None = None,
+    version: str | None = None,
+    trega_transform: str = "brain",
+    trega_contrast: str = "synth",
+    trega_resolution: str = "random",
+    trega_version: str | None = None,
     device="cuda",
 ):
     images = utils_bin.get_images(image)
     out_dirs = utils_bin.get_out_dirs(out_dir)
     transforms = utils_bin.get_transforms(transform)
 
+    trega_kwargs = dict(
+        contrast=trega_contrast, resolution=trega_resolution, suffix=trega_version
+    )
     pred_step = PredictionStep.from_pretrained(
-        contrast, resolution, suffix, device, trega_kwargs=dict(hemi=hemi)
+        contrast, resolution, version, device, trega_kwargs
     )
     in_order = pred_step.model.graph.active_topologies[0]
     dataset = TopoFitDataset(
-        images,
-        conform,
-        transforms,
-        mni_direction,
-        mni_space,
-        hemi,
-        in_order,
+        images, conform, transforms, mni_direction, mni_space, hemi, in_order
     )
 
     for batch, out_dir in tqdm.tqdm(zip(dataset, out_dirs)):
-        out = pred_step(None, batch, save_template)
+        out = pred_step(None, batch, save_template, trega_transform)
         surfaces, template = out if save_template else (out, {})
         if not (out_dir := Path(out_dir)).exists():
             out_dir.mkdir(parents=True)
@@ -692,13 +680,9 @@ def predict(
                     curv = curv.cpu().numpy()
                     nib.freesurfer.write_morph_data(out_dir / f"{h}.{name}.{k}", curv)
 
-        for h, vertices in template.items():
-            topo = pred_step.model.graph.topologies[in_order]
-            if h == "rh":
-                topo = copy.deepcopy(topo)
-                topo.reverse_face_orientation()
-            v = vertices.squeeze(0).cpu().numpy()
-            f = topo.faces.cpu().numpy()
+        for h, s in template.items():
+            v = s.vertices.squeeze(0).cpu().numpy()
+            f = s.topology.faces.cpu().numpy()
             cortech.Surface(v, f).save(out_dir / f"{h}.template")
 
 
@@ -714,6 +698,10 @@ def predict_from_args(args):
         args.mni_space,
         args.mni_direction,
         args.save_template,
-        args.suffix,
+        args.version,
+        args.trega_transform,
+        args.trega_contrast,
+        args.trega_resolution,
+        args.trega_version,
         args.device,
     )
