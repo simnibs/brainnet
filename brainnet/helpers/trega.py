@@ -262,7 +262,7 @@ class PredictionStep(Step):
     def postprocess(self, y_pred):
         return self.apply_affine(y_pred["brain"])
 
-    def __call__(self, engine, image, vox2ras, lr_flip: bool = False):
+    def __call__(self, engine, image, vox2ras):
         self.model.eval()
 
         image, vox2ras = self.prepare_batch(image, vox2ras)
@@ -270,8 +270,6 @@ class PredictionStep(Step):
         with torch.inference_mode():
             with torch.autocast(self.device.type, enabled=self.enable_amp):
                 y_pred = self.model(image, vox2ras)
-        if lr_flip:
-            y_pred["lh"], y_pred["rh"] = y_pred["rh"], y_pred["lh"]
         return y_pred
 
     @staticmethod

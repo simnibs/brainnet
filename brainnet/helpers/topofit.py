@@ -322,12 +322,12 @@ class PredictionStep(Step):
     ):
         self.model.eval()
 
-        image, vox2ras, lr_flip, template = batch
+        image, vox2ras, template = batch
 
         if template is None:
             image = image.to(self.device)
             vox2ras = vox2ras.to(self.device)
-            y_pred = self.trega_step(None, image, vox2ras, lr_flip)
+            y_pred = self.trega_step(None, image, vox2ras)
             # to subject voxel space
             template = self.trega_step.apply_affine(
                 torch.linalg.inv(vox2ras) @ y_pred[trega_transform],
