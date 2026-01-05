@@ -16,10 +16,10 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     """
 
     project: str = "TREGA"
+    network: str = "TREGA"
     fov_out_size: list | tuple = (192, 224, 192)
     fov_out_center_str: str = "image"
     package: InitVar[str] = __package__
-    network = "TREGA"
 
     def __post_init__(self, *args):
         super().__post_init__(*args)

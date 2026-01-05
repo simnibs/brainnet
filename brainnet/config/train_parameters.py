@@ -89,6 +89,7 @@ class TrainParameters(BaseObject):
 
     # load only a single, random hemisphere during training
     load_random_hemisphere      : bool = False
+    raise_on_invalid_image      : bool = True
 
     # {ds}.exclude.txt
     subject_subset_exclude  : InitVar[str] = "exclude"
@@ -215,6 +216,7 @@ class TrainParameters(BaseObject):
             subject_dir=subjects_dir,
             exclude_subjects=subject_subset_exclude,
             load_random_hemisphere=self.load_random_hemisphere,
+            raise_on_invalid_image=self.raise_on_invalid_image,
         )
         images_exclude = images_exclude or images_validation
 
@@ -402,11 +404,8 @@ class TrainParameters(BaseObject):
 
         self.prediction_config = {}
 
-    def dump_prediction_config(self, out_dir: Path | str, name: str | None = None):
+    def dump_prediction_config(self, filename: Path | str):
         """Dump configuration information to a JSON file."""
-        if name is None:
-            name = f"{self.contrast}_{self.resolution}_config.json"
-        filename = Path(out_dir) / name
         with open(filename, "w") as f:
             json.dump(self.prediction_config, f)
 
