@@ -1,7 +1,7 @@
 DEFAULTS = dict(
     contrast="t1w",
     resolution="1mm",
-    run_suffix="single-hemi",
+    run_suffix="exvivo",
     network="TopoFitSingleHemi",
     fov_out_size=(144, 224, 176),
     # fov_out_size=(128, 208, 176),
