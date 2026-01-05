@@ -1,12 +1,15 @@
 import torch
+
 from brainsynth.utilities import apply_affine
+
 from brainnet.modules.image.unet import UNet
 from brainnet import resources
+
 
 # Transformation that converts lh to rh in template space (MNI305).
 # Estimated by least squares registration of lh.white to rh.white from the
 # templates in brainsynth/resources/template/surf
-template_lh_to_rh = torch.tensor(
+mni305_lh_to_rh = torch.tensor(
     [
         [
             [-1.0338, 0.0032, -0.0110, -0.0359],
@@ -18,7 +21,7 @@ template_lh_to_rh = torch.tensor(
 )
 
 
-class TemplateRegAffine(torch.nn.Module):
+class TREGA(torch.nn.Module):
     def __init__(
         self,
         spatial_dims: int = 3,
@@ -29,12 +32,11 @@ class TemplateRegAffine(torch.nn.Module):
         hemispheres: str | tuple[str, str] = ("lh", "rh"),
         weigh_by_feature_mass: bool = True,
     ):
-        """Reimplementation of Andrew Hoopes' original template alignment tool
-        from the DeepSurfer package.
+        """Template REGistration Affine (TREGA). Reimplementation of Andrew
+        Hoopes' original template alignment tool from the DeepSurfer package.
 
         Given an MR image and its affine, this network estimates an affine
         world-to-world transformation from MNI305 to subject space.
-
         """
         super().__init__()
         _valid_hemispheres = {"lh", "rh"}
@@ -94,7 +96,10 @@ class TemplateRegAffine(torch.nn.Module):
             ),
         )
         self.template_points = torch.nn.ParameterDict(
-            {h: torch.nn.Parameter(bbox[h].sample([self.pph])) for h in hemispheres}
+            {
+                h: torch.nn.Parameter(bbox[h].sample([self.pph]))
+                for h in self.hemispheres
+            }
         )
 
         # Image grid for computing feature barycenters in voxel space
@@ -228,3 +233,27 @@ class TemplateRegAffine(torch.nn.Module):
         model.load_state_dict(state)
 
         return model
+
+
+# class TREGASingleHemi(TREGA):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         # [BATCH,CHANNELS,]RAS so LR = -3
+#         self._lr_dim = -3
+#         self._flip_image = FlipImage(self._lr_dim)
+
+#     def forward(self, image, vox2ras, hemi):
+#         if is_rh := (hemi == "rh"):
+#             s = image.shape[self._lr_dim]
+#             image = self._flip_image(image)
+#             vox2ras = vox2ras.clone()
+#             vox2ras[0, 3] = -s - vox2ras[0, 3]
+
+#         affines = super().forward(image, vox2ras)
+
+#         if is_rh:
+#             affines = {
+#                 k: apply_affine(mni305_lh_to_rh, v) for k, v in affines.items()
+#             }
+
+#         return affines

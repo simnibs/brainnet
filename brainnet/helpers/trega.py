@@ -295,7 +295,7 @@ class PredictionStep(Step):
     ):
         device = torch.device(device)
         preprocessor = cls._preprocessor_from_config(contrast, resolution, device)
-        model = brainnet.networks.TemplateRegAffine.from_pretrained(
+        model = brainnet.networks.TREGA.from_pretrained(
             contrast, resolution, suffix, device
         )
         return cls(preprocessor, model, device=device, **kwargs)

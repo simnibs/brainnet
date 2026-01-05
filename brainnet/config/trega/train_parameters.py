@@ -4,7 +4,7 @@ from brainsynth.config import DatasetConfig, SynthesizerConfig
 from brainsynth.dataset import AlignmentDataset
 
 import brainnet.config.train_parameters
-import brainnet.networks.templatereg
+import brainnet.networks.trega
 
 
 @dataclass(kw_only=True)
@@ -15,11 +15,11 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
 
     """
 
-    project: str = "TemplateRegAffine"
+    project: str = "TREGA"
     fov_out_size: list | tuple = (192, 224, 192)
     fov_out_center_str: str = "image"
     package: InitVar[str] = __package__
-    network = "TemplateRegAffine"
+    network = "TREGA"
 
     def __post_init__(self, *args):
         super().__post_init__(*args)
@@ -51,7 +51,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         if self.model_kwargs is not None:
             model |= self.model_kwargs
 
-        self.model = getattr(brainnet.networks.templatereg, self.network)(**model)
+        self.model = getattr(brainnet.networks.trega, self.network)(**model)
 
         # =====================================================================
         # SYNTHESIZER

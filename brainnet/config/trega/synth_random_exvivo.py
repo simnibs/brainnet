@@ -2,7 +2,6 @@ DEFAULTS = dict(
     contrast="synth",
     resolution="random",
     run_suffix="exvivo",
-    network="TemplateRegAffine",
     # epoch_length_train=1,
     # epoch_length_val=1,
     # model_kwargs=dict(hemispheres="lh"),
