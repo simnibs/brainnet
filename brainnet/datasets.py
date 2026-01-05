@@ -67,11 +67,15 @@ class ImageDataset(torch.utils.data.Dataset):
         """
         self.images = images
         self.conform = conform
+        self._lr_flip = False
 
     def preprocess_image(self, img):
         # Apply conform if the linear part of the affine deviates identity,
         # i.e., we want 1 mm voxels aligned the major axes in RAS orientation.
         if self.conform and not np.allclose(img.affine[:3, :3], np.identity(3)):
+            # when inducing an LR flip during the conform operation, the L/R
+            # labels of the template estimation is flipped
+            self._lr_flip = np.sign(img.affine[0, 0]) == -1
             img = nibabel.processing.conform(nib.funcs.squeeze_image(img))
         return img
 
@@ -88,7 +92,7 @@ class ImageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         image, vox2mri = self.load_image(index)
-        return image, vox2mri
+        return image, vox2mri, self._lr_flip
 
 
 class TopoFitDataset(ImageDataset):
@@ -175,6 +179,6 @@ class TopoFitDataset(ImageDataset):
         return template
 
     def __getitem__(self, index):
-        image, vox2mri = super().__getitem__(index)
+        image, vox2mri, lr_flip = super().__getitem__(index)
         template = self.get_template(index, vox2mri)
-        return image, vox2mri, template
+        return image, vox2mri, lr_flip, template
