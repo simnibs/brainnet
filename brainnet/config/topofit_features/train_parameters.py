@@ -1,12 +1,9 @@
-import copy
 from dataclasses import dataclass, InitVar
 
 from brainsynth.config import DatasetConfig
 
-from brainnet import config
 from brainnet.config.topofit import train_parameters
-from brainnet.modules.image import UNet
-from brainnet.networks import TopoFit
+import brainnet.networks
 
 
 @dataclass(kw_only=True)
@@ -27,6 +24,7 @@ class TrainParameters(train_parameters.TrainParameters):
     project: str = "TopoFit-Features"
 
     package: InitVar[str] = __package__
+    network = "TopoFit"
 
     def __post_init__(self, *args):
         # split post init args for parent class and child class
@@ -57,8 +55,8 @@ class TrainParameters(train_parameters.TrainParameters):
         # DATASET
         # =====================================================================
 
-        self.dataset_kwargs["train"]["images"] += ["brain_dist_map", "t1w"]
-        self.dataset_kwargs["validation"]["images"] += ["brain_dist_map"]
+        # self.dataset_kwargs["train"]["images"] += ["brain_dist_map", "t1w"]
+        # self.dataset_kwargs["validation"]["images"] += ["brain_dist_map"]
 
         surfaces = [
             dict(types="template", resolution=TOPOFIT_ORDER_IN),
@@ -91,7 +89,7 @@ class TrainParameters(train_parameters.TrainParameters):
             decoder_post=None,
         )
 
-        self.pretrained_model = TopoFit(
+        self.pretrained_model = getattr(brainnet.networks, self.network)(
             unet_kwargs, self.prediction_config["model"]["topofit"]
         )
         self.pretrained_dir = self.results.out_dir

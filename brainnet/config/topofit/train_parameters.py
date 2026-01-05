@@ -21,7 +21,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     # fov_out_size: list | tuple = (128, 288, 224) # 0.75 isotropic (single hemi)
     fov_out_center_str: str = "brain"
     package: InitVar[str] = __package__
-    network = "TopoFit"
+    network: str = "TopoFit"
 
     # =====================================================================
     #   MODEL
@@ -179,7 +179,7 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         if self.builder_validation is None:
             if self.validation_image == "native":
                 self.builder_validation = f"OnlySelect{builder_res}"
-            elif "synth":
+            elif self.validation_image == "synth":
                 self.builder_validation = f"OnlySynth{builder_res}"
             else:
                 raise ValueError(f"Invalid 'validation_image' {self.validation_image}")
