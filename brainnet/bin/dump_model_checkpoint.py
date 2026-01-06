@@ -35,7 +35,7 @@ def dump_model(args):
         specs.DEFAULTS["run_suffix"] = args.suffix
 
     p = train_parameters.TrainParameters(**specs.DEFAULTS)
-    filename_config = out_dir / f"{args.specs}_config.json"
+    filename_config = out_dir / f"config_{args.specs}.json"
     print(f"Saving {filename_config}")
     p.dump_prediction_config(filename_config)
 
@@ -49,9 +49,9 @@ def dump_model(args):
         ckpt = torch.load(filename)["model"]
     print(f"Loaded checkpoint: {filename}")
 
-    filename_state = out_dir / f"{args.specs}_state.pt"
+    filename_state = out_dir / f"state_{args.specs}.pt"
     print(f"Saving {filename_state}")
-    torch.save(ckpt, out_dir / f"{args.specs}_state.pt")
+    torch.save(ckpt, filename_state)
 
 
 def parse_args(argv):

@@ -36,7 +36,8 @@ recursive_item = recursive_function(torch.Tensor.item)
 
 DESCRIPTION = (
     "TopoFit is a network that predicts cortical surfaces (i.e., at the"
-    "white-gray matter and gray matter-CSF interfaces)."
+    "white-gray matter and gray matter-CSF interfaces), uncertainty of"
+    "predicted vertex locations, and spherical registration to fsaverage."
 )
 
 
