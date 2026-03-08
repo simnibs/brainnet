@@ -50,7 +50,7 @@ class TopoFit(torch.nn.Module):
 
         to
 
-            {"x": {"a": 1, "b": 3}, "y": {"a": 2, "b": 4}}
+            {"x": {"a": 1, "b": 3}, "y": {"`a": 2, "b": 4}}
 
         Assumes that all subdicts has the same entries!
         """
@@ -59,7 +59,10 @@ class TopoFit(torch.nn.Module):
         return {s: {h: out[h][s] for h in level0} for s in level1}
 
     def forward(
-        self, image: torch.Tensor, template: dict[str, torch.Tensor]
+        self,
+        image: torch.Tensor,
+        template: dict[str, torch.Tensor],
+        return_pial: bool = True,
     ) -> dict[str, dict[str, Surface]]:
         """Estimate cortical surfaces on `image`.
 
@@ -80,7 +83,7 @@ class TopoFit(torch.nn.Module):
         features = self.unet(image)
         with torch.autocast("cuda", enabled=False):
             features = recursive_float(features)
-            out = self.graph(features, template)
+            out = self.graph(features, template, return_pial)
         return self.swap_output_levels(out) if self._swap_output else out
 
     @classmethod

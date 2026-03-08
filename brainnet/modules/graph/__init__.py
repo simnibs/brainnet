@@ -214,6 +214,8 @@ class SurfaceModule(GenericSurfaceModule):
         pial_feature_maps: list[str],
         white_n_steps: int | list[int] | None = None,
         pial_n_steps: int = 10,
+        return_uncertainty: bool = True,
+        return_registration: bool = True,
         topology: str = "DeepSurferTopology",
     ) -> None:
         super().__init__(in_order, out_order, max_order, topology)
@@ -236,6 +238,8 @@ class SurfaceModule(GenericSurfaceModule):
 
         self.white_deform = torch.nn.ModuleDict()
         self.pial_deform = torch.nn.Module()
+        self.white_out_groups = None
+        self.pial_out_groups = None
 
         self.sphere_reg_radius = 100.0  # Output radius
         self.sphere_reg = load_deepsurfer_template(self.in_order, "sphere.reg")
@@ -245,8 +249,14 @@ class SurfaceModule(GenericSurfaceModule):
             )
             self.sphere_reg[k].vertices *= self.sphere_reg_radius
 
+        self.return_uncertainty = return_uncertainty
+        self.return_registration = return_registration
+
     def forward(
-        self, features: dict[str, torch.Tensor], template: dict[str, torch.Tensor]
+        self,
+        features: dict[str, torch.Tensor],
+        template: dict[str, torch.Tensor],
+        return_pial: bool = True,
     ):
         """
         Faces can be retrieved from
@@ -281,7 +291,10 @@ class SurfaceModule(GenericSurfaceModule):
         dtype = last_feature_map.dtype
         template = {k: v.to(dtype) for k, v in template.items()}
 
-        return {h: self._forward_hemi(h, features, v) for h, v in template.items()}
+        return {
+            h: self._forward_hemi(h, features, v, return_pial)
+            for h, v in template.items()
+        }
 
     def make_surface(self, hemi, vertices, vertex_data: dict | None = None):
         s = Surface(vertices, self.out_topology[hemi])
@@ -290,32 +303,56 @@ class SurfaceModule(GenericSurfaceModule):
         return s
 
     def _forward_hemi(
-        self, hemi: str, features: dict[str, torch.Tensor], vertices: torch.Tensor
+        self,
+        hemi: str,
+        features: dict[str, torch.Tensor],
+        vertices: torch.Tensor,
+        return_pial: bool = True,
     ):
         """Predict placement of white matter surface and pial surface."""
-        reg = self.sphere_reg[hemi].vertices.detach().clone()
-        reg = reg.to(vertices.dtype)
+        if self.return_registration:
+            reg = self.sphere_reg[hemi].vertices.detach().clone()
+            reg = reg.to(vertices.dtype)
+        else:
+            reg = None
 
-        wv, wu, wr = self._estimate_white(features, vertices, reg)
-        pv, pu = self._esimate_pial(features, wv, wu)
+        out = {}
 
-        wu = wu.exp()  # log(wu) -> wu
-        pu = pu.exp()
+        wv, log_wu, wr = self._estimate_white(features, vertices, reg)
+        vertex_data = {}
+        if self.return_uncertainty:
+            vertex_data["sigma"] = log_wu.exp()
+        out["white"] = self.make_surface(hemi, wv, vertex_data)
 
-        return {
-            "white": self.make_surface(hemi, wv, dict(sigma=wu)),
-            "pial": self.make_surface(hemi, pv, dict(sigma=pu)),
-            "sphere.reg": self.make_surface(hemi, wr),
-        }
+        if return_pial:
+            pv, log_pu = self._esimate_pial(features, wv, log_wu)
+            vertex_data = {}
+            if self.return_uncertainty:
+                vertex_data["sigma"] = log_pu.exp()
+            out["pial"] = self.make_surface(hemi, pv, vertex_data)
+
+        if self.return_registration:
+            out["sphere.reg"] = self.make_surface(hemi, wr)
+
+        return out
 
     def _estimate_white(
-        self, features: dict[str, torch.Tensor], v: torch.Tensor, r: torch.Tensor
+        self,
+        features: dict[str, torch.Tensor],
+        v: torch.Tensor,
+        r: torch.Tensor | None = None,
     ):
         # (N, M, 3) -> (N, 3, M) such that coordinates are in the channel
         # (feature) dimension
         v = v.mT
-        u = torch.zeros_like(v)
-        r = r.mT
+
+        if self.return_uncertainty:
+            u = torch.zeros_like(v)
+        else:
+            u = torch.tensor([[[]]], device=v.device)
+
+        r = r.mT if r is not None else torch.tensor([[[]]], device=v.device)
+
         for order in self.active_topologies:
             step_size = self.white_step_size[order]
             deform = self.white_deform[str(order)]
@@ -325,15 +362,20 @@ class SurfaceModule(GenericSurfaceModule):
 
                 dv, du, dr = deform(v_features).split(self.white_out_groups, dim=1)
                 v = self.solve_ode_euler(step_size, v, dv)
-                u = self.solve_ode_euler(step_size, u, du)
-                # r = self.solve_ode_euler_rotate(step_size, r, dr)
-                r = self.solve_ode_euler(step_size, r, dr)
-                r = self._project_to_sphere(r)
+                if self.return_uncertainty:
+                    u = self.solve_ode_euler(step_size, u, du)
+                if self.return_registration:
+                    r = self.solve_ode_euler(step_size, r, dr)
+                    r = self._project_to_sphere(r)
+                    # or
+                    # r = self.solve_ode_euler_rotate(step_size, r, dr)
             if order < self.out_order:
                 v = self.topologies[order].subdivide_vertices(v.mT).mT
-                u = self.topologies[order].subdivide_vertices(u.mT).mT
-                r = self.topologies[order].subdivide_vertices(r.mT).mT
-                r = self._project_to_sphere(r)
+                if self.return_uncertainty:
+                    u = self.topologies[order].subdivide_vertices(u.mT).mT
+                if self.return_registration:
+                    r = self.topologies[order].subdivide_vertices(r.mT).mT
+                    r = self._project_to_sphere(r)
 
         # Transpose back to (N, M, 3)
         return v.mT, u.mT, r.mT
@@ -348,15 +390,19 @@ class SurfaceModule(GenericSurfaceModule):
         # (feature) dimension
         v = v.mT
 
-        u = torch.zeros_like(v) if init_sigma is None else init_sigma.mT
+        if init_sigma is not None:
+            u = init_sigma.mT
+        else:
+            u = torch.tensor([[[]]], device=v.device)
+
         fmaps = self._get_features(features, self.pial_feature_maps)
         for _ in range(self.pial_n_steps):
             v_features = self.grid_sample_features(fmaps, v)
 
             dv, du = self.pial_deform(v_features).split(self.pial_out_groups, dim=1)
-
             v = self.solve_ode_euler(self.pial_step_size, v, dv)
-            u = self.solve_ode_euler(self.pial_step_size, u, du)
+            if self.return_uncertainty:
+                u = self.solve_ode_euler(self.pial_step_size, u, du)
 
         # Transpose back to (N, M, 3)
         return v.mT, u.mT
@@ -370,12 +416,11 @@ class TopoFit(SurfaceModule):
         white_channels: dict | None = None,
         pial_channels: list | None = None,
         pial_deform_module: str = "LinearDeformationBlock",
-        predict_uncertainty: bool = True,
-        predict_registration: bool = True,
         *args,
         **kwargs,
     ) -> None:
-        """_summary_
+        """Wrapper around SurfaceModule which specifies the white matter and
+        pial deformation modules.
 
         Parameters
         ----------
@@ -400,18 +445,25 @@ class TopoFit(SurfaceModule):
         # Define output channels and initial values of the last layer
         self.white_out_groups = [out_channels]
         white_deform_init = out_channels * [0.0]
-        if predict_uncertainty:
+        if self.return_uncertainty:
             self.white_out_groups.append(out_channels)
             white_deform_init += out_channels * [0.0]
-        if predict_registration:
+        else:
+            self.white_out_groups.append(0)
+
+        if self.return_registration:
             self.white_out_groups.append(out_channels)
             white_deform_init += out_channels * [0.0]
+        else:
+            self.white_out_groups.append(0)
 
         self.pial_out_groups = [out_channels]
         pial_deform_init = out_channels * [0.01]
-        if predict_uncertainty:
+        if self.return_uncertainty:
             self.pial_out_groups.append(out_channels)
             pial_deform_init += out_channels * [0.0]
+        else:
+            self.pial_out_groups.append(0)
 
         if white_channels is None:
             white_channels = dict(encoder=[64, 64, 64, 64], decoder=[64, 64, 64])
