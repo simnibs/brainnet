@@ -1,4 +1,4 @@
-builder_kw = dict(
+preprocessor_kwargs = dict(
     resolution_transforms_kw=dict(
         resolution_sampler="RandClinicalSlice",
         resolution_sampler_kw=dict(slice_idx=2),  # z (axial)
@@ -13,8 +13,8 @@ DEFAULTS = dict(
     images_validation=["flair"],
     builder_train="PredictionBuilder",
     builder_validation="PredictionBuilder",
-    # builder_train_kw=builder_kw,
-    # builder_validation_kw=builder_kw,
+    # preprocessor_train_kwargs=preprocessor_kwargs,
+    # preprocessor_validation_kwargs=preprocessor_kwargs,
     load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random/checkpoint/state_checkpoint_00400.pt",
 )
 

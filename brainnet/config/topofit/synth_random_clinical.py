@@ -1,11 +1,13 @@
-builder_kw = dict(resolution_transforms_kw=dict(resolution_sampler="RandClinicalSlice"))
+preprocessor_kwargs = dict(
+    resolution_transforms_kw=dict(resolution_sampler="RandClinicalSlice")
+)
 
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
     run_suffix="clinical",
-    builder_train_kw=builder_kw,
-    builder_validation_kw=builder_kw,
+    preprocessor_train_kwargs=preprocessor_kwargs,
+    preprocessor_validation_kwargs=preprocessor_kwargs,
     load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random/checkpoint/state_checkpoint_00400.pt",
 )
 

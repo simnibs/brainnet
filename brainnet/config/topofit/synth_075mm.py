@@ -1,20 +1,16 @@
 DEFAULTS = dict(
-    contrast="t1w",
-    resolution="1mm",
-    run_suffix="exvivo",
-    network="TopoFit",  # TopoFitSingleHemi
-    fov_out_size=(144, 224, 176),
-    # fov_out_size=(128, 208, 176),
-    load_random_hemisphere=True,
-    builder_train="ExvivoSelectIso",
-    images_train=["generation_labels_dist", "lp_dist_map", "rp_dist_map", "t1w"],
-    builder_validation="ExvivoSelectIso",
-    images_validation=["generation_labels_dist", "lp_dist_map", "rp_dist_map", "t1w"],
+    contrast="synth",
+    resolution="075mm",
+    # run_suffix="reg",  # WMGM-only
     # evaluate_on_every=1,
     # save_example_on_every=1,
+    # fov_out_size=(224, 288, 224),  # whole brain
+    fov_out_size=(128, 288, 224),  # single hemi
+    single_hemisphere=True,
 )
 
 PHASES = {
+    # resume_from_run="t1w-1mm",
     "Resolution 4": dict(TOPOFIT_ORDER_OUT=4, max_epochs=200),
     "Resolution 5": dict(TOPOFIT_ORDER_OUT=5, load_checkpoint=200, max_epochs=400),
     "Resolution 6": dict(TOPOFIT_ORDER_OUT=6, load_checkpoint=400, max_epochs=800),

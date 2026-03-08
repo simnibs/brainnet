@@ -2,9 +2,9 @@ DEFAULTS = dict(
     contrast="synth",
     resolution="random",
     run_suffix="exvivo",
+    network="TREGA",
     # epoch_length_train=1,
     # epoch_length_val=1,
-    # model_kwargs=dict(hemispheres="lh"),
     fov_out_size=(192, 224, 192),
     load_random_hemisphere=0.5,
     # train
@@ -15,7 +15,6 @@ DEFAULTS = dict(
     builder_validation="ExvivoCropSelect",
     images_validation=["generation_labels_dist", "lp_dist_map", "rp_dist_map", "t1w"],
     preprocessor_validation_kwargs=dict(photo_mode_prob=0.1),
-    # builder_train="ExvivoSynthLinearComb",
     # selectable_images_train=("t1w", "t2w", "flair"),
     # evaluate_on_every=1,
     # save_example_on_every=1,

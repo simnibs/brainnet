@@ -101,7 +101,7 @@ loss_weights = {
         negloglik   =    0.0,
         sif         =    0.0,
         # spring      =   40.0,
-        taubin      =   40.0,
+        taubin      =   40.0, # synth random from scratch: 100 ?
         edge_var    =    5.0,
         tri_quality =    2.5,
     ),
@@ -115,7 +115,7 @@ loss_weights = {
         tri_quality =    2.5,
     ),
     "thickness": dict(
-        angle       =    0.0,
+        angle       =    1.0,
     ),
     "sphere.reg": dict(
         chamfer     =    1.0,

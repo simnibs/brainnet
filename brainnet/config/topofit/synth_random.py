@@ -1,7 +1,7 @@
 DEFAULTS = dict(
     contrast="synth",
     resolution="random",
-    run_suffix="reg",
+    # load_body_from_checkpoint="/mnt/projects/CORTECH/nobackup/jesper/results/TopoFit-Features/synth-random-reg/checkpoint/state_checkpoint_00400.pt",
     load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random-reg/checkpoint/state_checkpoint_00400.pt",
 )
 

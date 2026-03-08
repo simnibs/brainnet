@@ -2,7 +2,7 @@ DEFAULTS = dict(
     contrast="synth",
     resolution="random",
     run_suffix="exvivo-mix",
-    network="TopoFitSingleHemi",
+    network="TopoFit",
     fov_out_size=(144, 224, 176),
     # fov_out_size=(128, 208, 176),
     load_random_hemisphere=True,
@@ -21,10 +21,10 @@ DEFAULTS = dict(
     preprocessor_train_kwargs=dict(photo_mode_prob=0.1),
     # validation
     builder_validation="ExvivoSelect",
-    images_validation=["lp_dist_map", "rp_dist_map", "t1w"],
+    images_validation=["generation_labels_dist", "lp_dist_map", "rp_dist_map", "t1w"],
     preprocessor_validation_kwargs=dict(photo_mode_prob=0.1),
     # load_body_from_checkpoint="/mnt/projects/CORTECH/nobackup/jesper/results/TopoFit-Features/synth-random-lh/checkpoint/state_checkpoint_00400.pt",
-    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random-single-hemi-mix/checkpoint/state_checkpoint_00400.pt",
+    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random-exvivo-mix/checkpoint/state_checkpoint_00400.pt",
 )
 
 PHASES = {

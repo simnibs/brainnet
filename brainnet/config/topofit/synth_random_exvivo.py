@@ -2,20 +2,22 @@ DEFAULTS = dict(
     contrast="synth",
     resolution="random",
     run_suffix="exvivo",
-    network="TopoFitSingleHemi",
+    # run_suffix="exvivo-ribbon",
+    network="TopoFit",  # "TopoFitSingleHemi"
     fov_out_size=(144, 224, 176),
     # fov_out_size=(128, 208, 176),
     load_random_hemisphere=True,
     images_train=["generation_labels_dist", "lp_dist_map", "rp_dist_map"],
-    images_validation=["lp_dist_map", "rp_dist_map", "t1w"],
     builder_train="ExvivoSynth",
-    preprocessor_train_kwargs=dict(photo_mode_prob=0.1),
-    preprocessor_validation_kwargs=dict(photo_mode_prob=0.1),
+    preprocessor_train_kwargs=dict(
+        generation_image="generation_labels_dist", photo_mode_prob=0.1
+    ),
     builder_validation="ExvivoSelect",
+    images_validation=["generation_labels_dist", "lp_dist_map", "rp_dist_map", "t1w"],
+    preprocessor_validation_kwargs=dict(photo_mode_prob=0.1),
     # evaluate_on_every=1,
     # save_example_on_every=1,
-    # load_body_from_checkpoint="/mnt/projects/CORTECH/nobackup/jesper/results/TopoFit-Features/synth-random-lh/checkpoint/state_checkpoint_00400.pt",
-    load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random-single-hemi/checkpoint/state_checkpoint_00400.pt",
+    # load_body_from_checkpoint="/mnt/scratch/personal/jesperdn/results/TopoFit-Features/synth-random-exvivo/checkpoint/state_checkpoint_00400.pt",
 )
 
 PHASES = {
@@ -29,5 +31,3 @@ PHASES = {
 # If override is defined, `phases` will be ignored and `override` will be run
 # instead. This is just a convenience for development.
 # OVERRIDE = dict(TOPOFIT_ORDER_OUT=4, max_epochs=1)
-
-# pip install kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.6.0_cu12.4.html

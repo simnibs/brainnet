@@ -28,6 +28,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
     # =====================================================================
 
     # fmt: off
+    SPATIAL_DIMS            : InitVar[int]          = 3
+    IN_CHANNELS             : InitVar[int]          = 1
     UNET_ENCODER_CHANNELS   : InitVar[dict]         = {
         ("t1w", "050mm"):       [[16], [32], [64], [128], [256]], # [512]
         ("t1w", "075mm"):       [[16], [32], [64], [128], [256]],
@@ -77,6 +79,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         # split post init args for parent class and child class
         (
             *super_args,
+            SPATIAL_DIMS,
+            IN_CHANNELS,
             UNET_ENCODER_CHANNELS,
             UNET_DECODER_CHANNELS,
             UNET_RETURN_ENCODER_FEATURES,
@@ -123,8 +127,8 @@ class TrainParameters(brainnet.config.train_parameters.TrainParameters):
         }
 
         unet_kwargs = dict(
-            spatial_dims=3,
-            in_channels=1,
+            spatial_dims=SPATIAL_DIMS,
+            in_channels=IN_CHANNELS,
             encoder_channels=UNET_ENCODER_CHANNELS[self.contrast, self.resolution],
             decoder_channels=UNET_DECODER_CHANNELS[self.contrast, self.resolution],
             return_encoder_features=UNET_RETURN_ENCODER_FEATURES,
