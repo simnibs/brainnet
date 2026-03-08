@@ -592,7 +592,7 @@ class NonManifoldTopology(Topology):
         s = faces_to_edges.ravel().sort()
         _, i, c = s.values.unique_consecutive(return_inverse=True, return_counts=True)
         # only edges which occur twice contribute to face adjacency
-        assert c.amin() >= 1 and c.max() == 2
+        assert c.amin() >= 1 and c.max() <= 2
         faces_enum = s.indices[c[i] == 2] // 3
         face_adjacency = faces_enum.reshape(-1, 2)
 
@@ -647,6 +647,32 @@ class NonManifoldTopology(Topology):
         self.register_buffer(
             "conv_index_gather", self.vertex_adjacency.flip(1).ravel(), persistent=False
         )
+
+
+class LineTopology(torch.nn.Module):
+    def __init__(
+        self,
+        faces: torch.Tensor,
+    ):
+        super().__init__()
+
+        self.register_buffer("faces", faces, persistent=False)
+        self.subdivision_factor = 2
+        self.dtype = self.faces.dtype
+        self.n_faces = self.faces.shape[0]
+        self.vertices_per_face = self.faces.shape[1]
+        self.n_vertices = self.n_faces_to_n_vertices()
+
+        self.set_topology_information()
+
+    def device(self):
+        return self.faces.device
+
+    def n_faces_to_n_vertices(self):
+        return self.faces.unique().size().numel()
+
+    def set_topology_information(self):
+        pass
 
 
 deepsurfer_faces = torch.tensor(

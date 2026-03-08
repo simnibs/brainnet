@@ -11,11 +11,15 @@ global METRIC
 
 RUNS = ["t1w-1mm", "t1w-1mm-noUC"]
 RUNS = ["synth-random", "synth-random-clinical", "synth-random-clinical-axial"]
-RUNS = ["t1w-1mm", "synth-1mm", "synth-random"]
-SUBSET = "validation"
+RUNS = ["t1w-1mm-reg", "synth-1mm-reg", "synth-random-reg"]
+RUNS = ["synth-random-exvivo", "synth-random-exvivo-mix"]
+RUNS = ["synth-random-exvivo"]
 
 CHECKPOINTS = [600, 620, 640, 660, 680, 700, 720, 740, 760, 780, 800]
+
 # CHECKPOINTS = {"synth-random": [780],"synth-random-clinical": [760],"synth-random-clinical-axial": [760]}
+
+SUBSET = "validation"
 METRIC = "chamfer"
 
 RESULTS_DIR = Path("/mnt/scratch/personal/jesperdn/results")
@@ -54,7 +58,7 @@ def find_best(df):
 def write_best(run, idx):
     ckpt_dir = RESULTS_DIR / MODEL / run / "checkpoint"
     src_ckpt = ckpt_dir / f"state_checkpoint_{idx:05d}.pt"
-    dest_ckpt = ckpt_dir / f"state_checkpoint_best_{idx:05d}.pt"
+    dest_ckpt = ckpt_dir / "state_checkpoint_best.pt"
 
     print(f"Run: {run}")
     print(f"Copying {src_ckpt.name} -> {dest_ckpt.name}")
@@ -82,9 +86,14 @@ def plot(run_dict, metric=None):
 
 
 # runs = {run: load_dataframes(run, CHECKPOINTS[run]) for run in RUNS}
-runs = {run: load_dataframes(run) for run in RUNS}|
+runs = {run: load_dataframes(run) for run in RUNS}
 
 fig = plot(runs)
+
+
+fig = plot({"t1w-1mm-reg": runs["t1w-1mm-reg"]})
+fig = plot({"synth-1mm-reg": runs["synth-1mm-reg"]})
+fig = plot({"synth-random-reg": runs["synth-random-reg"]})
 
 best_idx = {}
 for k, v in runs.items():
@@ -112,21 +121,3 @@ for k, v in runs.items():
         csv_writer = csv.writer(f)
         for row in subs:
             csv_writer.writerow(row)
-
-
-names = df.index.unique(level="dataset")
-data = [df.loc[k]["white", "chamfer"] for k in names]
-
-
-df.loc[:, pd.IndexSlice[:, "MSE"]]
-
-df.loc[:, pd.IndexSlice["lh_brain"]]
-
-data = [df.loc[k]["lh_brain", "MSE"] for k in names]
-
-
-plt.figure()
-_ = plt.boxplot(data, tick_labels=names)
-plt.grid(True, alpha=0.3)
-plt.xticks(rotation=45)
-# plt.ylim([-0.3, 0.3])

@@ -119,7 +119,9 @@ class TopoFitDataset(ImageDataset):
         super().__init__(images, conform)
 
         if mni_transforms is not None:
-            assert len(images) == len(mni_transforms)
+            assert len(images) == len(
+                mni_transforms
+            ), f"Got {len(images)} and {len(mni_transforms)}"
         assert mni_space in ("mni152", "mni305")
         assert mni_direction in {"mni2sub", "sub2mni"}
         assert hemi in ("both", "lh", "rh")

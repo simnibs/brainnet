@@ -103,6 +103,7 @@ def create_predictor(
     )
 
     pred_step = model_helper.PredictionStep(
+        None,
         preprocessor,
         model,
         **setup.prediction_config["step"],
@@ -290,11 +291,11 @@ def predict(
         batch = ds[i]
         images = batch[0][contrast]
         vox2ras = batch[1][contrast]
-        batch = (images, vox2ras, *batch[2:])
+        template = batch[2]["template"]
+        batch = (images, vox2ras, template)
 
         t_start = time.perf_counter()
         y_pred = pred_step(None, batch)
-        y_pred = pred_step.postprocess(y_pred)
         t_elapse = time.perf_counter() - t_start
         print(f"    ({t_elapse:7.2f} s)")
 

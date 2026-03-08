@@ -19,6 +19,51 @@ reduce_index, gather_index = topology.vertex_adjacency.T
 smooth_curv = torch.zeros_like(curv); smooth_curv.index_add_(0, reduce_index, curv[gather_index])
 """
 
+# def compute_self_intersections(vertices: torch.Tensor, faces: torch.IntTensor):
+#     # assert self.vertices.dtype == torch.float
+#     # assert self.get_faces().dtype == torch.int
+#     # vertices = self.vertices.detach()
+#     # faces = self.get_faces().detach()
+
+#     # the extension returns (intersecting triangles, # intersecting triangles)
+#     return cuda_extensions.compute_self_intersections(vertices, faces)
+
+
+# class ComputeSelfIntersections(torch.autograd.Function):
+#     @staticmethod
+#     def forward(ctx, vertices, faces):
+#         print(vertices.requires_grad, faces.requires_grad)
+#         ctx.save_for_backward(vertices)
+#         ctx.faces = faces
+#         print(ctx.saved_tensors)
+#         # `compute_self_intersections` returns a tuple of two outputs
+#         # - a vector of len(faces) with 1 (0) for triangles which has (has no)
+#         # intersections
+#         # - total number of intersecting triangles
+#         return cuda_extensions.compute_self_intersections(vertices, faces)
+
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         print(ctx.saved_tensors)
+#         print(grad_output)
+#         (vertices,) = ctx.saved_tensors
+#         faces = ctx.faces
+#         intersect, _ = grad_output
+#         grad_vertices = None
+
+#         if ctx.needs_input_grad[0]:
+#             # for a vertex, we estimate the gradient as the number of faces
+#             # which intersect
+#             grad_vertices = torch.broadcast_to(
+#                 torch.bincount(
+#                     faces[intersect.to(bool)].ravel(), minlength=len(vertices)
+#                 )[:, None],
+#                 vertices.shape,
+#             ).float()
+#         # if ctx.needs_input_grad[1]:
+#         #     grad_faces = intersect
+#         return grad_vertices
+
 
 def _is_vector_data(d):
     return d.ndim == 3 and d.shape[-1] == 3
@@ -857,8 +902,8 @@ class Surface(torch.nn.Module):
     def compute_self_intersections(self):
         assert self.vertices.dtype == torch.float
         assert self.get_faces().dtype == torch.int
-        vertices = self.vertices.detach()
-        faces = self.get_faces().detach()
+        vertices = self.vertices
+        faces = self.get_faces()
 
         # the extension returns (intersecting triangles, # intersecting triangles)
         if self.n_batch == 1:
@@ -1161,6 +1206,67 @@ class Surface(torch.nn.Module):
             self.vertices = res
         else:
             return res
+
+
+class Lines(Surface):
+    def __init__(
+        self,
+        vertices: torch.Tensor,
+        topology: brainnet.mesh.topology.Topology | torch.Tensor,
+        topology_class: str = "LineTopology",
+        vertex_data=None,
+        face_data=None,
+        interpolated_data=None,
+    ):
+        super().__init__(
+            vertices,
+            topology,
+            topology_class,
+            vertex_data,
+            face_data,
+            interpolated_data,
+        )
+
+    def compute_line_lengths(self):
+        edges = self.as_mesh().diff(dim=2).squeeze(2)
+        return torch.linalg.vector_norm(edges, dim=-1)
+
+    def sample_points(
+        self,
+        n_samples: int,
+        set_interpolated: bool = True,
+        replacement: bool = True,
+        sample_weights: torch.Tensor | str | None = "line lengths",
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if isinstance(sample_weights, torch.Tensor):
+            # (n_batch, n_faces)
+            assert sample_weights.shape[1] == self.topology.n_faces
+        elif sample_weights == "line lengths":
+            sample_weight = self.compute_line_lengths()
+        elif sample_weights is None:
+            sample_weight = torch.ones(
+                self.n_batch, self.topology.n_faces, device=self.get_device()
+            )
+        else:
+            raise ValueError
+        sample_weight = sample_weight / sample_weight.sum(1, keepdim=True)
+
+        # Sample faces based on weight (n_batch, n_samples)
+        sampled_lines = sample_weight.multinomial(n_samples, replacement)
+
+        # Sample barycentric coordinates for each face
+        # (n_batch, n_samples, 3)
+        u = torch.rand(self.n_batch, n_samples, device=self.get_device())
+        sampled_weights = torch.stack((u, 1.0 - u), dim=2)
+
+        samples = self.interpolate_vertex_features(
+            self.vertices, sampled_lines, sampled_weights
+        )
+        if set_interpolated:
+            self.interpolated.points = samples
+            self.interpolated.face_index = sampled_lines
+            self.interpolated.weights = sampled_weights
+        return samples, sampled_lines, sampled_weights
 
 
 def load_deepsurfer_template(

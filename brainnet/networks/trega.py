@@ -138,8 +138,6 @@ class TREGA(torch.nn.Module):
         features = features / feature_mass
         feature_mass = feature_mass.squeeze(self.spatial_dims)
         feature_mass = feature_mass[..., None] / feature_mass.sum()
-        # print("mass", feature_mass)
-        # print("norm", features.sum((2,3,4)))
         # (batch, n_channels, 3)
         barycenters = torch.sum(
             self.image_grid[:, None] * features[:, :, None], self.spatial_dims
@@ -148,7 +146,6 @@ class TREGA(torch.nn.Module):
             self._wls_weight = self.split_hemispheres(feature_mass)
         else:
             self._wls_weight = None
-        # print(barycenters.amin(1), barycenters.amax(1))
 
         # subject specific barycenters (target points) in RAS
         return self.split_hemispheres(apply_affine(vox2ras, barycenters))
