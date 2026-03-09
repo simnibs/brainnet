@@ -1,4 +1,3 @@
-import copy
 import functools
 import operator
 from pathlib import Path
@@ -26,6 +25,11 @@ from brainnet import event_handlers, Surface
 import brainnet.initializers
 
 from brainnet.datasets import TopoFitDataset
+
+
+# from brainsynth.transforms import IntensityNormalization
+# from brainnet.supersynth import supersynth_init, supersynth_pred
+# import numpy as np
 
 
 # Define some recursive versions of functions
@@ -67,6 +71,10 @@ class Step:
             self.vox2ras_scale = torch.eye(4, device=self.device)[None]
             i = torch.arange(3, dtype=int, device=self.device)
             self.vox2ras_scale[0, i, i] = self.preprocessor.config.in_res
+
+        # print("Initializing SuperSynth")
+        # self.ss = supersynth_init()
+        # self.intensity_normalize = IntensityNormalization()
 
     def update_surface_template(self, template, data):
         """Insert vertices data from `data` into template and replace `data`
@@ -188,6 +196,13 @@ class TrainingStep(Step):
         # Only wrap forward pass and loss computation. Backward uses the same
         # types as inferred during forward
 
+        # # >>> SUPERSYNTH
+        # ribbon = supersynth_pred(self.ss, image)
+        # ribbon = self.intensity_normalize(ribbon)
+        # inputs = torch.cat((image, ribbon), 1)
+        # y_pred = self._amp_prediction(inputs, template)
+        # # <<< SUPERSYNTH
+
         y_pred = self._amp_prediction(image, template)
         y_pred = self.postprocess(y_pred, vox2ras)
         y_true = self.postprocess(y_true, vox2ras)
@@ -264,6 +279,13 @@ class EvaluationStep(Step):
         y_true["sphere.reg"] = self.y_true_reg
 
         with torch.inference_mode():
+            # # >>> SUPERSYNTH
+            # ribbon = supersynth_pred(self.ss, image)
+            # ribbon = self.intensity_normalize(ribbon)
+            # inputs = torch.cat((image, ribbon), 1)
+            # y_pred = self._amp_prediction(inputs, template)
+            # # <<< SUPERSYNTH
+
             y_pred = self._amp_prediction(image, template)
             y_pred = self.postprocess(y_pred, vox2ras)
             y_true = self.postprocess(y_true, vox2ras)
@@ -353,9 +375,22 @@ class PredictionStep(Step):
             y_pred = self.model.swap_output_levels(y_pred)
         else:
             image, vox2ras, template = self.prepare_batch(image, vox2ras, template)
+
+            # # SUPERSYNTH - START
+            # ribbon = supersynth_pred(self.ss, image)
+            # ribbon = self.intensity_normalize(ribbon)
+            # image = torch.cat((image, ribbon), 1)
+            # # SUPERSYNTH - END
+
             with torch.inference_mode():
                 y_pred = self._amp_prediction(image, template)
                 y_pred = self.postprocess(y_pred, vox2ras)
+
+        # import numpy as np
+
+        # nib.Nifti1Image(
+        #     ribbon.cpu().numpy().astype(np.float32)[0, 0], vox2ras[0].cpu().numpy()
+        # ).to_filename("/home/jesperdn/Downloads/ribbon.nii")
 
         if return_template:
             s = {
