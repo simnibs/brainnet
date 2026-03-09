@@ -328,7 +328,8 @@ class PredictionStep(Step):
         if template is None:
             image = image.to(self.device)
             vox2ras = vox2ras.to(self.device)
-            y_pred = self.trega_step(None, image, vox2ras)
+            # if image has more than one channel, use only the first one
+            y_pred = self.trega_step(None, image[:1], vox2ras)
             # to subject voxel space
             template = self.trega_step.apply_affine(
                 torch.linalg.inv(vox2ras) @ y_pred[trega_transform],
