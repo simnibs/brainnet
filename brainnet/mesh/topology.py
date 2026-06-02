@@ -193,10 +193,9 @@ class Topology(torch.nn.Module):
 
         # Vertex adjacency and face-to-edge mapping
         # -----------------------------------------
-        # no need to sort as unique will do that anyway
-        edges = self.get_edges_ravelled(
-            sort_within=True
-        )  # e.g., (1,0) and (0,1) -> (0,1)
+        # no need to sort as unique will do that anyway (e.g., (1,0) and (0,1)
+        # -> (0,1)
+        edges = self.get_edges_ravelled(sort_within=True)
 
         # trick from pytorch3d: use a hash to speed up the call to unique which
         # is otherwise slow
@@ -508,6 +507,158 @@ class CerebellumTopology(DeepSurferTopology):
     ):
         faces = cerebellum_faces if faces is None else faces
         super().__init__(faces, edge_pairs)
+
+    def subdivide_faces(self, split_edges: None | torch.tensor = None):
+        """Adaptive Loop subdivision.
+
+        References
+        ----------
+        This is based on pytorch3d.ops.subdivide_meshes.
+        """
+        # The subdivision scheme
+
+        if split_edges is None:
+            return super().subdivide_faces()
+
+        split_edges_per_face = split_edges[self.faces_to_edges]
+        nsplit_per_face = split_edges_per_face.sum(-1)
+
+        n_new = split_edges.sum()
+        nv_total = self.n_vertices + n_new
+        new_v = torch.arange(self.n_vertices, nv_total, dtype=torch.int)
+
+        e2v = torch.zeros(len(split_edges), dtype=torch.int)
+        e2v[split_edges] = new_v
+
+        # ZERO SPLIT
+        # ----------
+        face_split_zero = torch.nonzero(nsplit_per_face == 0).squeeze()
+
+        # we need to update the vertex indices..?
+        f_zero_split = self.faces[face_split_zero]
+
+        # ONE SPLIT
+        # ---------
+        #
+        #               V0
+        #              / |\
+        #             /  | \
+        #            /   |  \
+        #           /    |   \
+        #          /     |    \
+        #         /      |     \
+        #        /       |      \
+        #       /        |       \
+        #      /         |        \
+        #     /          |         \
+        #    /    f0     |    f1    \
+        #   /            |           \
+        # V1 ---------- v12---------- V2
+        #
+        face_split_one = torch.nonzero(nsplit_per_face == 1).squeeze()
+        e_to_split = split_edges_per_face[face_split_one].nonzero()[:, 1]
+        V0_index = self.vertex_opposite_edge[e_to_split]
+
+        v12 = e2v[self.faces_to_edges[face_split_one, e_to_split]]
+
+        V0 = self.faces[face_split_one, V0_index]
+        V1 = self.faces[face_split_one, (V0_index + 1) % 3]
+        V2 = self.faces[face_split_one, (V0_index + 2) % 3]
+        # f0 : v12, V0, V1
+        f0 = torch.stack([v12, V0, V1], dim=1)
+        # f1 : v12, V2, V0
+        f1 = torch.stack([v12, V2, V0], dim=1)
+
+        f_one_split = torch.cat((f0, f1))
+
+        # TWO SPLIT
+        # ---------
+        #
+        #               V0
+        #              / |\
+        #             /  | \
+        #            /   |  \
+        #           /    |   \
+        #          /     |    \
+        #         /  f0  |     \
+        #        v01     |      \
+        #       /  \     |       \
+        #      /    \    |        \
+        #     /      \   |         \
+        #    /   f1   \  |    f2    \
+        #   /          \ |           \
+        # V1 ---------- v12---------- V2
+        #
+
+        face_split = torch.nonzero(nsplit_per_face == 2).squeeze()
+
+        e_to_split = split_edges_per_face[face_split].nonzero()[:, 1].reshape(-1, 2)
+        v01_index = e_to_split[:, 0]
+        v12_index = e_to_split[:, 1]
+        # these are the cases where we want to split edges (V0,V1) and (V2,V0)
+        # above
+        swap = v12_index - v01_index == 2
+        v01_index[swap] = 2
+        v12_index[swap] = 0
+        v01 = e2v[self.faces_to_edges[face_split, v01_index]]
+        v12 = e2v[self.faces_to_edges[face_split, v12_index]]
+        V0_index = self.vertex_opposite_edge[v12_index]
+        V0 = self.faces[face_split, V0_index]
+        V1 = self.faces[face_split, (V0_index + 1) % 3]
+        V2 = self.faces[face_split, (V0_index + 2) % 3]
+
+        f0 = torch.stack((V0, v01, v12), dim=1)
+        f1 = torch.stack((V1, v12, v01), dim=1)
+        f2 = torch.stack((V2, V0, v12), dim=1)
+
+        f_two_split = torch.cat((f0, f1, f2))
+
+        # THREE SPLIT
+        # -----------
+        #
+        #               V0
+        #              /  \
+        #             /    \
+        #            /      \
+        #           /        \
+        #          /    f0    \
+        #         /            \
+        #        v01 --------- v02
+        #       /  \          /  \
+        #      /    \   f3   /    \
+        #     /      \      /      \
+        #    /   f2   \    /   f1   \
+        #   /          \  /          \
+        # V1 ---------- v12---------- V2
+        #
+
+        face_split = torch.nonzero(nsplit_per_face == 3).squeeze()
+
+        f_ = self.faces[face_split]
+        # f3 = faces made up entirely of new vertices
+        f3 = e2v[self.faces_to_edges[face_split]]
+        f0 = torch.stack([f_[:, 0], f3[:, 0], f3[:, 2]], dim=1)
+        f1 = torch.stack([f_[:, 2], f3[:, 2], f3[:, 1]], dim=1)
+        f2 = torch.stack([f_[:, 1], f3[:, 1], f3[:, 0]], dim=1)
+
+        f_three_split = torch.cat((f0, f1, f2, f3))
+
+        f_subdiv = torch.cat((f_zero_split, f_one_split, f_two_split, f_three_split))
+
+        # UPDATE TOPOLOGY INFORMATION
+        raise RuntimeError("remember to update topology information")
+
+        # v = s.vertices[0]
+        # vadd = v[self.get_unique_edges()[split_edges]].mean(-2)
+        # vnew = torch.cat((v, vadd))
+
+        # ss = cortech.Surface(v, self.faces)
+        # ss.save("test.vtk", dict(split_face=nsplit_per_face))
+
+        # sss = cortech.Surface(vnew.numpy(), f_subdiv.numpy())
+        # sss.save("test1.vtk")
+
+        return f_subdiv
 
 
 class NonManifoldTopology(Topology):
