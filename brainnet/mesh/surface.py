@@ -433,9 +433,10 @@ class Surface(torch.nn.Module):
         return_surface : bool, optional
             _description_, by default True
         apply_to_vector_data : bool, optional
-            Apply the affine transformation to any vector quantities in vertex,
-            face, or interpolated data. If `return_surface = False` and
-            `inplace = False`, this has no effect (default = False).
+            Apply the linear part of the affine transformation (no translation)
+            to any vector quantities in vertex, face, or interpolated data.
+            If `return_surface = False` and `inplace = False`, this has no
+            effect (default = False).
         inplace : bool, optional
             _description_, by default False
 
@@ -468,18 +469,18 @@ class Surface(torch.nn.Module):
     def _apply_affine_to_vector_data(self, affine):
         for k, v in self.vertex_data.items():
             if _is_vector_data(v):
-                self.vertex_data[k] = apply_affine(affine, v)
+                self.vertex_data[k] = apply_affine(affine, v, translate=False)
 
         for k, v in self.face_data.items():
             if _is_vector_data(v):
-                self.face_data[k] = apply_affine(affine, v)
+                self.face_data[k] = apply_affine(affine, v, translate=False)
 
         if _is_vector_data(p := self.interpolated.points):
             self.interpolated.points = apply_affine(affine, p)
 
         for k, v in self.interpolated.data.items():
             if _is_vector_data(v):
-                self.interpolated.data[k] = apply_affine(affine, v)
+                self.interpolated.data[k] = apply_affine(affine, v, translate=False)
 
     # def squeeze_batch(self):
     #     self.vertices = self.vertices.squeeze(0)
